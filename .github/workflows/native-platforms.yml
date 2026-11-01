@@ -36,7 +36,11 @@ on:
       - "packaging/**"
       - "resources/**"
       - "scripts/**"
+  # Pushes to main build the Windows package only. Version tags still build
+  # every release channel; the publish job stays limited to those tags.
   push:
+    branches:
+      - main
     tags:
       - "v*.*.*"
 
@@ -53,7 +57,7 @@ env:
 jobs:
   quality:
     needs: metadata
-    if: github.event_name == 'push' || inputs.run_quality
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.run_quality
     name: Release quality gate
     uses: ./.github/workflows/quality.yml
 
@@ -93,7 +97,7 @@ jobs:
 
   linux:
     needs: metadata
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || inputs.include_linux
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
     name: Linux packages (x64)
     runs-on: ubuntu-22.04
     env:
@@ -179,7 +183,7 @@ jobs:
 
   rpm:
     needs: metadata
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || inputs.include_linux
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
     name: Fedora RPM build (x64, Fedora 43 baseline)
     runs-on: ubuntu-24.04
     # Build against the oldest supported Fedora; test this exact artifact below.
@@ -274,7 +278,7 @@ jobs:
 
   flatpak:
     needs: metadata
-    if: github.event_name == 'push' || github.event_name == 'pull_request' || inputs.include_linux
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
     name: Flatpak preview bundle (x64)
     runs-on: ubuntu-24.04
     env:
@@ -428,7 +432,7 @@ jobs:
 
   macos:
     needs: metadata
-    if: github.event_name == 'push' || inputs.include_macos
+    if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.include_macos
     name: macOS application (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -487,7 +491,7 @@ jobs:
   android:
     needs: metadata
     if: >-
-      github.event_name == 'push' ||
+      (github.event_name == 'push' && github.ref_type == 'tag') ||
       (github.event_name == 'workflow_dispatch' && inputs.include_android)
     name: Android signed APK (arm64)
     runs-on: ubuntu-24.04

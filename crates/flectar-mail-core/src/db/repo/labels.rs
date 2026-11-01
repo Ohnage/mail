@@ -322,16 +322,75 @@ pub fn remove_from_message(conn: &Connection, message_id: i64, label_id: i64) ->
     Ok(())
 }
 
+/// Keyword prefix that server-side tooling (Mailroom, Bulwark webmail tags) uses
+/// for tags: `$label:needs-action`.
+const SERVER_TAG_PREFIX: &str = "$label:";
+
+/// Display name for a server tag id: `needs-action` -> `Needs Action`,
+/// `one-time` -> `One Time`.
+pub fn server_tag_name(id: &str) -> String {
+    id.split(['-', '_', '/'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Create an account-scoped provider label for every `$label:<id>` keyword the
+/// server reports that this account has no label for yet, so tags applied by
+/// a server filter or another client show up as tags here too.
+fn adopt_server_tags(conn: &Connection, account_id: i64, keywords: &[String]) -> Result<()> {
+    for keyword in keywords.iter().filter(|k| k.starts_with(SERVER_TAG_PREFIX)) {
+        let id = &keyword[SERVER_TAG_PREFIX.len()..];
+        if id.is_empty() {
+            continue;
+        }
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM labels WHERE owner_account_id = ?1 AND keyword = ?2)",
+            params![account_id, keyword],
+            |r| r.get(0),
+        )?;
+        if exists {
+            continue;
+        }
+        let mut name = server_tag_name(id);
+        let taken: bool = conn.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM labels
+                WHERE owner_account_id = ?1 AND name = ?2 COLLATE NOCASE
+             )",
+            params![account_id, name],
+            |r| r.get(0),
+        )?;
+        if taken {
+            name = keyword.clone();
+        }
+        conn.execute(
+            "INSERT INTO labels (name, color, keyword, position, is_auto, scope, owner_account_id, origin)
+             VALUES (?1, '#6b7280', ?2, 500, 0, 'account', ?3, 'provider')",
+            params![name, keyword, account_id],
+        )?;
+    }
+    Ok(())
+}
+
 /// Reconcile a message's label memberships against the IMAP keywords the server
-/// reports. Only labels we know about are touched - unknown server keywords are
-/// left alone so foreign keywords never masquerade as labels. Returns true if
-/// anything changed.
+/// reports. `$label:<id>` keywords are adopted as account tags first. Other
+/// unknown server keywords are left alone so foreign keywords never masquerade
+/// as labels. Returns true if anything changed.
 pub fn reconcile_keywords(conn: &Connection, message_id: i64, keywords: &[String]) -> Result<bool> {
     let account_id: i64 = conn.query_row(
         "SELECT account_id FROM messages WHERE id = ?1",
         params![message_id],
         |row| row.get(0),
     )?;
+    adopt_server_tags(conn, account_id, keywords)?;
     let labels = list(conn)?;
     if labels.is_empty() {
         return Ok(false);
@@ -594,5 +653,112 @@ mod tests {
         // Server later reports the manual keyword: membership comes back.
         reconcile_keywords(&c, msg, &["Work".to_string()]).unwrap();
         assert!(for_thread(&c, 1).unwrap().contains(&manual.id));
+    }
+
+    #[test]
+    fn reconcile_adopts_server_tags() {
+        let c = testutil::conn();
+        testutil::seed_account(&c);
+        let (_t, msg) = testutil::seed_message(&c, "a@b.c", "hello", false);
+        let kws = vec![
+            "$label:needs-action".to_string(),
+            "$label:invoice".to_string(),
+            "$label:unpaid".to_string(),
+            "$label:".to_string(),
+            "$seen".to_string(),
+        ];
+        assert!(reconcile_keywords(&c, msg, &kws).unwrap());
+        let (id, name, scope, origin, is_auto, owner): (i64, String, String, String, i64, i64) = c
+            .query_row(
+                "SELECT id, name, scope, origin, is_auto, owner_account_id
+                 FROM labels WHERE keyword = '$label:needs-action'",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(name, "Needs Action");
+        assert_eq!(scope, "account");
+        assert_eq!(origin, "provider");
+        assert_eq!(is_auto, 0);
+        assert_eq!(owner, 1);
+        let applied = for_thread(&c, 1).unwrap();
+        assert!(applied.contains(&id));
+        for (keyword, display) in [("$label:invoice", "Invoice"), ("$label:unpaid", "Unpaid")] {
+            let (label_id, label_name): (i64, String) = c
+                .query_row(
+                    "SELECT id, name FROM labels WHERE keyword = ?1",
+                    params![keyword],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(label_name, display);
+            assert!(applied.contains(&label_id));
+        }
+        let blank: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM labels WHERE keyword = '$label:'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(blank, 0);
+        // Idempotent: a second pass adds no duplicate label.
+        reconcile_keywords(&c, msg, &kws).unwrap();
+        let n: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM labels WHERE keyword = '$label:needs-action'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(server_tag_name("one-time"), "One Time");
+        assert_eq!(server_tag_name("invoice"), "Invoice");
+        assert_eq!(server_tag_name("unpaid"), "Unpaid");
+        // Server clears the keyword: membership drops, the tag itself stays.
+        assert!(reconcile_keywords(&c, msg, &["$seen".to_string()]).unwrap());
+        assert!(!for_thread(&c, 1).unwrap().contains(&id));
+        let still: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM labels WHERE keyword = '$label:needs-action'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(still, 1);
+    }
+
+    #[test]
+    fn reconcile_server_tag_uses_keyword_when_display_name_is_taken() {
+        let c = testutil::conn();
+        testutil::seed_account(&c);
+        let (_t, msg) = testutil::seed_message(&c, "a@b.c", "hello", false);
+        save(&c, None, "needs action", "#fff", 0, Some(1)).unwrap();
+        assert!(reconcile_keywords(&c, msg, &["$label:needs-action".to_string()]).unwrap());
+        let name: String = c
+            .query_row(
+                "SELECT name FROM labels WHERE keyword = '$label:needs-action'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "$label:needs-action");
+        let id: i64 = c
+            .query_row(
+                "SELECT id FROM labels WHERE keyword = '$label:needs-action'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(for_thread(&c, 1).unwrap().contains(&id));
     }
 }

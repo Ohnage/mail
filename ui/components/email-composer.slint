@@ -243,12 +243,25 @@ export component EmailComposer inherits Rectangle {
             compact: root.compact;
             title: @tr("From");
             description: @tr("Verified sender identity");
-            choices: AccountMailPreferences.composer-sender-names;
+            searchable: AccountMailPreferences.many-sender-identities(AccountMailPreferences.composer-sender-identities.length);
+            choices: AccountMailPreferences.many-sender-identities(AccountMailPreferences.composer-sender-identities.length) ? AccountMailPreferences.composer-sender-match-names : AccountMailPreferences.composer-sender-names;
             selected-index: AccountMailPreferences.composer-sender-index;
+            selected-label: AccountMailPreferences.composer-sender-label;
+            query <=> AccountMailPreferences.composer-sender-query;
             title-color: root.title-color; description-color: root.secondary-color;
             selected(index, value) => {
                 if AccountMailPreferences.composer-preferences-ready {
                     AccountMailPreferences.composer-sender(index);
+                }
+            }
+            query-edited(value) => {
+                if AccountMailPreferences.composer-preferences-ready {
+                    AccountMailPreferences.filter-composer-senders(value);
+                }
+            }
+            picked(index) => {
+                if AccountMailPreferences.composer-preferences-ready {
+                    AccountMailPreferences.pick-composer-sender(index);
                 }
             }
         }

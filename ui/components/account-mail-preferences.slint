@@ -43,8 +43,12 @@ export global AccountMailPreferences {
     in-out property <bool> desktop-supported: true;
     in-out property <[SenderIdentityChoice]> sender-identities;
     in-out property <[string]> sender-identity-names;
+    in-out property <[string]> default-sender-match-names;
+    in-out property <string> default-sender-label;
+    in-out property <string> default-sender-query;
     in-out property <int> default-sender-index: 0;
     in-out property <string> sender-identity-status;
+    in-out property <string> sender-list-query;
     in-out property <[SenderIdentityRow]> sender-identity-rows;
     // "any": the server judges at send time; "wildcard": only addresses inside
     // a server *@domain identity; "never": the provider is authoritative.
@@ -60,6 +64,8 @@ export global AccountMailPreferences {
     callback save-defaults;
     callback refresh-sender-identities;
     callback save-default-sender;
+    callback filter-default-senders(string);
+    callback pick-default-sender(int);
     callback save-sender-identity;
     callback edit-sender-identity(string);
     callback remove-sender-identity(string);
@@ -75,9 +81,17 @@ export global AccountMailPreferences {
     in-out property <bool> composer-preferences-ready: false;
     in-out property <[SenderIdentityChoice]> composer-sender-identities;
     in-out property <[string]> composer-sender-names;
+    in-out property <[string]> composer-sender-match-names;
+    in-out property <string> composer-sender-label;
+    in-out property <string> composer-sender-query;
     in-out property <int> composer-sender-index: 0;
     in-out property <string> composer-sender-email;
     callback composer-sender(int);
+    callback filter-composer-senders(string);
+    callback pick-composer-sender(int);
+    // Platform combo boxes show a few rows and cannot search. Longer From
+    // lists use a scrolling picker instead, without changing short accounts.
+    public pure function many-sender-identities(count: int) -> bool { count > 8 }
     callback read-message;
     callback export-message;
     callback close-reader;
@@ -96,6 +110,19 @@ export component AccountMailPreferencesPanel inherits OnScreenSurface {
     border-width: 1px;
     border-color: AppTheme.input-border;
     vertical-stretch: 0;
+    pure function text-has(haystack: string, needle: string) -> bool {
+        if needle == "" || needle.replace-all(" ", "") == "" { return true; }
+        let folded = haystack.to-lowercase();
+        let query = needle.to-lowercase();
+        folded.character-count != folded.replace-all(query, "").character-count
+    }
+    pure function identity-visible(identity: SenderIdentityRow) -> bool {
+        if !AccountMailPreferences.many-sender-identities(AccountMailPreferences.sender-identity-rows.length) {
+            return true;
+        }
+        return root.text-has(identity.email, AccountMailPreferences.sender-list-query)
+            || root.text-has(identity.name, AccountMailPreferences.sender-list-query);
+    }
     pure function identity-detail(identity: SenderIdentityRow) -> string {
         if identity.wildcard {
             return @tr("Server allows any address at this domain");
@@ -138,24 +165,49 @@ export component AccountMailPreferencesPanel inherits OnScreenSurface {
                 spacing: 10px;
                 SettingsSelectRow {
                     compact: root.compact; title: @tr("Default sender identity"); description: @tr("Preselected for new messages. Your sign-in address is unchanged.");
-                    choices: AccountMailPreferences.sender-identity-names; selected-index <=> AccountMailPreferences.default-sender-index;
+                    searchable: AccountMailPreferences.many-sender-identities(AccountMailPreferences.sender-identities.length);
+                    choices: AccountMailPreferences.many-sender-identities(AccountMailPreferences.sender-identities.length) ? AccountMailPreferences.default-sender-match-names : AccountMailPreferences.sender-identity-names;
+                    selected-index <=> AccountMailPreferences.default-sender-index;
+                    selected-label: AccountMailPreferences.default-sender-label;
+                    query <=> AccountMailPreferences.default-sender-query;
                     title-color: AppTheme.heading; description-color: AppTheme.secondary;
                     selected(index, value) => { AccountMailPreferences.default-sender-index = index; }
+                    query-edited(value) => { AccountMailPreferences.filter-default-senders(value); }
+                    picked(index) => { AccountMailPreferences.pick-default-sender(index); }
                 }
                 HorizontalBox {
                     Button { text: @tr("Save sender default"); primary: true; enabled: !AccountMailPreferences.busy && AccountMailPreferences.sender-identities.length > 0; clicked => { AccountMailPreferences.save-default-sender(); } }
                     Button { text: @tr("Refresh sender identities"); enabled: !AccountMailPreferences.busy; clicked => { AccountMailPreferences.refresh-sender-identities(); } }
                 }
                 if AccountMailPreferences.sender-identity-status != "" : Text { min-height: self.preferred-height; vertical-stretch: 0; text: AccountMailPreferences.sender-identity-status; color: AppTheme.secondary; wrap: word-wrap; }
-                for identity in AccountMailPreferences.sender-identity-rows : VerticalBox {
-                    padding: 0px; spacing: 4px;
-                    Text { min-height: self.preferred-height; vertical-stretch: 0; text: identity.name != "" ? identity.name + "  <" + identity.email + ">" : identity.email; color: AppTheme.heading; overflow: elide; }
-                    Text { min-height: self.preferred-height; vertical-stretch: 0; text: root.identity-detail(identity); color: identity.delivery == "rejected" ? AppTheme.destructive : AppTheme.secondary; wrap: word-wrap; }
-                    if identity.manual : HorizontalBox {
+                if AccountMailPreferences.many-sender-identities(AccountMailPreferences.sender-identity-rows.length) : LineEdit {
+                    text <=> AccountMailPreferences.sender-list-query;
+                    input-label: @tr("Search addresses");
+                    placeholder-text: @tr("Search addresses");
+                    enabled: !AccountMailPreferences.busy;
+                }
+                // A repeater cannot be conditional, and a hidden row must not
+                // keep the parent's spacing. Zero spacing here, and the gap
+                // lives on the visible row, except after the last address.
+                VerticalBox {
+                    padding: 0px;
+                    spacing: 0px;
+                    for identity[index] in AccountMailPreferences.sender-identity-rows : VerticalBox {
                         padding: 0px;
-                        alignment: start;
-                        Button { text: @tr("Edit"); enabled: !AccountMailPreferences.busy; clicked => { AccountMailPreferences.edit-sender-identity(identity.email); } }
-                        Button { text: @tr("Remove"); destructive: true; enabled: !AccountMailPreferences.busy; clicked => { AccountMailPreferences.remove-sender-identity(identity.email); } }
+                        spacing: 0px;
+                        if root.identity-visible(identity) : VerticalBox {
+                            padding: 0px;
+                            padding-bottom: index + 1 == AccountMailPreferences.sender-identity-rows.length ? 0px : 10px;
+                            spacing: 4px;
+                            Text { min-height: self.preferred-height; vertical-stretch: 0; text: identity.name != "" ? identity.name + "  <" + identity.email + ">" : identity.email; color: AppTheme.heading; overflow: elide; }
+                            Text { min-height: self.preferred-height; vertical-stretch: 0; text: root.identity-detail(identity); color: identity.delivery == "rejected" ? AppTheme.destructive : AppTheme.secondary; wrap: word-wrap; }
+                            if identity.manual : HorizontalBox {
+                                padding: 0px;
+                                alignment: start;
+                                Button { text: @tr("Edit"); enabled: !AccountMailPreferences.busy; clicked => { AccountMailPreferences.edit-sender-identity(identity.email); } }
+                                Button { text: @tr("Remove"); destructive: true; enabled: !AccountMailPreferences.busy; clicked => { AccountMailPreferences.remove-sender-identity(identity.email); } }
+                            }
+                        }
                     }
                 }
                 if AccountMailPreferences.sender-identity-policy == "never" : Text { min-height: self.preferred-height; vertical-stretch: 0; text: @tr("Gmail decides which addresses you can send from. Add an address in Gmail settings under Accounts › Send mail as, then refresh sender identities."); color: AppTheme.secondary; wrap: word-wrap; }

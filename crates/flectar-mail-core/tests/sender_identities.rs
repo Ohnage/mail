@@ -115,3 +115,27 @@ async fn manual_identities_reject_invalid_input_and_provider_addresses() {
         ["me@example.com"]
     );
 }
+
+#[tokio::test]
+async fn manual_identities_continue_past_the_old_256_cap() {
+    let (_tmp, core) = setup().await;
+    for index in 0..260 {
+        core.save_sender_identity(1, format!("alias{index}@example.com"), None, None)
+            .await
+            .unwrap();
+    }
+    let listed = core.list_sender_identities(1).await.unwrap();
+    assert_eq!(listed.len(), 261);
+    assert!(
+        listed
+            .iter()
+            .any(|identity| identity.email == "alias259@example.com")
+    );
+    core.set_default_sender_identity(1, "alias259@example.com".into())
+        .await
+        .unwrap();
+    assert_eq!(
+        core.default_sender_identity(1).await.unwrap().email,
+        "alias259@example.com"
+    );
+}

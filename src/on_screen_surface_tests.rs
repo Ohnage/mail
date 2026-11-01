@@ -127,10 +127,31 @@ fn account_preferences_paint_hundreds_of_sender_identities() {
     let preferences = app.global::<AccountMailPreferences>();
     preferences.set_account_id(1);
     preferences.set_account_label("person@example.com".into());
+    let addresses = (0..500)
+        .map(|index| format!("alias{index}@example.com"))
+        .collect::<Vec<_>>();
+    preferences.set_sender_identities(ModelRc::new(VecModel::from(
+        addresses
+            .iter()
+            .map(|email| SenderIdentityChoice {
+                email: email.into(),
+                label: email.into(),
+            })
+            .collect::<Vec<_>>(),
+    )));
+    preferences.set_default_sender_match_names(ModelRc::new(VecModel::from(
+        addresses
+            .iter()
+            .map(|email| email.as_str().into())
+            .collect::<Vec<_>>(),
+    )));
+    preferences.set_default_sender_label(addresses[0].as_str().into());
     preferences.set_sender_identity_rows(ModelRc::new(VecModel::from(
-        (0..400)
-            .map(|index| SenderIdentityRow {
-                email: format!("alias{index}@example.com").into(),
+        addresses
+            .iter()
+            .enumerate()
+            .map(|(index, email)| SenderIdentityRow {
+                email: email.into(),
                 primary: index == 0,
                 delivery: "confirmed".into(),
                 ..Default::default()

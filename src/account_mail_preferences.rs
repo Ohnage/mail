@@ -127,6 +127,37 @@ fn project(app: &AppWindow, settings: &Settings, account_id: i64) {
     ui.set_reply_index(index(defaults.reply_id));
 }
 
+struct IdentityChoices {
+    all: RefCell<Vec<SenderIdentityChoice>>,
+    matched_emails: RefCell<Vec<String>>,
+}
+
+fn sender_query_matches(email: &str, label: &str, query: &str) -> bool {
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_lowercase();
+    email.to_lowercase().contains(&query) || label.to_lowercase().contains(&query)
+}
+
+fn publish_sender_matches(
+    choices: &[SenderIdentityChoice],
+    query: &str,
+    matched_emails: &RefCell<Vec<String>>,
+) -> Vec<SharedString> {
+    let mut labels = Vec::new();
+    let mut emails = Vec::new();
+    for choice in choices {
+        if sender_query_matches(&choice.email, &choice.label, query) {
+            labels.push(choice.label.clone());
+            emails.push(choice.email.to_string());
+        }
+    }
+    *matched_emails.borrow_mut() = emails;
+    labels
+}
+
 fn identity_label(identity: &SenderIdentity) -> String {
     match identity
         .display_name
@@ -193,6 +224,7 @@ fn project_identities(
     config: &AccountConfig,
     identities: &[SenderIdentity],
     refresh_warning: Option<&str>,
+    picker: &IdentityChoices,
 ) {
     let ui = app.global::<AccountMailPreferences>();
     let verified = verified_identities(identities);
@@ -209,7 +241,12 @@ fn project_identities(
             .map(|identity| identity.label.clone())
             .collect::<Vec<_>>(),
     )));
-    ui.set_sender_identities(ModelRc::new(VecModel::from(choices)));
+    ui.set_sender_identities(ModelRc::new(VecModel::from(choices.clone())));
+    let labels = publish_sender_matches(&choices, "", &picker.matched_emails);
+    *picker.all.borrow_mut() = choices;
+    ui.set_default_sender_match_names(ModelRc::new(VecModel::from(labels)));
+    ui.set_default_sender_query("".into());
+    ui.set_sender_list_query("".into());
     ui.set_sender_identity_rows(ModelRc::new(VecModel::from(identity_rows(identities))));
     ui.set_sender_identity_policy(policy_name(config).into());
     let configured = config.settings.default_sender_email.as_deref();
@@ -227,6 +264,14 @@ fn project_identities(
         .or_else(|| verified.iter().position(|identity| identity.is_primary))
         .unwrap_or(0);
     ui.set_default_sender_index(i32::try_from(index).unwrap_or(0));
+    ui.set_default_sender_label(
+        picker
+            .all
+            .borrow()
+            .get(index)
+            .map(|choice| choice.label.clone())
+            .unwrap_or_default(),
+    );
     let status = if let Some(warning) = refresh_warning {
         format!("Using cached identities: {warning}")
     } else {
@@ -307,6 +352,10 @@ pub(super) fn register(
         runtime: runtime.clone(),
         generation: Rc::new(Cell::new(0)),
     };
+    let default_picker = Rc::new(IdentityChoices {
+        all: RefCell::new(Vec::new()),
+        matched_emails: RefCell::new(Vec::new()),
+    });
     let context_state = state.clone();
     let context_generation = tasks.generation.clone();
     let context = Rc::new(RefCell::new((
@@ -319,6 +368,7 @@ pub(super) fn register(
             .collect::<Vec<_>>(),
     )));
     let weak = app.as_weak();
+    let picker = default_picker.clone();
     ui.on_context_changed(move || {
         let current_core = core(&context_state);
         let accounts = context_state
@@ -350,6 +400,12 @@ pub(super) fn register(
         ui.set_default_names(ModelRc::default());
         ui.set_sender_identities(ModelRc::default());
         ui.set_sender_identity_names(ModelRc::default());
+        ui.set_default_sender_match_names(ModelRc::default());
+        ui.set_default_sender_label("".into());
+        ui.set_default_sender_query("".into());
+        ui.set_sender_list_query("".into());
+        picker.all.borrow_mut().clear();
+        picker.matched_emails.borrow_mut().clear();
         ui.set_default_sender_index(0);
         ui.set_sender_identity_status("".into());
         ui.set_sender_identity_rows(ModelRc::default());
@@ -366,6 +422,7 @@ pub(super) fn register(
     let weak = app.as_weak();
     let state_load = state.clone();
     let work = tasks.clone();
+    let picker = default_picker.clone();
     ui.on_load(move |id| {
         let Some(app) = weak.upgrade() else { return };
         let Some(core) = core(&state_load) else {
@@ -375,6 +432,7 @@ pub(super) fn register(
         if ui.get_busy() {
             return;
         }
+        let picker = picker.clone();
         work.spawn(
             &app,
             true,
@@ -390,7 +448,13 @@ pub(super) fn register(
                             ui.set_key_inventory("".into());
                             project(&app, &settings, config.id);
                             clear_sender_form(&ui);
-                            project_identities(&app, config, &identities, warning.as_deref());
+                            project_identities(
+                                &app,
+                                config,
+                                &identities,
+                                warning.as_deref(),
+                                &picker,
+                            );
                             ui.invoke_edit_signature(-1);
                             let p = &config.settings.security;
                             ui.set_fingerprint(p.signing_fingerprint.clone().into());
@@ -414,6 +478,7 @@ pub(super) fn register(
     let weak = app.as_weak();
     let state_refresh_identities = state.clone();
     let work = tasks.clone();
+    let picker = default_picker.clone();
     ui.on_refresh_sender_identities(move || {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -424,6 +489,7 @@ pub(super) fn register(
         let Some(core) = core(&state_refresh_identities) else {
             return;
         };
+        let picker = picker.clone();
         work.spawn(
             &app,
             true,
@@ -431,7 +497,7 @@ pub(super) fn register(
             move |app, result| match result {
                 Ok((_settings, configs, identities, warning)) => {
                     if let Some(config) = configs.iter().find(|config| config.id == account_id) {
-                        project_identities(&app, config, &identities, warning.as_deref());
+                        project_identities(&app, config, &identities, warning.as_deref(), &picker);
                         app.global::<AccountMailPreferences>()
                             .set_status("Sender identities refreshed.".into());
                     }
@@ -441,6 +507,35 @@ pub(super) fn register(
                     .set_status(error.into()),
             },
         );
+    });
+    let weak = app.as_weak();
+    let picker = default_picker.clone();
+    ui.on_filter_default_senders(move |query| {
+        let Some(app) = weak.upgrade() else { return };
+        let labels = publish_sender_matches(&picker.all.borrow(), &query, &picker.matched_emails);
+        app.global::<AccountMailPreferences>()
+            .set_default_sender_match_names(ModelRc::new(VecModel::from(labels)));
+    });
+    let weak = app.as_weak();
+    let picker = default_picker.clone();
+    ui.on_pick_default_sender(move |index| {
+        let Some(app) = weak.upgrade() else { return };
+        let ui = app.global::<AccountMailPreferences>();
+        let Some(email) = usize::try_from(index)
+            .ok()
+            .and_then(|index| picker.matched_emails.borrow().get(index).cloned())
+        else {
+            return;
+        };
+        let choices = picker.all.borrow();
+        let Some(position) = choices
+            .iter()
+            .position(|choice| choice.email.eq_ignore_ascii_case(&email))
+        else {
+            return;
+        };
+        ui.set_default_sender_index(i32::try_from(position).unwrap_or(0));
+        ui.set_default_sender_label(choices[position].label.clone());
     });
     let weak = app.as_weak();
     let state_sender_default = state.clone();
@@ -476,6 +571,7 @@ pub(super) fn register(
     let weak = app.as_weak();
     let state_save_sender = state.clone();
     let work = tasks.clone();
+    let picker = default_picker.clone();
     ui.on_save_sender_identity(move || {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -494,6 +590,7 @@ pub(super) fn register(
         let name = optional(ui.get_sender_form_name());
         let reply_to = optional(ui.get_sender_form_reply_to());
         let editing = ui.get_sender_form_editing();
+        let picker = picker.clone();
         work.spawn(
             &app,
             true,
@@ -508,7 +605,7 @@ pub(super) fn register(
                 match result {
                     Ok((config, identities)) => {
                         clear_sender_form(&ui);
-                        project_identities(&app, &config, &identities, None);
+                        project_identities(&app, &config, &identities, None, &picker);
                         ui.set_status(
                             if editing {
                                 "Sender address saved."
@@ -548,6 +645,7 @@ pub(super) fn register(
     let weak = app.as_weak();
     let state_remove_sender = state.clone();
     let work = tasks.clone();
+    let picker = default_picker.clone();
     ui.on_remove_sender_identity(move |email| {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -559,6 +657,7 @@ pub(super) fn register(
             return;
         };
         let email = email.to_string();
+        let picker = picker.clone();
         work.spawn(
             &app,
             true,
@@ -575,7 +674,7 @@ pub(super) fn register(
                         if ui.get_sender_form_editing() {
                             clear_sender_form(&ui);
                         }
-                        project_identities(&app, &config, &identities, None);
+                        project_identities(&app, &config, &identities, None, &picker);
                         ui.set_status("Sender address removed.".into());
                     }
                     Err(error) => ui.set_status(error.into()),
@@ -1038,12 +1137,17 @@ fn register_composer(
     // discarded when switching identity or selecting a different signature.
     let inserted = Rc::new(RefCell::new(None::<String>));
     let available = Rc::new(RefCell::new(Vec::<Signature>::new()));
+    let composer_picker = Rc::new(IdentityChoices {
+        all: RefCell::new(Vec::new()),
+        matched_emails: RefCell::new(Vec::new()),
+    });
     let ui = app.global::<AccountMailPreferences>();
     let reset = inserted.clone();
     let generation = Rc::new(Cell::new(0_u64));
     let reset_generation = generation.clone();
     let reset_list = available.clone();
     let weak = app.as_weak();
+    let picker = composer_picker.clone();
     ui.on_composer_reset(move || {
         reset_generation.set(reset_generation.get().wrapping_add(1));
         *reset.borrow_mut() = None;
@@ -1054,6 +1158,11 @@ fn register_composer(
             ui.set_composer_signature_index(0);
             ui.set_composer_sender_identities(ModelRc::default());
             ui.set_composer_sender_names(ModelRc::default());
+            ui.set_composer_sender_match_names(ModelRc::default());
+            ui.set_composer_sender_label("".into());
+            ui.set_composer_sender_query("".into());
+            picker.all.borrow_mut().clear();
+            picker.matched_emails.borrow_mut().clear();
             ui.set_composer_sender_index(0);
             ui.set_composer_sender_email("".into());
             ui.set_composer_security("".into());
@@ -1065,6 +1174,7 @@ fn register_composer(
     let work = tasks.clone();
     let list = available.clone();
     let managed = inserted.clone();
+    let picker = composer_picker.clone();
     ui.on_composer_account_changed(move |account_id| {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -1072,6 +1182,9 @@ fn register_composer(
         ui.set_composer_signature_names(ModelRc::default());
         ui.set_composer_sender_identities(ModelRc::default());
         ui.set_composer_sender_names(ModelRc::default());
+        ui.set_composer_sender_match_names(ModelRc::default());
+        ui.set_composer_sender_label("".into());
+        ui.set_composer_sender_query("".into());
         ui.set_composer_security("".into());
         let Some(core) = core(&state) else { return };
         generation.set(generation.get().wrapping_add(1));
@@ -1079,6 +1192,7 @@ fn register_composer(
         let expected = generation.get();
         let list = list.clone();
         let managed = managed.clone();
+        let picker = picker.clone();
         work.spawn(
             &app,
             false,
@@ -1135,8 +1249,13 @@ fn register_composer(
                                 .collect::<Vec<_>>(),
                         )));
                         ui.set_composer_sender_identities(ModelRc::new(VecModel::from(
-                            sender_choices,
+                            sender_choices.clone(),
                         )));
+                        let labels =
+                            publish_sender_matches(&sender_choices, "", &picker.matched_emails);
+                        *picker.all.borrow_mut() = sender_choices;
+                        ui.set_composer_sender_match_names(ModelRc::new(VecModel::from(labels)));
+                        ui.set_composer_sender_query("".into());
                         let default_email = config.settings.default_sender_email.as_deref();
                         let sender_index = (!requested.is_empty())
                             .then(|| {
@@ -1228,7 +1347,38 @@ fn register_composer(
             return;
         };
         ui.set_composer_sender_index(index);
-        ui.set_composer_sender_email(identity.email);
+        ui.set_composer_sender_email(identity.email.clone());
+        ui.set_composer_sender_label(identity.label);
+    });
+    let weak = app.as_weak();
+    let picker = composer_picker.clone();
+    ui.on_filter_composer_senders(move |query| {
+        let Some(app) = weak.upgrade() else { return };
+        let labels = publish_sender_matches(&picker.all.borrow(), &query, &picker.matched_emails);
+        app.global::<AccountMailPreferences>()
+            .set_composer_sender_match_names(ModelRc::new(VecModel::from(labels)));
+    });
+    let weak = app.as_weak();
+    let picker = composer_picker.clone();
+    ui.on_pick_composer_sender(move |index| {
+        let Some(app) = weak.upgrade() else { return };
+        let ui = app.global::<AccountMailPreferences>();
+        let Some(email) = usize::try_from(index)
+            .ok()
+            .and_then(|index| picker.matched_emails.borrow().get(index).cloned())
+        else {
+            return;
+        };
+        let choices = picker.all.borrow();
+        let Some(position) = choices
+            .iter()
+            .position(|choice| choice.email.eq_ignore_ascii_case(&email))
+        else {
+            return;
+        };
+        ui.set_composer_sender_index(i32::try_from(position).unwrap_or(0));
+        ui.set_composer_sender_email(choices[position].email.clone());
+        ui.set_composer_sender_label(choices[position].label.clone());
     });
     let weak = app.as_weak();
     let document = document.clone();
@@ -1270,6 +1420,19 @@ fn remove_managed_signature(body: &str, managed: Option<&str>) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sender_search_matches_email_or_label_without_case() {
+        assert!(sender_query_matches(
+            "Alias259@Example.com",
+            "Desk",
+            "  alias259 "
+        ));
+        assert!(sender_query_matches("a@example.com", "Sales Desk", "desk"));
+        assert!(!sender_query_matches("a@example.com", "Sales", "missing"));
+        assert!(sender_query_matches("a@example.com", "Sales", "   "));
+    }
+
     #[test]
     fn asynchronous_results_are_discarded_after_account_context_changes() {
         use slint::platform::{EventLoopProxy, Platform, WindowAdapter};

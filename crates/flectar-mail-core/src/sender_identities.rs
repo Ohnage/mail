@@ -24,7 +24,12 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 const GMAIL_SEND_AS_URL: &str = "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs";
-pub(crate) const MAX_IDENTITIES: usize = 256;
+/// Safety bound for one account. Stalwart's Identity/get returns at most
+/// `jmap.protocol.get.max-objects` identities (500 by default) and does not
+/// page, so a full server page has to fit, plus the synthetic primary when
+/// the server omits the sign-in address. A larger response is rejected
+/// instead of stored unbounded.
+pub(crate) const MAX_IDENTITIES: usize = 1024;
 pub(crate) const MAX_DISPLAY_NAME_CHARS: usize = 256;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 
@@ -893,5 +898,47 @@ mod tests {
         ] {
             assert!(!is_sender_rejection(message), "{message}");
         }
+    }
+
+    #[test]
+    fn jmap_identity_page_keeps_every_address_through_five_hundred() {
+        let mut emails = (0..500)
+            .map(|index| format!("user{index}@example.com"))
+            .collect::<Vec<_>>();
+        emails[0] = "primary@example.com".into();
+        let identities = parse_jmap_identities(
+            &account(),
+            emails.iter().map(|email| JmapIdentity {
+                name: None,
+                email: Some(email.as_str()),
+                reply_to: None,
+            }),
+        )
+        .unwrap();
+        assert_eq!(identities.len(), 500);
+        assert!(identities[0].is_primary);
+        assert_eq!(identities[499].email, "user499@example.com");
+        assert_eq!(
+            reply_sender(&identities, [address("user400@example.com")].iter()).as_deref(),
+            Some("user400@example.com")
+        );
+        assert!(is_own_address(&identities, "USER499@example.com"));
+        assert!(!is_own_address(&identities, "missing@example.com"));
+
+        let overflow = (0..=MAX_IDENTITIES)
+            .map(|index| format!("user{index}@example.com"))
+            .collect::<Vec<_>>();
+        assert!(
+            parse_jmap_identities(
+                &account(),
+                overflow.iter().map(|email| JmapIdentity {
+                    name: None,
+                    email: Some(email.as_str()),
+                    reply_to: None,
+                }),
+            )
+            .is_err(),
+            "one past the safety bound must not be stored"
+        );
     }
 }

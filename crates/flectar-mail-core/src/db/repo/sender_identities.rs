@@ -477,4 +477,45 @@ mod tests {
         assert!(!own.contains("team.test"));
         assert!(!own.contains("friend@example.test"));
     }
+
+    #[test]
+    fn a_full_server_page_of_identities_is_stored_and_recognized() {
+        let mut conn = crate::db::testutil::conn();
+        let account_id = account(&conn, Provider::Generic);
+        let identities = (0..500)
+            .map(|index| {
+                identity(
+                    account_id,
+                    &format!("alias{index}@example.test"),
+                    index == 0,
+                    "accepted",
+                )
+            })
+            .collect::<Vec<_>>();
+        // The sign-in address is the primary. The page is the other 499.
+        let mut page = vec![identity(account_id, "login@example.test", true, "accepted")];
+        page.extend(identities.into_iter().skip(1));
+        assert_eq!(page.len(), 500);
+        replace(&mut conn, account_id, &page).unwrap();
+
+        let stored = list(&conn, account_id).unwrap();
+        assert_eq!(stored.len(), 500);
+        assert!(
+            get_verified(&conn, account_id, "ALIAS499@example.test")
+                .unwrap()
+                .is_some()
+        );
+        let own = own_addresses(&conn, account_id).unwrap();
+        assert!(own.contains("alias499@example.test"));
+        assert!(own.contains("alias256@example.test"));
+        let grouped: String = conn
+            .query_row(
+                "SELECT json_group_array(email) FROM sender_identities WHERE account_id=?1",
+                [account_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let emails: Vec<String> = serde_json::from_str(&grouped).unwrap();
+        assert_eq!(emails.len(), 500);
+    }
 }

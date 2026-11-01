@@ -1,5 +1,6 @@
-import { ComboBox, HorizontalBox, VerticalBox } from "std-widgets.slint";
+import { ComboBox, HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
 import { LineEdit, Switch } from "controls.slint";
+import { AppTheme } from "../design-system.slint";
 import { TypeScale } from "../typography.slint";
 import { SidebarStyle } from "sidebar-row.slint";
 
@@ -164,6 +165,225 @@ export component SettingsSelect inherits ComboBox {
     }
 }
 
+// A few addresses fit in the platform combo box. Hundreds do not: its popup
+// shows a handful of rows and has no search. This picker scrolls and filters.
+export component IdentitySelect inherits Rectangle {
+    in property <[string]> choices;
+    in property <string> selected-label;
+    in property <bool> enabled: true;
+    in-out property <string> query;
+    callback query-edited(string);
+    callback picked(int);
+    out property <length> scroll-offset: root.scroll-y;
+
+    private property <int> highlighted: 0;
+    private property <length> scroll-y: 0px;
+    private property <length> row-height: 32px;
+    private property <length> list-viewport: 0px;
+    private property <int> shown-rows: min(8, max(1, root.choices.length));
+
+    function reveal-highlight() {
+        if root.highlighted < 0 { return; }
+        let item-y = root.highlighted * root.row-height;
+        if item-y + root.scroll-y < 0px {
+            root.scroll-y = -item-y;
+        } else if item-y + root.row-height + root.scroll-y > root.list-viewport {
+            root.scroll-y = root.list-viewport - item-y - root.row-height;
+        }
+    }
+
+    function move-highlight(direction: int) {
+        if root.choices.length == 0 { root.highlighted = -1; return; }
+        root.highlighted = direction > 0
+            ? (root.highlighted + 1 >= root.choices.length ? 0 : root.highlighted + 1)
+            : (root.highlighted <= 0 ? root.choices.length - 1 : root.highlighted - 1);
+        root.reveal-highlight();
+    }
+
+    function choose(index: int) {
+        if index < 0 || index >= root.choices.length { return; }
+        root.picked(index);
+        popup.close();
+        trigger.focus();
+    }
+
+    public function open-popup() {
+        if !root.enabled { return; }
+        root.query = "";
+        root.query-edited("");
+        root.highlighted = root.choices.length > 0 ? 0 : -1;
+        root.scroll-y = 0px;
+        popup.show();
+    }
+
+    height: 36px;
+    min-width: 180px;
+    border-radius: 7px;
+    border-width: 1px;
+    border-color: popup.is-open ? AppTheme.accent : AppTheme.input-border;
+    background: AppTheme.input-bg;
+    opacity: root.enabled ? 1 : 0.5;
+    forward-focus: trigger;
+
+    trigger := FocusScope {
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.DownArrow || event.text == Key.Return || event.text == Key.Space {
+                root.open-popup();
+                return accept;
+            }
+            reject
+        }
+
+        Text {
+            x: 10px;
+            width: parent.width - 36px;
+            height: parent.height;
+            text: root.selected-label;
+            color: root.selected-label == "" ? AppTheme.placeholder : AppTheme.heading;
+            font-size: TypeScale.caption;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Image {
+            x: parent.width - 24px;
+            y: (parent.height - self.height) / 2;
+            width: 14px;
+            height: 14px;
+            source: @image-url("../icons/lucide/outline/chevron-down.svg");
+            colorize: AppTheme.secondary;
+            image-fit: contain;
+            accessible-role: none;
+        }
+        hit := TouchArea {
+            enabled: root.enabled;
+            accessible-role: combobox;
+            accessible-label: @tr("Sender address");
+            accessible-value: root.selected-label;
+            accessible-expanded: popup.is-open;
+            accessible-action-expand => { root.open-popup(); }
+            clicked => { trigger.focus(); root.open-popup(); }
+            mouse-cursor: root.enabled ? pointer : default;
+        }
+    }
+
+    popup := PopupWindow {
+        x: root.width - self.width;
+        y: root.height + 4px;
+        width: max(root.width, 360px);
+        height: 52px + root.shown-rows * root.row-height;
+        close-policy: close-on-click-outside;
+        forward-focus: search;
+
+        Rectangle {
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: AppTheme.border;
+            background: AppTheme.surface-raised;
+            drop-shadow-blur: 18px;
+            drop-shadow-offset-y: 5px;
+            drop-shadow-color: #0000002e;
+            clip: true;
+
+            popup-keys := FocusScope {
+                capture-key-pressed(event) => {
+                    if event.text == Key.DownArrow {
+                        root.move-highlight(1);
+                        return accept;
+                    }
+                    if event.text == Key.UpArrow {
+                        root.move-highlight(-1);
+                        return accept;
+                    }
+                    if event.text == Key.Home {
+                        root.highlighted = root.choices.length > 0 ? 0 : -1;
+                        root.reveal-highlight();
+                        return accept;
+                    }
+                    if event.text == Key.End {
+                        root.highlighted = root.choices.length - 1;
+                        root.reveal-highlight();
+                        return accept;
+                    }
+                    if event.text == Key.Return {
+                        root.choose(root.highlighted);
+                        return accept;
+                    }
+                    if event.text == Key.Escape {
+                        popup.close();
+                        trigger.focus();
+                        return accept;
+                    }
+                    reject
+                }
+
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 6px;
+                    search := LineEdit {
+                        text <=> root.query;
+                        input-label: @tr("Search addresses");
+                        placeholder-text: @tr("Search addresses");
+                        edited(value) => {
+                            root.query-edited(value);
+                            root.highlighted = root.choices.length > 0 ? 0 : -1;
+                            root.scroll-y = 0px;
+                        }
+                    }
+                    ScrollView {
+                        height: root.shown-rows * root.row-height;
+                        content-y <=> root.scroll-y;
+                        content-height: max(self.visible-height, max(root.choices.length, 1) * root.row-height);
+                        horizontal-scrollbar-policy: always-off;
+                        accessible-role: list;
+                        accessible-label: @tr("Sender addresses");
+                        accessible-item-count: root.choices.length;
+                        changed visible-height => { root.list-viewport = self.visible-height; }
+
+                        VerticalLayout {
+                            alignment: start;
+                            spacing: 0px;
+                            if root.choices.length == 0 : Text {
+                                height: root.row-height;
+                                text: @tr("No matching addresses");
+                                color: AppTheme.secondary;
+                                font-size: TypeScale.caption;
+                                vertical-alignment: center;
+                            }
+                            for choice[index] in root.choices : Rectangle {
+                                height: root.row-height;
+                                border-radius: 5px;
+                                background: index == root.highlighted || row-hit.has-hover ? AppTheme.control-bg : transparent;
+
+                                Text {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: choice;
+                                    color: AppTheme.heading;
+                                    font-size: TypeScale.caption;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                row-hit := TouchArea {
+                                    accessible-role: button;
+                                    accessible-label: choice;
+                                    accessible-item-index: index;
+                                    clicked => { root.choose(index); }
+                                    changed has-hover => {
+                                        if self.has-hover { root.highlighted = index; }
+                                    }
+                                    mouse-cursor: pointer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component SettingsSelectRow inherits Rectangle {
     in property <bool> compact: false;
     in property <length> compact-description-height: 34px;
@@ -173,7 +393,15 @@ export component SettingsSelectRow inherits Rectangle {
     in-out property <int> selected-index: 0;
     in property <color> title-color;
     in property <color> description-color;
+    // Long choice lists replace the platform combo box with a search field
+    // and a scrolling popup. `choices` is then the filtered list, and the
+    // closed control shows `selected-label` rather than `choices[index]`.
+    in property <bool> searchable: false;
+    in property <string> selected-label;
+    in-out property <string> query;
     callback selected(int, string);
+    callback query-edited(string);
+    callback picked(int);
 
     // Desktop: the texts overhang the box padding by design. Compact: two 8px
     // insets, two 7px gaps and the 36px selector around the stacked texts.
@@ -205,11 +433,19 @@ export component SettingsSelectRow inherits Rectangle {
             }
         }
         Rectangle { horizontal-stretch: 1; }
-        SettingsSelect {
+        if !root.searchable : SettingsSelect {
             width: 210px;
             choices: root.choices;
             selected-index <=> root.selected-index;
             selection-changed(index, value) => { root.selected(index, value); }
+        }
+        if root.searchable : desktop-picker := IdentitySelect {
+            width: 210px;
+            choices: root.choices;
+            selected-label: root.selected-label;
+            query <=> root.query;
+            query-edited(value) => { root.query-edited(value); }
+            picked(index) => { root.picked(index); }
         }
     }
 
@@ -232,11 +468,19 @@ export component SettingsSelectRow inherits Rectangle {
             font-size: TypeScale.caption;
             wrap: word-wrap;
         }
-        SettingsSelect {
+        if !root.searchable : SettingsSelect {
             horizontal-stretch: 1;
             choices: root.choices;
             selected-index <=> root.selected-index;
             selection-changed(index, value) => { root.selected(index, value); }
+        }
+        if root.searchable : compact-picker := IdentitySelect {
+            horizontal-stretch: 1;
+            choices: root.choices;
+            selected-label: root.selected-label;
+            query <=> root.query;
+            query-edited(value) => { root.query-edited(value); }
+            picked(index) => { root.picked(index); }
         }
     }
 }

@@ -513,7 +513,7 @@ struct AccountPresentationSettings {
 
 impl AccountPresentationSettings {
     fn from_settings(settings: &Settings) -> Self {
-        let presentation = Self {
+        Self {
             profiles: settings.mail_profiles.clone(),
             active_profile: settings.active_mail_profile.clone(),
             business_tabs: settings.business_tabs.clone(),
@@ -526,8 +526,7 @@ impl AccountPresentationSettings {
             account_icon_images: HashMap::new(),
             tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
-        };
-        presentation
+        }
     }
 
     fn load_logos(&mut self, data_dir: &std::path::Path) {

@@ -106,10 +106,10 @@ pub fn parse_brand_registry(bytes: &[u8]) -> Result<BrandRegistry, String> {
     let root = value
         .as_object()
         .ok_or_else(|| "brand registry must be a JSON object".to_owned())?;
-    if let Some(version) = root.get("version").and_then(Value::as_u64) {
-        if version == 0 || version > 1 {
-            return Err(format!("brand registry version {version} is not supported"));
-        }
+    if let Some(version) = root.get("version").and_then(Value::as_u64)
+        && (version == 0 || version > 1)
+    {
+        return Err(format!("brand registry version {version} is not supported"));
     }
     if let Some(schema) = root.get("schema").and_then(Value::as_str)
         && !schema.starts_with("flectar.brand-registry/")
@@ -1390,14 +1390,16 @@ mod tests {
             "../../../docs/fixtures/brand-registry/settings-excerpt.json"
         ))
         .unwrap();
-        let mut settings = Settings::default();
-        settings.mail_profiles = serde_json::from_value(excerpt["mailProfiles"].clone()).unwrap();
-        settings.business_tabs = serde_json::from_value(excerpt["businessTabs"].clone()).unwrap();
-        settings.active_business_tab = excerpt["activeBusinessTab"].as_str().map(str::to_owned);
-        settings.brand_registry_digest = excerpt["brandRegistryDigest"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned();
+        let settings = Settings {
+            mail_profiles: serde_json::from_value(excerpt["mailProfiles"].clone()).unwrap(),
+            business_tabs: serde_json::from_value(excerpt["businessTabs"].clone()).unwrap(),
+            active_business_tab: excerpt["activeBusinessTab"].as_str().map(str::to_owned),
+            brand_registry_digest: excerpt["brandRegistryDigest"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            ..Settings::default()
+        };
         let accounts = excerpt["accounts"]
             .as_array()
             .unwrap()

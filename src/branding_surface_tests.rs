@@ -19,7 +19,13 @@ impl Platform for BrandingHeadless {
 
 fn preview_icon() -> slint::Image {
     let mut pixels = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(64, 40);
-    for (index, pixel) in pixels.make_mut_bytes().chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in pixels
+        .make_mut_bytes()
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
         let (x, y) = (index % 64, index / 64);
         pixel.copy_from_slice(if (6..58).contains(&x) && (6..34).contains(&y) {
             if x < 28 {

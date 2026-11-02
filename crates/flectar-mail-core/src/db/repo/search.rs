@@ -62,6 +62,29 @@ fn append_account_clauses(
     }
 }
 
+fn append_recipient_clauses(
+    q: &ParsedQuery,
+    where_clauses: &mut Vec<String>,
+    bind: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+) {
+    let scope = crate::recipient_match::MailScope {
+        recipient_patterns: q.recipient_patterns.clone(),
+        sender_addresses: q.sender_addresses.clone(),
+        sender_names: q.sender_names.clone(),
+        sender_domains: q.sender_domains.clone(),
+        or_account_ids: q.or_account_ids.clone(),
+        match_any: q.scope_match_any,
+    };
+    let Some((sql, likes)) = crate::recipient_match::message_scope_clause(&scope, bind.len() + 1)
+    else {
+        return;
+    };
+    where_clauses.push(sql);
+    for like in likes {
+        bind.push(Box::new(like));
+    }
+}
+
 /// `column IN (…)` for a set of accounts; an empty set matches nothing.
 pub(crate) fn account_set_clause(
     column: &str,
@@ -581,6 +604,7 @@ fn chronological_page_for_query(
         });
     }
     append_account_clauses(q, &mut where_clauses, &mut bind);
+    append_recipient_clauses(q, &mut where_clauses, &mut bind);
 
     let sql = format!(
         "SELECT m.thread_id, m.date FROM messages m {fts_join}

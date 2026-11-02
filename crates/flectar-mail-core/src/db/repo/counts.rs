@@ -233,6 +233,15 @@ pub fn unread_counts(
 /// Slint sidebar does not render split/label badges, and repeating those
 /// scalar queries would make a live refresh proportional to account count.
 pub fn mailbox_badge_counts(conn: &Connection) -> Result<Vec<MailboxBadgeCounts>> {
+    mailbox_badge_counts_filtered(conn, &crate::recipient_match::MailScope::default())
+}
+
+/// `mailbox_badge_counts`, with inbox and starred totals limited to threads
+/// matching `scope`. An empty scope is the unfiltered count.
+pub fn mailbox_badge_counts_filtered(
+    conn: &Connection,
+    scope: &crate::recipient_match::MailScope,
+) -> Result<Vec<MailboxBadgeCounts>> {
     let mut counts = conn
         .prepare("SELECT id FROM accounts ORDER BY sort_order, id")?
         .query_map([], |row| {
@@ -252,20 +261,55 @@ pub fn mailbox_badge_counts(conn: &Connection) -> Result<Vec<MailboxBadgeCounts>
 
     // The inbox predicate mirrors `Q::inbox`, but grouping by account returns
     // every native sidebar section without repeating the scan per account.
-    let mut inbox = conn.prepare(INBOX_BADGE_SQL)?;
-    for row in inbox.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))? {
+    let (inbox_sql, inbox_binds) =
+        match crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", 1) {
+            Some((clause, likes)) => (
+                INBOX_BADGE_SQL.replacen(
+                    "GROUP BY",
+                    &format!("AND {clause}\n         GROUP BY"),
+                    1,
+                ),
+                likes,
+            ),
+            None => (INBOX_BADGE_SQL.to_owned(), Vec::new()),
+        };
+    let mut inbox = conn.prepare(&inbox_sql)?;
+    let inbox_params: Vec<&dyn rusqlite::types::ToSql> =
+        inbox_binds.iter().map(|value| value as _).collect();
+    for row in inbox.query_map(inbox_params.as_slice(), |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })? {
         let (account_id, value) = row?;
         if let Some(index) = positions.get(&account_id) {
             counts[*index].inbox = value;
         }
     }
 
-    let mut starred = conn.prepare(
-        "SELECT account_id, COUNT(*) FROM threads
-         WHERE unread_count > 0 AND starred_count > 0
-         GROUP BY account_id",
-    )?;
-    for row in starred.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))? {
+    let (starred_sql, starred_binds) =
+        match crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", 1) {
+            Some((clause, likes)) => (
+                format!(
+                    "SELECT t.account_id, COUNT(*) FROM threads t
+                 WHERE t.unread_count > 0 AND t.starred_count > 0
+                   AND {clause}
+                 GROUP BY t.account_id"
+                ),
+                likes,
+            ),
+            None => (
+                "SELECT account_id, COUNT(*) FROM threads
+             WHERE unread_count > 0 AND starred_count > 0
+             GROUP BY account_id"
+                    .to_owned(),
+                Vec::new(),
+            ),
+        };
+    let mut starred = conn.prepare(&starred_sql)?;
+    let starred_params: Vec<&dyn rusqlite::types::ToSql> =
+        starred_binds.iter().map(|value| value as _).collect();
+    for row in starred.query_map(starred_params.as_slice(), |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })? {
         let (account_id, value) = row?;
         if let Some(index) = positions.get(&account_id) {
             counts[*index].starred = value;

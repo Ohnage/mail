@@ -101,6 +101,8 @@ export struct EmailRow {
     account_color: color,
     account_profile: string,
     show_account_marker: bool,
+    profile_logo: image,
+    has_profile_logo: bool,
     folder: string,
     sender: string,
     address: string,
@@ -157,6 +159,18 @@ export struct MailProfileRow {
     name: string,
     color: color,
     account_count: int,
+    logo: image,
+    has_logo: bool,
+}
+
+// A pinned business scope shown after All accounts.
+export struct BusinessTabRow {
+    id: string,
+    name: string,
+    color: color,
+    logo: image,
+    has_logo: bool,
+    active: bool,
 }
 
 // An account in the profile editor's checklist; checked accounts belong to

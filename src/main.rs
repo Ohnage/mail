@@ -489,20 +489,108 @@ struct AccountPresentationSettings {
     profiles: Vec<MailProfile>,
     /// The profile whose accounts the mail view shows.
     active_profile: Option<String>,
+    business_tabs: Vec<flectar_mail_core::models::BusinessTab>,
+    active_business_tab: Option<String>,
+    show_message_preview: bool,
     show_markers: bool,
     account_colors: HashMap<String, String>,
     account_short_names: HashMap<String, String>,
+    profile_logos: HashMap<String, slint::Image>,
 }
 
 impl AccountPresentationSettings {
     fn from_settings(settings: &Settings) -> Self {
-        Self {
+        let presentation = Self {
             profiles: settings.mail_profiles.clone(),
             active_profile: settings.active_mail_profile.clone(),
+            business_tabs: settings.business_tabs.clone(),
+            active_business_tab: settings.active_business_tab.clone(),
+            show_message_preview: settings.show_message_preview,
             show_markers: settings.show_account_badges,
             account_colors: settings.account_colors.clone(),
             account_short_names: settings.account_short_names.clone(),
+            profile_logos: HashMap::new(),
+        };
+        presentation
+    }
+
+    fn load_logos(&mut self, data_dir: &std::path::Path) {
+        self.profile_logos.clear();
+        for profile in &self.profiles {
+            let Some(relative) = profile.logo.as_deref() else {
+                continue;
+            };
+            let Some(image) = load_profile_logo(&data_dir.join(relative)) else {
+                continue;
+            };
+            self.profile_logos.insert(profile.id.clone(), image);
         }
+    }
+
+    fn active_business(&self) -> Option<&flectar_mail_core::models::BusinessTab> {
+        let id = self.active_business_tab.as_deref()?;
+        self.business_tabs.iter().find(|tab| tab.id == id)
+    }
+
+    /// Sidebar accounts, the query account AND, and the recipient/sender filter.
+    fn view_scope(
+        &self,
+    ) -> (
+        Option<Vec<i64>>,
+        Option<Vec<i64>>,
+        flectar_mail_core::recipient_match::MailScope,
+    ) {
+        use flectar_mail_core::recipient_match::MailScope;
+        let Some(tab) = self.active_business() else {
+            let accounts = self.active_profile_accounts();
+            return (accounts.clone(), accounts, MailScope::default());
+        };
+        let company_accounts = self.accounts_in(&tab.profile_ids);
+        let recipients = MailScope {
+            recipient_patterns: tab.recipient_patterns.clone(),
+            sender_addresses: tab.sender_addresses.clone(),
+            sender_names: tab.sender_names.clone(),
+            sender_domains: tab.sender_domains.clone(),
+            or_account_ids: Vec::new(),
+            match_any: false,
+        };
+        match tab.resolved_scope() {
+            "recipients" => (None, None, recipients),
+            "any" => {
+                let mut scope = recipients;
+                scope.match_any = true;
+                scope.or_account_ids = company_accounts.clone();
+                (Some(company_accounts), None, scope)
+            }
+            "narrow" => (
+                Some(company_accounts.clone()),
+                Some(company_accounts),
+                recipients,
+            ),
+            _ => {
+                if tab.profile_ids.is_empty() {
+                    (None, None, MailScope::default())
+                } else {
+                    (
+                        Some(company_accounts.clone()),
+                        Some(company_accounts),
+                        MailScope::default(),
+                    )
+                }
+            }
+        }
+    }
+
+    fn accounts_in(&self, profile_ids: &[String]) -> Vec<i64> {
+        let mut accounts = Vec::new();
+        for id in profile_ids {
+            if let Some(profile) = self.profiles.iter().find(|profile| profile.id == *id) {
+                accounts.extend(profile.account_ids.iter().copied());
+            }
+        }
+        accounts.sort_unstable();
+        accounts.dedup();
+        accounts
     }
 
     /// The profile the mail view shows, if it has accounts.
@@ -567,6 +655,20 @@ impl AccountPresentationSettings {
         self.account_colors.remove(&key);
         self.account_short_names.remove(&key);
     }
+}
+
+fn load_profile_logo(path: &std::path::Path) -> Option<slint::Image> {
+    let bytes = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&bytes).ok()?.into_rgba8();
+    if image.width() == 0 || image.height() == 0 || image.width() > 512 || image.height() > 512 {
+        return None;
+    }
+    let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+    );
+    Some(slint::Image::from_rgba8(buffer))
 }
 
 fn parse_marker_color(value: &str) -> Option<slint::Color> {
@@ -1190,13 +1292,15 @@ impl InboxState {
     /// then reloads the list and counts.
     #[must_use]
     fn sync_profile_accounts(&mut self) -> bool {
-        let accounts = self.account_presentation.active_profile_accounts();
-        if let Some(core) = &self.core {
-            core.set_profile_accounts(accounts.clone());
-        }
-        let changed = self.profile_accounts != accounts;
-        self.profile_accounts = accounts;
-        changed
+        let (sidebar, query, scope) = self.account_presentation.view_scope();
+        let changed = if let Some(core) = &self.core {
+            core.set_view_scope(sidebar.clone(), query, scope)
+        } else {
+            false
+        };
+        let accounts_changed = self.profile_accounts != sidebar;
+        self.profile_accounts = sidebar;
+        changed || accounts_changed
     }
 
     /// Replace the account inventory. Returns whether the selection moved to
@@ -4122,6 +4226,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         if let Some(settings) = settings.as_ref() {
                             state.account_presentation =
                                 AccountPresentationSettings::from_settings(settings);
+                            let data_dir = state.core.as_ref().unwrap().data_dir();
+                            state.account_presentation.load_logos(&data_dir);
                         }
                         let _ = state.sync_profile_accounts();
                         // The startup scope was already validated for these

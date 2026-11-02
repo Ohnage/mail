@@ -216,10 +216,26 @@ struct PageLoadContext<'a> {
     /// The accounts and folders the mail view shows.
     accounts: &'a [Account],
     folders: &'a [FolderInfo],
-    /// The active profile's accounts, if one is set.
+    /// The active profile's accounts, if one is set. This is the sidebar.
     profile: Option<&'a [i64]>,
+    /// Accounts ANDed into the list query. Independent of `profile` so a
+    /// sender rule can include mail from accounts the sidebar does not show.
+    account_filter: Option<&'a [i64]>,
     /// Every connected account, shown or not.
     account_count: usize,
+}
+
+fn brand_registry_digest(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+fn normalize_account_ids(accounts: Option<Vec<i64>>) -> Option<Arc<[i64]>> {
+    accounts.map(|mut accounts| {
+        accounts.sort_unstable();
+        accounts.dedup();
+        Arc::<[i64]>::from(accounts)
+    })
 }
 
 /// Whether the mail view shows `account_id`: every account does unless a
@@ -266,9 +282,14 @@ pub fn display_preview(preview: &str) -> String {
 pub struct CoreMailSource {
     core: Arc<Core>,
     account_revision: Arc<std::sync::atomic::AtomicU64>,
-    /// The active profile's accounts, sorted; the mail view shows only these.
-    /// `None` shows every account.
+    /// Accounts shown in the sidebar. `None` shows every account.
     profile_accounts: Arc<std::sync::Mutex<Option<Arc<[i64]>>>>,
+    /// Accounts ANDed into list and search queries. `None` does not restrict
+    /// the query, which is how a sender rule can match mail outside the tab's
+    /// companies. An empty set lists nothing.
+    query_accounts: Arc<std::sync::Mutex<Option<Arc<[i64]>>>>,
+    /// Business-tab recipient and sender filter. Empty does not filter.
+    mail_scope: Arc<std::sync::Mutex<flectar_mail_core::recipient_match::MailScope>>,
 }
 
 pub struct AccountSnapshot {
@@ -284,33 +305,199 @@ impl CoreMailSource {
     }
 
     /// Show only these accounts in the mail view, or every account with
-    /// `None`. Returns whether that changed; pages and counts loaded for the
-    /// previous accounts are then out of date.
+    /// `None`. The same set is ANDed into queries. Returns whether that
+    /// changed; pages and counts loaded for the previous accounts are then
+    /// out of date. The business-tab recipient and sender filter is kept.
     pub fn set_profile_accounts(&self, accounts: Option<Vec<i64>>) -> bool {
-        let accounts = accounts.map(|mut accounts| {
-            accounts.sort_unstable();
-            accounts.dedup();
-            Arc::<[i64]>::from(accounts)
-        });
-        {
-            let mut current = self
+        let accounts = normalize_account_ids(accounts);
+        let changed = {
+            let mut sidebar = self
                 .profile_accounts
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if *current == accounts {
+            let mut query = self
+                .query_accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *sidebar == accounts && *query == accounts {
                 return false;
             }
-            *current = accounts;
+            *sidebar = accounts.clone();
+            *query = accounts;
+            true
+        };
+        if changed {
+            // After the new accounts are in place: a load that reads the new
+            // revision also reads them.
+            self.account_revision
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         }
-        // After the new accounts are in place: a load that reads the new
-        // revision also reads them.
-        self.account_revision
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        true
+        changed
+    }
+
+    /// Sidebar accounts, the query's account AND, and the business-tab
+    /// recipient/sender filter. `sidebar` of `None` shows every account.
+    /// `query` of `None` does not AND accounts into the list.
+    pub fn set_view_scope(
+        &self,
+        sidebar: Option<Vec<i64>>,
+        query: Option<Vec<i64>>,
+        scope: flectar_mail_core::recipient_match::MailScope,
+    ) -> bool {
+        let sidebar = normalize_account_ids(sidebar);
+        let query = normalize_account_ids(query);
+        let changed = {
+            let mut sidebar_current = self
+                .profile_accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut query_current = self
+                .query_accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut scope_current = self
+                .mail_scope
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *sidebar_current == sidebar && *query_current == query && *scope_current == scope {
+                return false;
+            }
+            *sidebar_current = sidebar;
+            *query_current = query;
+            *scope_current = scope;
+            true
+        };
+        if changed {
+            self.account_revision
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        }
+        changed
+    }
+
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        self.core.data_dir().to_path_buf()
+    }
+
+    /// Apply `%APPDATA%/flectar-mail/brand-registry.json` (the data directory
+    /// on every platform) when the file is present and its bytes changed
+    /// since the last import. `Ok(None)` means there was nothing to apply.
+    pub async fn import_brand_registry_if_changed(
+        &self,
+    ) -> Result<Option<flectar_mail_core::models::Settings>, String> {
+        let path = self.data_dir().join("brand-registry.json");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+        let digest = brand_registry_digest(&bytes);
+        let settings = self
+            .core
+            .get_settings()
+            .await
+            .map_err(|error| error.to_string())?;
+        if settings.brand_registry_digest == digest {
+            return Ok(None);
+        }
+        self.import_brand_registry_bytes(&path, &bytes, digest).await.map(Some)
+    }
+
+    /// Apply a registry file the user picked. The bytes are copied into the
+    /// data directory so the next launch sees the same document.
+    pub async fn import_brand_registry_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<flectar_mail_core::models::Settings, String> {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        let digest = brand_registry_digest(&bytes);
+        let stored = self.data_dir().join("brand-registry.json");
+        if path != stored {
+            if let Some(parent) = stored.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::write(&stored, &bytes).map_err(|error| error.to_string())?;
+        }
+        self.import_brand_registry_bytes(path, &bytes, digest).await
+    }
+
+    async fn import_brand_registry_bytes(
+        &self,
+        path: &std::path::Path,
+        bytes: &[u8],
+        digest: String,
+    ) -> Result<flectar_mail_core::models::Settings, String> {
+        use flectar_mail_core::brand_registry::{RegistryAccount, apply_brand_registry, parse_brand_registry};
+        let registry = parse_brand_registry(bytes)?;
+        let accounts = self
+            .core
+            .list_accounts()
+            .await
+            .map_err(|error| error.to_string())?;
+        let registry_accounts = accounts
+            .iter()
+            .map(|account| RegistryAccount {
+                id: account.id,
+                email: account.email.clone(),
+            })
+            .collect::<Vec<_>>();
+        let settings = self
+            .core
+            .get_settings()
+            .await
+            .map_err(|error| error.to_string())?;
+        let parent = path.parent().unwrap_or(path);
+        let applied = apply_brand_registry(&settings, &registry_accounts, &registry, |logo| {
+            let relative = std::path::Path::new(logo);
+            let full = if relative.is_absolute() {
+                relative.to_path_buf()
+            } else {
+                parent.join(relative)
+            };
+            std::fs::read(&full).map_err(|error| format!("{}: {error}", full.display()))
+        })?;
+        let data_dir = self.data_dir();
+        let logo_dir = data_dir.join("profile-logos");
+        std::fs::create_dir_all(&logo_dir).map_err(|error| error.to_string())?;
+        for logo in &applied.logos {
+            for extension in ["png", "jpg", "gif", "webp"] {
+                if extension == logo.extension {
+                    continue;
+                }
+                let stale = logo_dir.join(format!("{}.{extension}", logo.profile_id));
+                if stale.is_file() {
+                    let _ = std::fs::remove_file(stale);
+                }
+            }
+            std::fs::write(
+                logo_dir.join(format!("{}.{}", logo.profile_id, logo.extension)),
+                &logo.bytes,
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        let mut settings = applied.settings;
+        settings.brand_registry_digest = digest;
+        self.core
+            .set_settings(settings.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(settings)
     }
 
     fn profile_accounts(&self) -> Option<Arc<[i64]>> {
         self.profile_accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn query_accounts(&self) -> Option<Arc<[i64]>> {
+        self.query_accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn mail_scope(&self) -> flectar_mail_core::recipient_match::MailScope {
+        self.mail_scope
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -346,6 +533,8 @@ impl CoreMailSource {
             core: Arc::new(core),
             account_revision: Arc::default(),
             profile_accounts: Arc::default(),
+            query_accounts: Arc::default(),
+            mail_scope: Arc::default(),
         })
     }
 
@@ -366,6 +555,7 @@ impl CoreMailSource {
     ) -> Result<MailPage, String> {
         let revision = self.account_revision();
         let profile = self.profile_accounts();
+        let account_filter = self.query_accounts();
         let mut accounts = self
             .core
             .list_accounts()
@@ -387,6 +577,7 @@ impl CoreMailSource {
             accounts: &accounts,
             folders: &folders,
             profile: profile.as_deref(),
+            account_filter: account_filter.as_deref(),
             account_count,
         })
         .await
@@ -405,6 +596,7 @@ impl CoreMailSource {
         limit: i64,
     ) -> Result<(Vec<Account>, Scope, Option<MailPage>), String> {
         let profile = self.profile_accounts();
+        let account_filter = self.query_accounts();
         let accounts = self
             .core
             .list_accounts()
@@ -427,6 +619,7 @@ impl CoreMailSource {
                         accounts: &shown,
                         folders: &folders,
                         profile: profile.as_deref(),
+                        account_filter: account_filter.as_deref(),
                         account_count: accounts.len(),
                     })
                     .await
@@ -473,22 +666,39 @@ impl CoreMailSource {
         folders: &[FolderInfo],
         profile: Option<&[i64]>,
     ) -> Result<MailMetadata, String> {
+        let scope_filter = self.mail_scope();
         let mut badges = self
             .core
-            .mailbox_badge_counts()
+            .mailbox_badge_counts_filtered(scope_filter.clone())
             .await
             .map_err(|error| error.to_string())?;
-        // Unified totals add up the shown accounts only.
+        // A sender rule counts matching mail in every account. Drafts stay
+        // with the companies named by the tab.
+        let mut unified = badges.clone();
+        if scope_filter.match_any {
+            let companies = scope_filter.or_account_ids.iter().copied().collect::<std::collections::HashSet<_>>();
+            for counts in &mut unified {
+                if !companies.contains(&counts.account_id) {
+                    counts.drafts = 0;
+                }
+            }
+        }
+        // Per-account rows follow the sidebar. Unified totals follow the scope.
         badges.retain(|counts| profile_shows(profile, counts.account_id));
+        let inbox_source = if scope_filter.match_any { &unified } else { &badges };
         Ok(MailMetadata {
             account_revision: self.account_revision(),
             scope,
-            inbox_count: badges
+            inbox_count: inbox_source
                 .iter()
                 .map(|counts| counts.inbox.max(0) as usize)
                 .sum(),
             mailboxes: mailbox_entries_with_counts(accounts, folders, &badges),
-            unified_mailboxes: unified_mailbox_entries(&badges),
+            unified_mailboxes: unified_mailbox_entries(if scope_filter.match_any {
+                &unified
+            } else {
+                &badges
+            }),
         })
     }
 
@@ -505,6 +715,7 @@ impl CoreMailSource {
             accounts,
             folders,
             profile,
+            account_filter,
             account_count,
         } = context;
         let mut labels = self
@@ -534,9 +745,13 @@ impl CoreMailSource {
         {
             resolved = resolve_scope(Scope::UNIFIED_INBOX, folders, &labels);
         }
-        // Unified mailboxes, categories and shared labels cover the profile's
+        // Unified mailboxes, categories and shared labels cover the query's
         // accounts; an account's own mailboxes need no more than its id.
-        let profile_accounts = profile.filter(|_| resolved.account_id.is_none());
+        // `account_filter` is the query AND, which a sender-rule tab leaves
+        // open while the sidebar still shows that tab's companies.
+        let account_filter = account_filter.filter(|_| resolved.account_id.is_none());
+        let account_id = resolved.account_id.filter(|_| account_filter.is_none());
+        let scope_filter = self.mail_scope();
 
         let (threads, next_cursor) = if query.trim().is_empty() {
             let cursor = match cursor {
@@ -546,33 +761,20 @@ impl CoreMailSource {
                     return Err("search cursor used for a mailbox".into());
                 }
             };
-            let page = match profile_accounts {
-                Some(accounts) => {
-                    self.core
-                        .list_threads_for_accounts(
-                            resolved.view,
-                            resolved.split_id,
-                            accounts.to_vec(),
-                            resolved.label_id,
-                            resolved.folder_id,
-                            (cursor, limit),
-                        )
-                        .await
-                }
-                None => {
-                    self.core
-                        .list_threads(
-                            resolved.view,
-                            resolved.split_id,
-                            resolved.account_id,
-                            resolved.label_id,
-                            resolved.folder_id,
-                            (cursor, limit),
-                        )
-                        .await
-                }
-            }
-            .map_err(|error| error.to_string())?;
+            let page = self
+                .core
+                .list_threads_scoped(
+                    resolved.view,
+                    resolved.split_id,
+                    account_id,
+                    account_filter.map(|accounts| accounts.to_vec()),
+                    resolved.label_id,
+                    resolved.folder_id,
+                    scope_filter,
+                    (cursor, limit),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             (page.threads, page.next_cursor.map(MailCursor::Thread))
         } else {
             // The mail list is a timeline: search narrows it, then presents
@@ -584,24 +786,18 @@ impl CoreMailSource {
                 Some(MailCursor::Thread(_)) => return Err("mailbox cursor used for search".into()),
             };
             let query = query.trim().to_owned();
-            let page = match profile_accounts {
-                Some(accounts) => {
-                    self.core
-                        .search_chronological_page_for_accounts(
-                            query,
-                            accounts.to_vec(),
-                            cursor,
-                            limit,
-                        )
-                        .await
-                }
-                None => {
-                    self.core
-                        .search_chronological_page(query, resolved.account_id, cursor, limit)
-                        .await
-                }
-            }
-            .map_err(|error| error.to_string())?;
+            let page = self
+                .core
+                .search_chronological_scoped(
+                    query,
+                    account_id,
+                    account_filter.map(|accounts| accounts.to_vec()),
+                    scope_filter,
+                    cursor,
+                    limit,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
             (page.threads, page.next_cursor.map(MailCursor::Search))
         };
 
@@ -1088,6 +1284,61 @@ impl CoreMailSource {
     pub async fn set_show_account_badges(&self, enabled: bool) -> Result<Settings, String> {
         self.core
             .set_show_account_badges(enabled)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_show_message_preview(&self, enabled: bool) -> Result<Settings, String> {
+        self.core
+            .set_show_message_preview(enabled)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_active_business_tab(
+        &self,
+        tab_id: Option<String>,
+    ) -> Result<Settings, String> {
+        self.core
+            .set_active_business_tab(tab_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn save_business_tab(
+        &self,
+        tab_id: Option<String>,
+        name: String,
+        profile_ids: Vec<String>,
+        recipient_patterns: Vec<String>,
+    ) -> Result<Settings, String> {
+        self.core
+            .save_business_tab(tab_id, name, profile_ids, recipient_patterns)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn delete_business_tab(&self, tab_id: String) -> Result<Settings, String> {
+        self.core
+            .delete_business_tab(tab_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn move_business_tab(&self, tab_id: String, delta: i32) -> Result<Settings, String> {
+        self.core
+            .move_business_tab(tab_id, delta)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_profile_logo(
+        &self,
+        profile_id: String,
+        logo: Option<String>,
+    ) -> Result<Settings, String> {
+        self.core
+            .set_mail_profile_logo(profile_id, logo)
             .await
             .map_err(|error| error.to_string())
     }

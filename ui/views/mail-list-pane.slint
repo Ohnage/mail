@@ -167,6 +167,9 @@ export component MailListPane inherits Rectangle {
     in property <bool> single-pane-navigation: root.compact;
     in property <bool> preview-on-navigation: !root.compact;
     in property <bool> show-avatars: true;
+    // The preview line is off unless Settings turns it on. The row is then
+    // the sender and the subject.
+    in property <bool> show-preview: false;
     in property <bool> dense: false;
     in property <bool> loading: false;
     in property <[EmailRow]> emails: [];
@@ -231,13 +234,18 @@ export component MailListPane inherits Rectangle {
     private property <length> subject-line: max(22px, subject-line-probe.preferred-height);
     private property <length> detail-line: max(20px, detail-line-probe.preferred-height);
     private property <length> message-row-height: root.dense ? 44px
-        : 32px + root.sender-line + root.subject-line + root.detail-line;
+        : root.show-preview
+            ? 32px + root.sender-line + root.subject-line + root.detail-line
+            : 16px + root.sender-line + root.subject-line;
     private property <length> group-row-height: root.compact ? 44px : 40px;
     forward-focus: list-keyboard;
 
-    sender-line-probe := Text { visible: false; text: "Ag"; font-size: TypeScale.body-large; font-weight: 700; }
-    subject-line-probe := Text { visible: false; text: "Ag"; font-size: TypeScale.body; font-weight: 700; }
-    detail-line-probe := Text { visible: false; text: "Ag"; font-size: TypeScale.secondary; }
+    // `visible: false` collapses preferred-height to 0, which made the three
+    // lines share one row and draw on top of each other. The probes stay
+    // invisible without leaving the layout measurement.
+    sender-line-probe := Text { opacity: 0; x: -1000px; text: "Ag"; font-size: TypeScale.body-large; font-weight: 700; }
+    subject-line-probe := Text { opacity: 0; x: -1000px; text: "Ag"; font-size: TypeScale.body; font-weight: 700; }
+    detail-line-probe := Text { opacity: 0; x: -1000px; text: "Ag"; font-size: TypeScale.secondary; }
 
     function reveal-target(target: MailNavigationTarget) {
         if mail-list-scroll.visible-height <= 0px { return; }
@@ -689,8 +697,9 @@ export component MailListPane inherits Rectangle {
                                     x: 14px;
                                     y: root.dense ? 8px : 12px;
                                     size: root.dense ? 28px : 38px;
-                                    source: root.dense ? mail-data.favicon_small : mail-data.favicon;
-                                    has-source: mail-data.has_favicon;
+                                    source: mail-data.has_profile_logo ? mail-data.profile_logo
+                                        : root.dense ? mail-data.favicon_small : mail-data.favicon;
+                                    has-source: mail-data.has_profile_logo || mail-data.has_favicon;
                                     fallback: mail-data.initials;
                                     image-fit: contain;
                                     background-color: mail-data.has_favicon ? #ffffff : (mail-data.selected ? root.avatar-selected-bg : root.avatar-bg);
@@ -827,7 +836,7 @@ export component MailListPane inherits Rectangle {
                                         vertical-alignment: center;
                                     }
                                     account-label := Text {
-                                        visible: !root.dense;
+                                        visible: !root.dense && root.show-preview;
                                         x: parent.width - 88px;
                                         y: root.sender-line + root.subject-line + 10px;
                                         width: 88px;
@@ -870,6 +879,7 @@ export component MailListPane inherits Rectangle {
                                         }
                                     }
                                     HorizontalBox {
+                                        visible: root.dense || root.show-preview;
                                         x: root.dense ? subject-label.x + subject-label.width + 12px : 0px;
                                         y: root.dense ? 0px : root.sender-line + root.subject-line + 10px;
                                         width: root.dense ? max(0px, message-content.dense-account-x - self.x - 12px) : max(0px, parent.width - 98px);

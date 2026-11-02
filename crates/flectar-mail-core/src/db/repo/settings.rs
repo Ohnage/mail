@@ -100,6 +100,7 @@ mod tests {
             name: "Work".into(),
             color: "#3B82F6".into(),
             account_ids: vec![1, 2],
+            logo: None,
         });
         s.active_mail_profile = Some("work".into());
         set(&c, &s).unwrap();

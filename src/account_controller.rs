@@ -313,6 +313,12 @@ pub(super) fn apply_connected_accounts(
                 .count(),
         )
         .unwrap_or(i32::MAX),
+        logo: presentation
+            .profile_logos
+            .get(&profile.id)
+            .cloned()
+            .unwrap_or_default(),
+        has_logo: presentation.profile_logos.contains_key(&profile.id),
     };
     app.set_mail_profiles(ModelRc::new(VecModel::from(
         presentation
@@ -328,6 +334,38 @@ pub(super) fn apply_connected_accounts(
             .unwrap_or_default(),
     );
     app.set_show_account_markers(presentation.show_markers);
+    app.set_show_message_preview(presentation.show_message_preview);
+    let business_tabs = presentation
+        .business_tabs
+        .iter()
+        .map(|tab| {
+            let profile = tab
+                .profile_ids
+                .iter()
+                .find_map(|id| presentation.profiles.iter().find(|profile| profile.id == *id));
+            let color = profile
+                .map(|profile| {
+                    parse_marker_color(&profile.color)
+                        .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
+                })
+                .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128));
+            let logo = profile
+                .and_then(|profile| presentation.profile_logos.get(&profile.id))
+                .cloned()
+                .unwrap_or_default();
+            BusinessTabRow {
+                id: tab.id.clone().into(),
+                name: tab.name.clone().into(),
+                color,
+                logo,
+                has_logo: profile.is_some_and(|profile| {
+                    presentation.profile_logos.contains_key(&profile.id)
+                }),
+                active: presentation.active_business_tab.as_deref() == Some(tab.id.as_str()),
+            }
+        })
+        .collect::<Vec<_>>();
+    app.set_business_tabs(ModelRc::new(VecModel::from(business_tabs)));
 }
 
 pub(super) fn refresh_connected_accounts(app: &AppWindow, state: &Rc<RefCell<InboxState>>) {

@@ -560,10 +560,15 @@ pub(crate) async fn load_startup_snapshot(
     let core = CoreMailSource::start(paths, credentials, oauth_redirects).await?;
     metrics.emit("core_opened", serde_json::Value::Null);
     // The first page shows only the active profile's accounts.
-    let settings = core.load_settings().await.ok();
-    let _ = core.set_profile_accounts(settings.as_ref().and_then(|settings| {
-        AccountPresentationSettings::from_settings(settings).active_profile_accounts()
-    }));
+    let mut settings = core.load_settings().await.ok();
+    if let Ok(Some(updated)) = core.import_brand_registry_if_changed().await {
+        settings = Some(updated);
+    }
+    if let Some(settings) = settings.as_ref() {
+        let (sidebar, query, scope) =
+            AccountPresentationSettings::from_settings(settings).view_scope();
+        let _ = core.set_view_scope(sidebar, query, scope);
+    }
     let (mail, configs) = tokio::join!(
         // Counts walk every mailbox and can dominate startup on a large local
         // store. The first useful frame only needs one bounded page; sidebar
@@ -748,6 +753,7 @@ pub(crate) fn apply_settings(app: &AppWindow, settings: &Settings) {
     app.set_show_avatars(settings.show_avatars);
     app.set_group_mail_by_date(settings.group_mail_by_date);
     app.set_show_account_markers(settings.show_account_badges);
+    app.set_show_message_preview(settings.show_message_preview);
     app.set_workspace_layout(
         match settings.workspace_layout.as_str() {
             "minimal" => "minimal",

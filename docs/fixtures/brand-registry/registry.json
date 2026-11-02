@@ -1,0 +1,205 @@
+{
+ "schema": "flectar.brand-registry/v1-draft",
+ "generated": "2026-11-01T21:05:14",
+ "status": "trimmed copy of Tim's registry for the importer test",
+ "matching": {
+  "order": [
+   "account address in profile.match.addresses",
+   "account domain in profile.match.domains",
+   "hub domain -> pixelated-cities",
+   "fallback tim-personal"
+  ],
+  "messageBadge": "recipient address/domain first (alias-aware), then account profile"
+ },
+ "tabs": [
+  {
+   "id": "all",
+   "name": "All Accounts",
+   "builtin": true
+  },
+  {
+   "id": "tim",
+   "name": "Tim Mentink",
+   "profiles": [
+    "tim-personal"
+   ],
+   "rule": "recipient",
+   "recipientPatterns": [
+    "tim@*",
+    "tim.mentink@*",
+    "tmentink@*",
+    "timothy@*",
+    "ohnage@*",
+    "ohnage?@*",
+    "ohnage1?@*",
+    "ownage@*",
+    "tmentink@gmail.com"
+   ],
+   "recipientAddresses": [
+    "ohnage10@ug4l.com",
+    "tmentink@gmail.com",
+    "tim@demanaged.com"
+   ],
+   "colorBy": "recipient-business"
+  },
+  {
+   "id": "mentinkizm",
+   "name": "Mentinkizm",
+   "profiles": [
+    "mentinkizm"
+   ],
+   "rule": "profiles"
+  },
+  {
+   "id": "forty7",
+   "name": "Forty7",
+   "profiles": [
+    "forty7",
+    "rook"
+   ],
+   "rule": "profiles+recipient+sender",
+   "extraRecipientAddresses": [
+    "rook@helplearnhow.com"
+   ],
+   "agentSenders": {
+    "addresses": [
+     "47@mentinkizm.com",
+     "hi@p47.io"
+    ],
+    "displayNames": [
+     "Mailroom",
+     "47 by Rook",
+     "Rook",
+     "Hermes"
+    ],
+    "note": "display names only count when the sender domain is one of ours (anti-spoof)"
+   }
+  }
+ ],
+ "profiles": [
+  {
+   "id": "tim-personal",
+   "name": "Tim Mentink",
+   "tab": "tim",
+   "color": "#DB2777",
+   "match": {
+    "domains": [
+     "gmail.com",
+     "tmentink.com",
+     "ohnage.com"
+    ],
+    "addresses": []
+   },
+   "accounts": [
+    "tmentink@gmail.com"
+   ]
+  },
+  {
+   "id": "mentinkizm",
+   "name": "Mentinkizm LLC",
+   "tab": "mentinkizm",
+   "color": "#4338CA",
+   "logo": "data:image/png;base64,iVBORw0KGgo=",
+   "match": {
+    "domains": [
+     "mentinkizm.com",
+     "mentinkizm.net",
+     "mentinkizm.org",
+     "mentinkizm.llc"
+    ],
+    "addresses": []
+   },
+   "accounts": [
+    "contact@mentinkizm.com"
+   ]
+  },
+  {
+   "id": "pixelated-cities",
+   "name": "Pixelated Cities",
+   "tab": "pixelated-cities",
+   "color": "#1F5E8C",
+   "match": {
+    "domains": [
+     "pixelatedcities.com",
+     "pixelatedcities.net",
+     "pixelatedcities.org",
+     "pixelated.city",
+     "pixelate.city",
+     "pixelatecity.com",
+     "pixelatecity.net",
+     "pixelatecity.org",
+     "pixelatecity.online",
+     "<all 273 hub domains + niche domains>"
+    ],
+    "addresses": []
+   },
+   "accounts": "277 accounts (hub@<city domain> + PC staff); see accounts[]"
+  },
+  {
+   "id": "forty7",
+   "name": "Forty7 / Project 47",
+   "tab": "forty7",
+   "color": "#222222",
+   "logo": {
+    "status": "real",
+    "file": "logos/forty7.png",
+    "source": "trimmed fixture"
+   },
+   "match": {
+    "domains": [
+     "p47.io",
+     "forty7.io",
+     "project47.io"
+    ],
+    "addresses": [
+     "47@mentinkizm.com"
+    ]
+   },
+   "accounts": [
+    "47@mentinkizm.com",
+    "hi@p47.io"
+   ]
+  },
+  {
+   "id": "rook",
+   "name": "Rook",
+   "tab": "forty7",
+   "color": "#8BA076",
+   "match": {
+    "domains": [],
+    "addresses": [
+     "rook@helplearnhow.com"
+    ]
+   },
+   "accounts": []
+  }
+ ],
+ "timAddresses": [
+  "ohnage10@ug4l.com",
+  "tmentink@gmail.com",
+  "tim@demanaged.com",
+  "tim@*"
+ ],
+ "accounts": [
+  {
+   "email": "tmentink@gmail.com",
+   "profile": "tim-personal",
+   "inFlectar": true
+  },
+  {
+   "email": "contact@mentinkizm.com",
+   "profile": "mentinkizm",
+   "inFlectar": true
+  },
+  {
+   "email": "47@mentinkizm.com",
+   "profile": "forty7",
+   "inFlectar": true
+  },
+  {
+   "email": "hub@abilenetexas.org",
+   "profile": "pixelated-cities",
+   "inFlectar": true
+  }
+ ]
+}

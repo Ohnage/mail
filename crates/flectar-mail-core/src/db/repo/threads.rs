@@ -277,6 +277,7 @@ const AUTO_BUCKET: &str = "(SELECT m.is_automated FROM messages m
 fn build_filter(
     args: &ListArgs,
     include_cursor: bool,
+    scope: &crate::recipient_match::MailScope,
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
     let mut where_clauses: Vec<String> = Vec::new();
     let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -395,6 +396,14 @@ fn build_filter(
             bind.len()
         ));
     }
+    if let Some((sql, likes)) =
+        crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", bind.len() + 1)
+    {
+        where_clauses.push(sql);
+        for like in likes {
+            bind.push(Box::new(like));
+        }
+    }
     if include_cursor && let Some(cur) = args.cursor {
         bind.push(Box::new(cur.last_message_at));
         let timestamp_parameter = bind.len();
@@ -414,7 +423,16 @@ fn build_filter(
 }
 
 pub fn list(conn: &Connection, args: &ListArgs) -> Result<ThreadPage> {
-    let (sql, bind) = list_sql(args);
+    list_matching(conn, args, &crate::recipient_match::MailScope::default())
+}
+
+/// `list` restricted by a business-tab [`MailScope`]. An empty scope is `list`.
+pub fn list_matching(
+    conn: &Connection,
+    args: &ListArgs,
+    scope: &crate::recipient_match::MailScope,
+) -> Result<ThreadPage> {
+    let (sql, bind) = list_sql(args, scope);
 
     let mut stmt = conn.prepare(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
@@ -437,8 +455,11 @@ pub fn list(conn: &Connection, args: &ListArgs) -> Result<ThreadPage> {
     })
 }
 
-fn list_sql(args: &ListArgs) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
-    let (where_sql, bind) = build_filter(args, true);
+fn list_sql(
+    args: &ListArgs,
+    scope: &crate::recipient_match::MailScope,
+) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let (where_sql, bind) = build_filter(args, true, scope);
     (
         format!(
             "{SUMMARY_SELECT} {where_sql}
@@ -451,7 +472,7 @@ fn list_sql(args: &ListArgs) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
 
 /// Query-plan details for the exact list shape, including its cursor/filter.
 pub fn list_query_plan(conn: &Connection, args: &ListArgs) -> Result<Vec<String>> {
-    let (sql, bind) = list_sql(args);
+    let (sql, bind) = list_sql(args, &crate::recipient_match::MailScope::default());
     let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
     Ok(stmt
@@ -463,7 +484,15 @@ pub fn list_query_plan(conn: &Connection, args: &ListArgs) -> Result<Vec<String>
 /// thread summaries or walking cursor pages. Keeping this on the same filter
 /// builder as `list` prevents sidebar totals from drifting from list contents.
 pub fn count(conn: &Connection, args: &ListArgs) -> Result<usize> {
-    let (where_sql, bind) = build_filter(args, false);
+    count_matching(conn, args, &crate::recipient_match::MailScope::default())
+}
+
+pub fn count_matching(
+    conn: &Connection,
+    args: &ListArgs,
+    scope: &crate::recipient_match::MailScope,
+) -> Result<usize> {
+    let (where_sql, bind) = build_filter(args, false, scope);
     let sql = format!(
         "SELECT COUNT(*)
          FROM threads t

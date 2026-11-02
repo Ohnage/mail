@@ -921,6 +921,8 @@ pub(super) fn same_email_row(a: &EmailRow, b: &EmailRow) -> bool {
         && a.account_color == b.account_color
         && a.account_profile == b.account_profile
         && a.show_account_marker == b.show_account_marker
+        && a.has_profile_logo == b.has_profile_logo
+        && (!a.has_profile_logo || a.profile_logo == b.profile_logo)
         && a.folder == b.folder
         && a.sender == b.sender
         && a.address == b.address
@@ -970,6 +972,13 @@ pub(super) fn make_rows<M: std::borrow::Borrow<MailMessage>>(
                     .unwrap_or_default()
                     .into(),
                 show_account_marker: account_presentation.show_markers,
+                profile_logo: profile
+                    .and_then(|profile| account_presentation.profile_logos.get(&profile.id))
+                    .cloned()
+                    .unwrap_or_default(),
+                has_profile_logo: profile.is_some_and(|profile| {
+                    account_presentation.profile_logos.contains_key(&profile.id)
+                }),
                 folder: email.folder.clone().into(),
                 sender: email.sender.clone().into(),
                 address: email.address.clone().into(),
@@ -1747,6 +1756,7 @@ mod tests {
                 name: "Work".into(),
                 color: "#EA580C".into(),
                 account_ids: vec![1],
+                logo: None,
             }],
             active_profile: None,
             show_markers: true,

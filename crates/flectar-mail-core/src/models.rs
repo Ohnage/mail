@@ -1458,6 +1458,61 @@ pub struct MailProfile {
     pub color: String,
     #[serde(default)]
     pub account_ids: Vec<i64>,
+    /// Relative path under the data directory, `profile-logos/<id>.<ext>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logo: Option<String>,
+}
+
+/// A pinned mail scope shown after All accounts.
+///
+/// `scope` selects how the fields combine:
+/// - `profiles` — only the accounts in `profile_ids` (empty means every account)
+/// - `recipients` — `recipient_patterns` across every account
+/// - `narrow` — those accounts, and the recipient patterns
+/// - `any` — those accounts, or a recipient pattern, or a sender rule
+///
+/// An empty `scope` is a tab saved before scopes existed: recipients across
+/// every account when only patterns are set, both constraints when both are
+/// set, otherwise the profiles.
+///
+/// `recipient_patterns` are address wildcards (`*` and `?`) matched against
+/// To, Cc, and the mailbox address (Delivered-To). Sender display names match
+/// only when the sender's domain is in `sender_domains`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusinessTab {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub profile_ids: Vec<String>,
+    #[serde(default)]
+    pub recipient_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sender_addresses: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sender_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sender_domains: Vec<String>,
+}
+
+impl BusinessTab {
+    /// `profiles`, `recipients`, `narrow`, or `any`.
+    pub fn resolved_scope(&self) -> &str {
+        match self.scope.as_str() {
+            "profiles" | "recipients" | "narrow" | "any" => self.scope.as_str(),
+            _ => {
+                if !self.profile_ids.is_empty() && !self.recipient_patterns.is_empty() {
+                    "narrow"
+                } else if self.profile_ids.is_empty() && !self.recipient_patterns.is_empty() {
+                    "recipients"
+                } else {
+                    "profiles"
+                }
+            }
+        }
+    }
 }
 
 /// The reading surface follows the application unless explicitly overridden.
@@ -1696,6 +1751,20 @@ pub struct Settings {
     /// account. Never names a deleted or empty profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_mail_profile: Option<String>,
+    /// Message rows show a preview line under the subject. Off by default so
+    /// each row is only the sender and the subject.
+    #[serde(default)]
+    pub show_message_preview: bool,
+    /// Pinned business scopes, in display order.
+    #[serde(default)]
+    pub business_tabs: Vec<BusinessTab>,
+    /// The business tab scoping the mail view. `None` means it is not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_business_tab: Option<String>,
+    /// SHA-256 of the brand registry last applied from disk, so an unchanged
+    /// file is not imported again.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub brand_registry_digest: String,
 }
 
 /// A named, rich-HTML signature belonging to one account.
@@ -1869,6 +1938,10 @@ impl Default for Settings {
             account_short_names: std::collections::HashMap::new(),
             mail_profiles: Vec::new(),
             active_mail_profile: None,
+            show_message_preview: false,
+            business_tabs: Vec::new(),
+            active_business_tab: None,
+            brand_registry_digest: String::new(),
         }
     }
 }

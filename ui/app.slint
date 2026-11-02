@@ -17,7 +17,7 @@ export { AppTheme, MotionSettings, ThemeUtilities } from "design-system.slint";
 import { AppTheme, LayoutMetrics } from "design-system.slint";
 import { Button } from "components/button.slint";
 import { LoadingSkeletonBlock } from "components/loading-skeleton.slint";
-import { AccountRow, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
+import { AccountRow, BusinessTabRow, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
 export { EmailReader, ReaderCaret, ReaderImage, ReaderItem, MailDragApi } from "models.slint";
 export { MailListNavigation, MailNavigationTarget } from "models.slint";
 export { ThreadMessageRow, StorageUsageRow } from "models.slint";
@@ -560,6 +560,13 @@ export component AppWindow inherits Window {
     // Rust: the active profile or its accounts changed.
     callback mail_profile_changed();
     callback save_account_markers_visibility(bool);
+    callback save_message_preview(bool);
+    callback import_brand_registry();
+    callback select_business_tab(string);
+    callback save_business_tab(string, string);
+    callback delete_business_tab(string);
+    callback move_business_tab(string, int);
+    callback choose_profile_logo(string);
     callback save_workspace_layout(string);
     callback save_workspace_list_pane_width(length);
     callback save_language(string);
@@ -863,6 +870,8 @@ export component AppWindow inherits Window {
     in-out property <bool> show_avatars: true;
     in-out property <bool> group_mail_by_date: true;
     in-out property <bool> show_account_markers: false;
+    in-out property <bool> show_message_preview: false;
+    in property <[BusinessTabRow]> business_tabs: [];
     in-out property <string> workspace_layout: "default";
     in-out property <length> workspace_list_pane_width: LayoutMetrics.list-pane-width;
     in-out property <string> language_mode: "system";
@@ -1330,6 +1339,7 @@ export component AppWindow inherits Window {
             list-pane-width <=> root.workspace_list_pane_width;
             list-pane-width-committed(width) => { root.save_workspace_list_pane_width(width); }
             show-avatars: root.show_avatars;
+            show-preview: root.show_message_preview;
             emails: root.emails;
             list_entries: root.mail_list_entries;
             group_mail_by_date: root.group_mail_by_date;
@@ -1724,6 +1734,8 @@ export component AppWindow inherits Window {
             height: parent.height;
             connected_accounts: root.connected_accounts;
             mail_profiles: root.mail_profiles;
+            business_tabs: root.business_tabs;
+            show_message_preview <=> root.show_message_preview;
             profile_members: root.profile_members;
             new-profile-requested <=> root.new_profile_requested;
             custom_oauth_configured: root.custom_oauth_configured;
@@ -1860,6 +1872,12 @@ export component AppWindow inherits Window {
             save_account_markers_visibility(enabled) => {
                 root.save_account_markers_visibility(enabled);
             }
+            save_message_preview(enabled) => { root.save_message_preview(enabled); }
+            import_brand_registry => { root.import_brand_registry(); }
+            save_business_tab(id, name) => { root.save_business_tab(id, name); }
+            delete_business_tab(id) => { root.delete_business_tab(id); }
+            move_business_tab(id, delta) => { root.move_business_tab(id, delta); }
+            choose_profile_logo(id) => { root.choose_profile_logo(id); }
             save_workspace_layout(mode) => { root.save_workspace_layout(mode); }
             save_language(language) => { root.save_language(language); }
             save_sidebar_icon_style(monochrome) => { root.save_sidebar_icon_style(monochrome); }
@@ -2308,8 +2326,10 @@ export component AppWindow inherits Window {
         accent-color: root.accent;
         profiles: root.mail_profiles;
         active-profile: root.active_mail_profile;
+        business-tabs: root.business_tabs;
         account-count: root.connected_accounts.length;
         choose-profile(id) => { root.select_mail_profile(id); }
+        choose-business-tab(id) => { root.select_business_tab(id); }
         create-profile => {
             root.settings_tab = "Accounts";
             root.settings_open = true;

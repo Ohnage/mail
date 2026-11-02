@@ -14,7 +14,14 @@ fn apply_account_presentation_settings(
     runtime: &tokio::runtime::Runtime,
     settings: &flectar_mail_core::models::Settings,
 ) {
-    state.borrow_mut().account_presentation = AccountPresentationSettings::from_settings(settings);
+    {
+        let mut state = state.borrow_mut();
+        state.account_presentation = AccountPresentationSettings::from_settings(settings);
+        if let Some(core) = state.core.clone() {
+            state.account_presentation.load_logos(&core.data_dir());
+        }
+    }
+    app.set_show_message_preview(settings.show_message_preview);
     refresh_connected_accounts(app, state);
     refresh_rows_only(app, state, runtime);
     // A profile change can change which accounts the mail view shows.
@@ -657,6 +664,238 @@ pub(super) fn register_settings_preference_callbacks(
             ));
         }
     });
+
+    let app_weak = app.as_weak();
+    let state_for_preview = Rc::clone(state);
+    let runtime_for_preview = Rc::clone(runtime);
+    app.on_save_message_preview(move |enabled| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_preview.borrow().core.clone() else {
+            app.set_show_message_preview(enabled);
+            return;
+        };
+        match runtime_for_preview.block_on(core.set_show_message_preview(enabled)) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_preview,
+                &runtime_for_preview,
+                &settings,
+            ),
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not save the preview preference: {}",
+                error,
+            )),
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_registry = Rc::clone(state);
+    let runtime_for_registry = Rc::clone(runtime);
+    app.on_import_brand_registry(move || {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_registry.borrow().core.clone() else {
+            app.set_sync_status(UiMessage::plain("Importing a brand registry requires local mail data."));
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Import brand registry")
+            .add_filter("Brand registry", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        match runtime_for_registry.block_on(core.import_brand_registry_file(&path)) {
+            Ok(settings) => {
+                apply_account_presentation_settings(
+                    &app,
+                    &state_for_registry,
+                    &runtime_for_registry,
+                    &settings,
+                );
+                app.set_sync_status(UiMessage::plain("Brand registry imported."));
+            }
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not import the brand registry: {}",
+                error,
+            )),
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_tab = Rc::clone(state);
+    let runtime_for_tab = Rc::clone(runtime);
+    app.on_select_business_tab(move |tab_id| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_tab.borrow().core.clone() else {
+            return;
+        };
+        let tab_id = (!tab_id.trim().is_empty()).then(|| tab_id.to_string());
+        match runtime_for_tab.block_on(core.set_active_business_tab(tab_id)) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_tab,
+                &runtime_for_tab,
+                &settings,
+            ),
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not open that business tab: {}", error))
+            }
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_save_tab = Rc::clone(state);
+    let runtime_for_save_tab = Rc::clone(runtime);
+    app.on_save_business_tab(move |tab_id, name| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_save_tab.borrow().core.clone() else {
+            return;
+        };
+        let existing = state_for_save_tab
+            .borrow()
+            .account_presentation
+            .business_tabs
+            .iter()
+            .find(|tab| tab.id == tab_id.as_str())
+            .cloned();
+        let profile_ids = existing
+            .as_ref()
+            .map(|tab| tab.profile_ids.clone())
+            .unwrap_or_default();
+        let patterns = existing
+            .as_ref()
+            .map(|tab| tab.recipient_patterns.clone())
+            .unwrap_or_default();
+        let tab_id = (!tab_id.trim().is_empty()).then(|| tab_id.to_string());
+        match runtime_for_save_tab.block_on(core.save_business_tab(
+            tab_id,
+            name.to_string(),
+            profile_ids,
+            patterns,
+        )) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_save_tab,
+                &runtime_for_save_tab,
+                &settings,
+            ),
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not save that business tab: {}", error))
+            }
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_delete_tab = Rc::clone(state);
+    let runtime_for_delete_tab = Rc::clone(runtime);
+    app.on_delete_business_tab(move |tab_id| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_delete_tab.borrow().core.clone() else {
+            return;
+        };
+        match runtime_for_delete_tab.block_on(core.delete_business_tab(tab_id.to_string())) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_delete_tab,
+                &runtime_for_delete_tab,
+                &settings,
+            ),
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not remove that business tab: {}",
+                error,
+            )),
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_move_tab = Rc::clone(state);
+    let runtime_for_move_tab = Rc::clone(runtime);
+    app.on_move_business_tab(move |tab_id, delta| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_move_tab.borrow().core.clone() else {
+            return;
+        };
+        match runtime_for_move_tab.block_on(core.move_business_tab(tab_id.to_string(), delta)) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_move_tab,
+                &runtime_for_move_tab,
+                &settings,
+            ),
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not move that business tab: {}", error))
+            }
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_logo = Rc::clone(state);
+    let runtime_for_logo = Rc::clone(runtime);
+    app.on_choose_profile_logo(move |profile_id| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_logo.borrow().core.clone() else {
+            return;
+        };
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose profile logo")
+            .add_filter("Image", &["png", "jpg", "jpeg", "gif", "webp"])
+            .pick_file()
+        else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not read that logo: {}", error));
+                return;
+            }
+        };
+        let Some(extension) = flectar_mail_core::brand_registry::extension_for(&bytes) else {
+            app.set_sync_status(UiMessage::plain("A profile logo must be a PNG, JPEG, GIF, or WebP image."));
+            return;
+        };
+        if bytes.len() > 2 * 1024 * 1024 {
+            app.set_sync_status(UiMessage::plain("A profile logo must be 2 MB or smaller."));
+            return;
+        }
+        let relative = format!("profile-logos/{profile_id}.{extension}");
+        let destination = core.data_dir().join(&relative);
+        if let Some(parent) = destination.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
+            app.set_sync_status(UiMessage::detail("Could not store that logo: {}", error));
+            return;
+        }
+        if let Err(error) = std::fs::write(&destination, &bytes) {
+            app.set_sync_status(UiMessage::detail("Could not store that logo: {}", error));
+            return;
+        }
+        match runtime_for_logo.block_on(core.set_profile_logo(profile_id.to_string(), Some(relative))) {
+            Ok(settings) => apply_account_presentation_settings(
+                &app,
+                &state_for_logo,
+                &runtime_for_logo,
+                &settings,
+            ),
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not save that logo: {}", error))
+            }
+        }
+    });
 }
 
 /// Both entry points share one asynchronous persistence path and busy state.
@@ -756,7 +995,9 @@ fn save_oauth_settings(
             }
         });
     });
+
 }
+
 
 #[cfg(test)]
 mod tests {

@@ -38,6 +38,17 @@ pub struct ParsedQuery {
     /// Scope results to a set of accounts, such as a mail profile's; an empty
     /// set matches nothing. Combines with `account_id`. Set by the caller.
     pub account_ids: Option<Vec<i64>>,
+    /// Business-tab recipient patterns. Empty leaves search unscoped by them.
+    /// Set by the caller, not parsed from the query string.
+    pub recipient_patterns: Vec<String>,
+    /// Sender addresses included when `scope_match_any` is set.
+    pub sender_addresses: Vec<String>,
+    /// Sender display names. They match only with `sender_domains`.
+    pub sender_names: Vec<String>,
+    pub sender_domains: Vec<String>,
+    /// Account ids OR'd into a `scope_match_any` filter.
+    pub or_account_ids: Vec<i64>,
+    pub scope_match_any: bool,
 }
 
 /// A raw query token: a bare word or a `"quoted phrase"`. A phrase can be

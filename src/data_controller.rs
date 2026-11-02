@@ -582,7 +582,13 @@ pub(super) fn restore_account_backup(
 
     let (restore, settings, accounts, configs) = result?;
     apply_language(app, &settings.language);
-    state.borrow_mut().account_presentation = AccountPresentationSettings::from_settings(&settings);
+    {
+        let mut state = state.borrow_mut();
+        state.account_presentation = AccountPresentationSettings::from_settings(&settings);
+        if let Some(core) = state.core.clone() {
+            state.account_presentation.load_logos(&core.data_dir());
+        }
+    }
     // Imported profiles can change which accounts the mail view shows.
     app.invoke_mail_profile_changed();
     update_connected_accounts(app, state, runtime, accounts, configs);

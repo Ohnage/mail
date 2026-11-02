@@ -21,6 +21,7 @@ export component MailView inherits FocusScope {
     in-out property <length> list-pane-width: LayoutMetrics.list-pane-width;
     callback list-pane-width-committed(length);
     in property <bool> show-avatars: true;
+    in property <bool> show-preview: false;
     in property <bool> loading: false;
     in property <[EmailRow]> emails: [];
     in property <[MailListEntry]> list_entries: [];
@@ -295,6 +296,7 @@ export component MailView inherits FocusScope {
                 restores-scroll: !root.single-pane;
                 width: root.effective-list-pane-width;
                 show-avatars: root.show-avatars;
+                show-preview: root.show-preview;
                 loading: root.loading;
                 emails: root.emails;
                 list_entries: root.list_entries;
@@ -516,6 +518,7 @@ export component MailView inherits FocusScope {
                 single-pane-navigation: root.compact;
                 preview-on-navigation: false;
                 show-avatars: root.show-avatars;
+                show-preview: root.show-preview;
                 dense: !root.compact;
                 emails: root.emails;
                 list_entries: root.list_entries;

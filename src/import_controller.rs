@@ -192,8 +192,11 @@ fn refresh_accounts(
 ) {
     match runtime.block_on(core.load_settings()) {
         Ok(settings) => {
-            state.borrow_mut().account_presentation =
-                AccountPresentationSettings::from_settings(&settings);
+            {
+                let mut state = state.borrow_mut();
+                state.account_presentation = AccountPresentationSettings::from_settings(&settings);
+                state.account_presentation.load_logos(&core.data_dir());
+            }
         }
         Err(error) => tracing::warn!(%error, "reloading settings after import failed"),
     }

@@ -191,6 +191,8 @@ fixture_row!(EmailRow {
     account_color,
     account_profile,
     show_account_marker,
+    profile_logo,
+    has_profile_logo,
     folder,
     sender,
     address,
@@ -267,7 +269,9 @@ fixture_row!(MailProfileRow {
     id,
     name,
     color,
-    account_count
+    account_count,
+    logo,
+    has_logo
 });
 fixture_row!(EmailTile { image, y, height });
 

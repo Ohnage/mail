@@ -5,6 +5,7 @@
 pub mod accounts;
 pub mod ai;
 pub mod autolabel;
+pub mod brand_registry;
 pub mod caldav;
 pub mod calendar;
 pub mod carddav;
@@ -29,6 +30,7 @@ pub mod net;
 pub mod oauth;
 pub mod pop3;
 pub mod queue;
+pub mod recipient_match;
 pub mod route;
 pub mod scheduler;
 pub mod search;
@@ -2168,6 +2170,7 @@ impl Core {
             None,
             label_id,
             folder_id,
+            recipient_match::MailScope::default(),
             page.into(),
         )
         .await
@@ -2191,6 +2194,35 @@ impl Core {
             Some(account_ids),
             label_id,
             folder_id,
+            recipient_match::MailScope::default(),
+            page.into(),
+        )
+        .await
+    }
+
+    /// `list_threads_for_accounts` plus a business-tab scope. `account_ids` of
+    /// `None` searches every account; an empty vector lists nothing. An empty
+    /// scope does not filter recipients or senders.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_threads_scoped(
+        &self,
+        view: View,
+        split_id: Option<i64>,
+        account_id: Option<i64>,
+        account_ids: Option<Vec<i64>>,
+        label_id: Option<i64>,
+        folder_id: Option<i64>,
+        scope: recipient_match::MailScope,
+        page: impl Into<ThreadPageRequest>,
+    ) -> Result<ThreadPage> {
+        self.list_threads_where(
+            view,
+            split_id,
+            account_id,
+            account_ids,
+            label_id,
+            folder_id,
+            scope,
             page.into(),
         )
         .await
@@ -2205,6 +2237,7 @@ impl Core {
         account_ids: Option<Vec<i64>>,
         label_id: Option<i64>,
         folder_id: Option<i64>,
+        scope: recipient_match::MailScope,
         page: ThreadPageRequest,
     ) -> Result<ThreadPage> {
         use repo::threads::TabFilter;
@@ -2233,7 +2266,7 @@ impl Core {
         };
         self.db
             .read(move |conn| {
-                repo::threads::list(
+                repo::threads::list_matching(
                     conn,
                     &repo::threads::ListArgs {
                         view,
@@ -2244,6 +2277,7 @@ impl Core {
                         cursor,
                         limit: limit.clamp(1, 200),
                     },
+                    &scope,
                 )
             })
             .await
@@ -6108,6 +6142,30 @@ impl Core {
             .await
     }
 
+    /// Chronological search scoped to accounts and a business-tab filter.
+    /// `account_ids` of `None` searches every account.
+    pub async fn search_chronological_scoped(
+        &self,
+        query: String,
+        account_id: Option<i64>,
+        account_ids: Option<Vec<i64>>,
+        scope: recipient_match::MailScope,
+        cursor: Option<models::SearchCursor>,
+        limit: i64,
+    ) -> Result<models::SearchPage> {
+        let mut parsed = search::parse(&query);
+        parsed.account_id = account_id;
+        parsed.account_ids = account_ids;
+        parsed.recipient_patterns = scope.recipient_patterns;
+        parsed.sender_addresses = scope.sender_addresses;
+        parsed.sender_names = scope.sender_names;
+        parsed.sender_domains = scope.sender_domains;
+        parsed.or_account_ids = scope.or_account_ids;
+        parsed.scope_match_any = scope.match_any;
+        self.search_chronological_parsed(parsed, cursor, limit)
+            .await
+    }
+
     async fn search_chronological_parsed(
         &self,
         parsed: search::ParsedQuery,
@@ -7107,9 +7165,21 @@ impl Core {
 
     /// Native sidebar badges for all accounts, computed in one grouped query.
     pub async fn mailbox_badge_counts(&self) -> Result<Vec<MailboxBadgeCounts>> {
-        self.db
-            .read(|conn| repo::counts::mailbox_badge_counts(conn))
+        self.mailbox_badge_counts_filtered(recipient_match::MailScope::default())
             .await
+    }
+
+    pub async fn mailbox_badge_counts_filtered(
+        &self,
+        scope: recipient_match::MailScope,
+    ) -> Result<Vec<MailboxBadgeCounts>> {
+        self.db
+            .read(move |conn| repo::counts::mailbox_badge_counts_filtered(conn, &scope))
+            .await
+    }
+
+    pub fn data_dir(&self) -> &std::path::Path {
+        &self.paths.data_dir
     }
 
     pub async fn get_settings(&self) -> Result<Settings> {
@@ -7218,6 +7288,7 @@ impl Core {
                         name,
                         color,
                         account_ids: Vec::new(),
+                        logo: None,
                     };
                     settings.mail_profiles.push(profile.clone());
                     profile
@@ -7317,6 +7388,9 @@ impl Core {
                 if settings.mail_profiles.len() == before {
                     return Err(CoreError::NotFound(format!("mail profile {profile_id}")));
                 }
+                for tab in &mut settings.business_tabs {
+                    tab.profile_ids.retain(|id| id != &profile_id);
+                }
                 retire_active_mail_profile(&mut settings);
                 repo::settings::set(conn, &settings)?;
                 Ok(settings)
@@ -7347,6 +7421,197 @@ impl Core {
                     }
                 }
                 settings.active_mail_profile = profile_id;
+                // The profile pill and a business tab are different scopes.
+                settings.active_business_tab = None;
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn set_show_message_preview(&self, enabled: bool) -> Result<Settings> {
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                settings.show_message_preview = enabled;
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn set_mail_profile_logo(
+        &self,
+        profile_id: String,
+        logo: Option<String>,
+    ) -> Result<Settings> {
+        let logo = match logo {
+            Some(logo) => Some(
+                crate::brand_registry::safe_logo_relative(&logo)
+                    .ok_or_else(|| {
+                        CoreError::Other("profile logo path must stay inside profile-logos".into())
+                    })?
+                    .to_owned(),
+            ),
+            None => None,
+        };
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let profile = settings
+                    .mail_profiles
+                    .iter_mut()
+                    .find(|profile| profile.id == profile_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("mail profile {profile_id}")))?;
+                profile.logo = logo;
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn set_active_business_tab(&self, tab_id: Option<String>) -> Result<Settings> {
+        let tab_id = tab_id
+            .map(|id| id.trim().to_owned())
+            .filter(|id| !id.is_empty());
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                if let Some(id) = &tab_id
+                    && !settings.business_tabs.iter().any(|tab| &tab.id == id)
+                {
+                    return Err(CoreError::NotFound(format!("business tab {id}")));
+                }
+                settings.active_business_tab = tab_id;
+                if settings.active_business_tab.is_some() {
+                    settings.active_mail_profile = None;
+                }
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn save_business_tab(
+        &self,
+        tab_id: Option<String>,
+        name: String,
+        profile_ids: Vec<String>,
+        recipient_patterns: Vec<String>,
+    ) -> Result<Settings> {
+        let name = normalize_mail_profile_name(&name)?;
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let requested = tab_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+                if settings.business_tabs.iter().any(|tab| {
+                    Some(tab.id.as_str()) != requested && tab.name.eq_ignore_ascii_case(&name)
+                }) {
+                    return Err(CoreError::Other(format!(
+                        "a business tab named {name:?} already exists"
+                    )));
+                }
+                let profile_ids = profile_ids
+                    .into_iter()
+                    .filter(|id| {
+                        settings
+                            .mail_profiles
+                            .iter()
+                            .any(|profile| &profile.id == id)
+                    })
+                    .collect::<Vec<_>>();
+                let recipient_patterns = recipient_patterns
+                    .into_iter()
+                    .map(|pattern| pattern.trim().to_owned())
+                    .filter(|pattern| !pattern.is_empty() && pattern.len() <= 200)
+                    .take(4_096)
+                    .collect::<Vec<_>>();
+                if let Some(id) = requested {
+                    let tab = settings
+                        .business_tabs
+                        .iter_mut()
+                        .find(|tab| tab.id == id)
+                        .ok_or_else(|| CoreError::NotFound(format!("business tab {id}")))?;
+                    tab.name = name;
+                    tab.profile_ids = profile_ids;
+                    tab.recipient_patterns = recipient_patterns;
+                } else {
+                    if settings.business_tabs.len() >= 24 {
+                        return Err(CoreError::Other(
+                            "no more than 24 business tabs can be saved".into(),
+                        ));
+                    }
+                    let id = format!("tab-{}", settings.business_tabs.len() + 1);
+                    let mut unique = id.clone();
+                    let mut suffix = 2u32;
+                    while settings.business_tabs.iter().any(|tab| tab.id == unique) {
+                        unique = format!("{id}-{suffix}");
+                        suffix += 1;
+                    }
+                    settings.business_tabs.push(crate::models::BusinessTab {
+                        id: unique,
+                        name,
+                        profile_ids,
+                        recipient_patterns,
+                        scope: "profiles".to_owned(),
+                        sender_addresses: Vec::new(),
+                        sender_names: Vec::new(),
+                        sender_domains: Vec::new(),
+                    });
+                }
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn delete_business_tab(&self, tab_id: String) -> Result<Settings> {
+        let tab_id = tab_id.trim().to_owned();
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let before = settings.business_tabs.len();
+                settings.business_tabs.retain(|tab| tab.id != tab_id);
+                if settings.business_tabs.len() == before {
+                    return Err(CoreError::NotFound(format!("business tab {tab_id}")));
+                }
+                if settings.active_business_tab.as_deref() == Some(tab_id.as_str()) {
+                    settings.active_business_tab = None;
+                }
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn move_business_tab(&self, tab_id: String, delta: i32) -> Result<Settings> {
+        let tab_id = tab_id.trim().to_owned();
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let Some(index) = settings
+                    .business_tabs
+                    .iter()
+                    .position(|tab| tab.id == tab_id)
+                else {
+                    return Err(CoreError::NotFound(format!("business tab {tab_id}")));
+                };
+                let target = index as i32 + delta;
+                if (0..settings.business_tabs.len() as i32).contains(&target) {
+                    let tab = settings.business_tabs.remove(index);
+                    settings.business_tabs.insert(target as usize, tab);
+                }
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    pub async fn set_brand_registry_digest(&self, digest: String) -> Result<Settings> {
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                settings.brand_registry_digest = digest;
                 repo::settings::set(conn, &settings)?;
                 Ok(settings)
             })

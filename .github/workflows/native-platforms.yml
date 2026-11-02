@@ -71,6 +71,11 @@ jobs:
       source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Verify fork includes current upstream
+        if: github.repository == 'Ohnage/mail' && github.ref == 'refs/heads/main'
+        run: python3 scripts/check-fork-upstream.py
       - name: Use the source commit timestamp
         id: source
         run: |

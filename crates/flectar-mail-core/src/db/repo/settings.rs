@@ -11,7 +11,19 @@ pub fn get(conn: &Connection) -> Result<Settings> {
         )
         .optional()?;
     match json {
-        Some(json) => Ok(serde_json::from_str(&json)?),
+        Some(json) => {
+            let mut value: serde_json::Value = serde_json::from_str(&json)?;
+            if let Some(object) = value.as_object_mut()
+                && object.contains_key("businessTabs")
+                && !object.contains_key("businessTabsCustomized")
+            {
+                // Before the customization marker existed, an explicitly saved
+                // list could contain local renames, ordering or deletions. Treat
+                // it as authoritative; pre-tab settings without a list may seed.
+                object.insert("businessTabsCustomized".into(), true.into());
+            }
+            Ok(serde_json::from_value(value)?)
+        }
         None => Ok(Settings::default()),
     }
 }
@@ -30,6 +42,81 @@ mod tests {
     use super::*;
     use crate::db::testutil;
 
+    fn registry_for_migration_test() -> crate::brand_registry::BrandRegistry {
+        crate::brand_registry::parse_brand_registry(
+            br##"{
+            "profiles":[{"id":"work","name":"Refreshed Work","color":"#123456"}],
+            "tabs":[{"id":"work","name":"Seeded","profiles":["work"]}]
+        }"##,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn pre_feature_saved_tab_lists_survive_import_including_empty_deletions() {
+        for tabs in [
+            serde_json::json!([
+                {"id":"second","name":"Renamed second","profileIds":[]},
+                {"id":"first","name":"Renamed first","profileIds":[]}
+            ]),
+            serde_json::json!([]),
+        ] {
+            let conn = testutil::conn();
+            let mut raw = serde_json::to_value(Settings::default()).unwrap();
+            let object = raw.as_object_mut().unwrap();
+            object.remove("businessTabsCustomized");
+            object.remove("businessTabIconsInitialized");
+            object.insert("businessTabs".into(), tabs);
+            conn.execute(
+                "INSERT INTO app_settings (key,value) VALUES ('settings',?1)",
+                [raw.to_string()],
+            )
+            .unwrap();
+            let legacy = get(&conn).unwrap();
+            assert!(legacy.business_tabs_customized);
+            assert!(!legacy.business_tab_icons_initialized);
+            let refreshed = crate::brand_registry::apply_brand_registry(
+                &legacy,
+                &[],
+                &registry_for_migration_test(),
+                |_| Err("unused".into()),
+            )
+            .unwrap()
+            .settings;
+            assert_eq!(refreshed.business_tabs, legacy.business_tabs);
+            assert_eq!(refreshed.mail_profiles[0].name, "Refreshed Work");
+            set(&conn, &refreshed).unwrap();
+            assert!(get(&conn).unwrap().business_tabs_customized);
+        }
+    }
+
+    #[test]
+    fn pre_tab_settings_without_a_list_remain_eligible_for_registry_seed() {
+        let conn = testutil::conn();
+        conn.execute(
+            "INSERT INTO app_settings (key,value) VALUES ('settings',?1)",
+            [r#"{"theme":"snow","undoSendSeconds":20,"loadRemoteImages":false}"#],
+        )
+        .unwrap();
+        let old = get(&conn).unwrap();
+        assert!(!old.business_tabs_customized);
+        let seeded = crate::brand_registry::apply_brand_registry(
+            &old,
+            &[],
+            &registry_for_migration_test(),
+            |_| Err("unused".into()),
+        )
+        .unwrap()
+        .settings;
+        assert_eq!(seeded.business_tabs[0].name, "Seeded");
+        assert!(!seeded.business_tabs_customized);
+        set(&conn, &Settings::default()).unwrap();
+        assert!(
+            !get(&conn).unwrap().business_tabs_customized,
+            "explicit modern false stays false even with an empty list"
+        );
+    }
+
     #[test]
     fn defaults_when_unset_and_roundtrip() {
         let c = testutil::conn();
@@ -41,6 +128,7 @@ mod tests {
         assert!(d.mark_read_on_open);
         assert!(!d.load_remote_images);
         assert!(!d.monochrome_sidebar_icons);
+        assert_eq!(d.app_icon, crate::models::AppIcon::Orange);
         assert!(d.show_avatars);
         assert!(d.group_mail_by_date);
         assert!(d.collect_outgoing_contacts);
@@ -65,6 +153,7 @@ mod tests {
         s.calendar_week_start = "sunday".into();
         s.notifications_enabled = false;
         s.monochrome_sidebar_icons = true;
+        s.app_icon = crate::models::AppIcon::Graphite;
         s.show_avatars = false;
         s.group_mail_by_date = false;
         s.workspace_layout = "minimal".into();
@@ -114,6 +203,7 @@ mod tests {
         assert_eq!(back.calendar_week_start, "sunday");
         assert!(!back.notifications_enabled);
         assert!(back.monochrome_sidebar_icons);
+        assert_eq!(back.app_icon, crate::models::AppIcon::Graphite);
         assert!(!back.show_avatars);
         assert!(!back.group_mail_by_date);
         assert!(back.contact_suggest_all_accounts);
@@ -149,6 +239,7 @@ mod tests {
         assert!(s.load_remote_images);
         assert!(s.mark_read_on_open);
         assert!(!s.monochrome_sidebar_icons);
+        assert_eq!(s.app_icon, crate::models::AppIcon::Orange);
         assert!(s.show_avatars);
         assert!(s.group_mail_by_date);
         assert!(s.collect_outgoing_contacts);

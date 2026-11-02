@@ -7,7 +7,11 @@ On launch, Flectar also applies `%APPDATA%\flectar-mail\brand-registry.json`
 (the data directory on every platform) when that file is present and its
 bytes have changed.
 
-Import replaces mail profiles and business tabs with the file. It never
+Import replaces mail profiles and untouched default business tabs. Locally
+customized tab lists and independent account icons are preserved. Saved tab
+lists from versions before customization tracking are conservatively treated
+as customized, including an explicitly empty list. Older settings with no
+`businessTabs` field remain eligible for the first registry seed. It never
 deletes accounts or mail. Profile ids are the registry ids: a profile is not
 matched by name onto an older id. An account no rule places goes to an
 Unassigned profile. The profiles and tabs from before that import are stored
@@ -69,8 +73,13 @@ goes to Unassigned. The generator's "fallback to Tim Personal" is not applied.
 ### Tabs
 
 `tabs[]` with `"builtin": true` (All Accounts) is skipped. Every other tab
-replaces the saved tabs and is shown, in file order, after All accounts.
-Tabs absent from the file are removed (they remain in `brandRegistryBackup`).
+provides the default tabs, shown in file order after All accounts.
+Until a tab is created, edited, deleted, or reordered locally, a changed
+registry refreshes this default list. Once customized, the entire saved list
+is authoritative: imports preserve its names, account selections, icons,
+ordering, local additions, and deletions, including deletion of every tab.
+Registry profile definitions and assignments still refresh. The original
+profiles and tabs remain in `brandRegistryBackup`.
 
 | `rule` | Scope | What the mail view shows |
 |---|---|---|
@@ -82,9 +91,25 @@ Tabs absent from the file are removed (they remain in `brandRegistryBackup`).
 and are matched without regard to case. Literal addresses are looked up in a
 set, so a list of several hundred does not build an SQL `OR` tree.
 
-The tab's logo and color come from the profile whose id equals the tab id.
-Tim Mentink, whose id is `tim`, uses the listed profile named Tim Mentink.
-Message rows keep the account's own profile color bar and logo. The sidebar
+Each account and each tab can have an independent normalized PNG icon.
+`accountIcons` maps stringified local account IDs to `account-icons/*.png`;
+`businessTabs[].icon` points to `tab-icons/*.png`. Registry imports preserve
+these account overrides and all icons on a customized tab list. Existing
+untouched tabs snapshot their old profile logo into a separate,
+normalized tab icon on first settings load or registry import. This one-time
+icon initialization also applies to conservatively protected legacy lists.
+Registry refreshes retain existing independent tab icons by stable tab ID, so a later
+profile logo upload cannot silently change tab branding. New tabs with no
+icon use the generic tab image. Tab icons identify navigation only; account icons identify accounts in settings,
+sidebars, and message rows.
+
+A tab's optional `accountIds` supplies its independent account selection.
+The same account may appear in several tabs. Missing `accountIds` retains
+legacy profile-derived membership; an explicit empty array selects no
+accounts. Selecting accounts never changes the account's profile or moves
+mail. Editing the name, icon, or account list preserves the original scope,
+profile IDs, recipient patterns, sender addresses, sender names, and sender
+domains, including the Tim and Forty7 rules. The sidebar
 lists only the tab's accounts. A recipient tab lists every account, collapsed
 until that account is expanded; the choice is remembered per tab.
 

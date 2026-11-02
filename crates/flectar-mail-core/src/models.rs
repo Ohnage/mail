@@ -53,6 +53,13 @@ pub enum MailProtocol {
     Imap,
     /// RFC 8620/8621 JMAP Mail and EmailSubmission.
     Jmap,
+    /// POP3 download into folders that exist only on this device, with SMTP
+    /// submission.
+    Pop3,
+    /// No server at all: mail the user imported, kept in folders that exist
+    /// only on this device. There is at most one such account, and it has no
+    /// address, sign-in, or settings, so it never sends.
+    Local,
 }
 
 impl MailProtocol {
@@ -61,6 +68,8 @@ impl MailProtocol {
             Self::Gmail => "gmail",
             Self::Imap => "imap",
             Self::Jmap => "jmap",
+            Self::Pop3 => "pop3",
+            Self::Local => "local",
         }
     }
 
@@ -69,6 +78,8 @@ impl MailProtocol {
             "gmail" => Some(Self::Gmail),
             "imap" => Some(Self::Imap),
             "jmap" => Some(Self::Jmap),
+            "pop3" => Some(Self::Pop3),
+            "local" => Some(Self::Local),
             _ => None,
         }
     }
@@ -79,7 +90,7 @@ impl MailProtocol {
     pub const fn has_multi_mailbox_messages(self) -> bool {
         match self {
             Self::Gmail | Self::Jmap => true,
-            Self::Imap => false,
+            Self::Imap | Self::Pop3 | Self::Local => false,
         }
     }
 }
@@ -311,6 +322,63 @@ impl SentCopyPolicy {
     }
 }
 
+/// How long a POP3 account leaves downloaded mail on its server. Mail is
+/// removed from the server only once this device has stored it, and every
+/// choice but `Always` also removes mail deleted here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeepOnServer {
+    #[default]
+    Always,
+    UntilDeleted,
+    SevenDays,
+    FourteenDays,
+    ThirtyDays,
+    UntilDownloaded,
+}
+
+impl KeepOnServer {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::UntilDeleted => "untilDeleted",
+            Self::SevenDays => "sevenDays",
+            Self::FourteenDays => "fourteenDays",
+            Self::ThirtyDays => "thirtyDays",
+            Self::UntilDownloaded => "untilDownloaded",
+        }
+    }
+
+    pub fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "always" => Some(Self::Always),
+            "untilDeleted" => Some(Self::UntilDeleted),
+            "sevenDays" => Some(Self::SevenDays),
+            "fourteenDays" => Some(Self::FourteenDays),
+            "thirtyDays" => Some(Self::ThirtyDays),
+            "untilDownloaded" => Some(Self::UntilDownloaded),
+            _ => None,
+        }
+    }
+
+    /// How many days downloaded mail stays on the server, when that's
+    /// limited.
+    pub const fn days(self) -> Option<u32> {
+        match self {
+            Self::Always | Self::UntilDeleted => None,
+            Self::SevenDays => Some(7),
+            Self::FourteenDays => Some(14),
+            Self::ThirtyDays => Some(30),
+            Self::UntilDownloaded => Some(0),
+        }
+    }
+
+    /// Whether mail deleted here is removed from the server.
+    pub const fn removes_deleted(self) -> bool {
+        !matches!(self, Self::Always)
+    }
+}
+
 /// Typed contents of `accounts.settings_json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -329,6 +397,9 @@ pub struct AccountSettings {
     pub default_sender_email: Option<String>,
     #[serde(default)]
     pub sent_copy_policy: SentCopyPolicy,
+    /// POP3 accounts only.
+    #[serde(default)]
+    pub keep_on_server: KeepOnServer,
 }
 
 impl AccountSettings {
@@ -341,6 +412,7 @@ impl AccountSettings {
             connection,
             default_sender_email: None,
             sent_copy_policy: SentCopyPolicy::Auto,
+            keep_on_server: KeepOnServer::Always,
         }
     }
 }
@@ -355,6 +427,30 @@ mod account_settings_tests {
 
     const MINIMAL_SETTINGS: &str =
         r#"{"connection":{"incomingSecurity":"tls","smtpSecurity":"starttls"}}"#;
+
+    #[test]
+    fn keep_on_server_defaults_to_always_and_survives_serialization() {
+        let mut settings: AccountSettings = serde_json::from_str(MINIMAL_SETTINGS).unwrap();
+        assert_eq!(settings.keep_on_server, KeepOnServer::Always);
+        for keep in [
+            KeepOnServer::Always,
+            KeepOnServer::UntilDeleted,
+            KeepOnServer::SevenDays,
+            KeepOnServer::FourteenDays,
+            KeepOnServer::ThirtyDays,
+            KeepOnServer::UntilDownloaded,
+        ] {
+            settings.keep_on_server = keep;
+            let restored: AccountSettings =
+                serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(restored.keep_on_server, keep);
+            assert_eq!(KeepOnServer::from_storage(keep.as_str()), Some(keep));
+        }
+        assert!(!KeepOnServer::Always.removes_deleted());
+        assert_eq!(KeepOnServer::UntilDeleted.days(), None);
+        assert_eq!(KeepOnServer::FourteenDays.days(), Some(14));
+        assert_eq!(KeepOnServer::UntilDownloaded.days(), Some(0));
+    }
 
     #[test]
     fn sent_copy_defaults_and_overrides_survive_serialization() {
@@ -438,6 +534,23 @@ pub struct Account {
     /// Whether the provider currently permits creating a root mailbox.
     #[serde(default = "default_true")]
     pub can_create_top_level_mailbox: bool,
+    /// The days a POP3 server keeps downloaded mail before removing it on
+    /// its own, as it announced at the last sign-in (RFC 2449 EXPIRE). Zero
+    /// removes it when the session ends. `None` when it keeps mail or hasn't
+    /// said.
+    #[serde(default)]
+    pub server_keeps_mail_days: Option<u32>,
+}
+
+/// Mail imported into folders that exist only on this device. It belongs to
+/// an account of protocol [`MailProtocol::Local`], which account lists leave
+/// out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalMail {
+    pub account_id: i64,
+    pub messages: u64,
+    pub bytes: u64,
 }
 
 /// Full account row including server config; internal to the native application.
@@ -833,7 +946,8 @@ pub enum View {
 pub struct ThreadSummary {
     pub id: i64,
     pub account_id: i64,
-    pub account_email: String,
+    /// `None` for local mail, which has no address.
+    pub account_email: Option<String>,
     /// Verified addresses owned by this account, including send-as aliases.
     pub account_addresses: Vec<String>,
     pub subject: String,
@@ -848,6 +962,13 @@ pub struct ThreadSummary {
     pub snoozed_until: Option<i64>,
     /// Ids of labels present on any message in the thread.
     pub labels: Vec<i64>,
+    /// The one-time code the newest message asks its reader to enter.
+    pub verification_code: Option<String>,
+    /// The thread's first file, from its newest message that has one.
+    /// Inline images are not files.
+    pub first_attachment: Option<AttachmentMeta>,
+    /// How many files the thread holds.
+    pub attachment_total: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,6 +1115,17 @@ pub struct AddPasswordAccountArgs {
     pub smtp_host: String,
     pub smtp_port: u16,
     pub connection: MailConnectionSettings,
+}
+
+/// What an account's mail export wrote.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailExport {
+    pub folders: usize,
+    pub messages: usize,
+    /// Messages left out because their original is missing from this device
+    /// and the server no longer has it.
+    pub missing: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1485,6 +1617,12 @@ pub struct MailProfile {
 pub struct BusinessTab {
     pub id: String,
     pub name: String,
+    /// Independent normalized tab icon, relative to the application data folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// None inherits profile membership; Some(empty) deliberately selects no accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub profile_ids: Vec<String>,
     #[serde(default)]
@@ -1582,6 +1720,86 @@ impl MessageAppearance {
     }
 }
 
+/// How times of day are written: with the clock the user's region prefers,
+/// or always with a 12- or 24-hour clock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimeFormat {
+    #[default]
+    #[serde(rename = "automatic")]
+    Automatic,
+    #[serde(rename = "12h")]
+    TwelveHour,
+    #[serde(rename = "24h")]
+    TwentyFourHour,
+}
+
+impl TimeFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Automatic => "automatic",
+            Self::TwelveHour => "12h",
+            Self::TwentyFourHour => "24h",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "automatic" => Some(Self::Automatic),
+            "12h" => Some(Self::TwelveHour),
+            "24h" => Some(Self::TwentyFourHour),
+            _ => None,
+        }
+    }
+}
+
+/// The application icon shown by the window, tray, Dock, and launcher.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppIcon {
+    #[default]
+    Orange,
+    Graphite,
+    Light,
+    Blue,
+    Green,
+    Purple,
+}
+
+impl AppIcon {
+    pub const ALL: [Self; 6] = [
+        Self::Orange,
+        Self::Graphite,
+        Self::Light,
+        Self::Blue,
+        Self::Green,
+        Self::Purple,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Orange => "orange",
+            Self::Graphite => "graphite",
+            Self::Light => "light",
+            Self::Blue => "blue",
+            Self::Green => "green",
+            Self::Purple => "purple",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|icon| icon.as_str() == value)
+    }
+}
+
+/// Unknown values, including those written by newer versions, fall back to
+/// the default icon instead of failing the whole settings blob.
+impl<'de> Deserialize<'de> for AppIcon {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::parse(&value).unwrap_or_default())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -1619,9 +1837,13 @@ pub struct Settings {
     /// the default semantic palette.
     #[serde(default)]
     pub monochrome_sidebar_icons: bool,
+    #[serde(default)]
+    pub app_icon: AppIcon,
     /// UI language: "system" follows the OS locale, otherwise a code like "en".
     #[serde(default = "default_language")]
     pub language: String,
+    #[serde(default)]
+    pub time_format: TimeFormat,
     /// First day shown in calendar week and month views: "sunday" | "monday".
     #[serde(default = "default_calendar_week_start")]
     pub calendar_week_start: String,
@@ -1777,6 +1999,9 @@ pub struct Settings {
     /// Missing = the UI derives a stable hue from the address.
     #[serde(default)]
     pub account_colors: std::collections::HashMap<String, String>,
+    /// Independent normalized account icons, keyed by stringified account id.
+    #[serde(default)]
+    pub account_icons: std::collections::HashMap<String, String>,
     /// Short name shown on inbox rows, keyed by stringified account id.
     /// Missing = display name, else the address local part.
     #[serde(default)]
@@ -1796,6 +2021,13 @@ pub struct Settings {
     /// Pinned business scopes, in display order.
     #[serde(default)]
     pub business_tabs: Vec<BusinessTab>,
+    /// A locally edited list is authoritative, including ordering and deletions.
+    #[serde(default)]
+    pub business_tabs_customized: bool,
+    /// Legacy profile-derived tab icons have been snapshotted once. Independent
+    /// empty icons on modern tabs must never be inferred from a profile again.
+    #[serde(default)]
+    pub business_tab_icons_initialized: bool,
     /// The business tab scoping the mail view. `None` means it is not applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_business_tab: Option<String>,
@@ -1912,6 +2144,7 @@ pub struct StartupPresentation {
     /// Whether a background launch may stay in the system tray without
     /// first showing the window.
     pub close_to_tray: bool,
+    pub app_icon: AppIcon,
 }
 fn default_theme_preset() -> String {
     "default".into()
@@ -1930,7 +2163,9 @@ impl Default for Settings {
             workspace_list_pane_width: default_workspace_list_pane_width(),
             window_frame: default_window_frame(),
             monochrome_sidebar_icons: false,
+            app_icon: AppIcon::default(),
             language: "system".into(),
+            time_format: TimeFormat::default(),
             calendar_week_start: default_calendar_week_start(),
             undo_send_seconds: 10,
             load_remote_images: false,
@@ -1978,11 +2213,14 @@ impl Default for Settings {
             account_themes: std::collections::HashMap::new(),
             show_account_badges: false,
             account_colors: std::collections::HashMap::new(),
+            account_icons: std::collections::HashMap::new(),
             account_short_names: std::collections::HashMap::new(),
             mail_profiles: Vec::new(),
             active_mail_profile: None,
             show_message_preview: false,
             business_tabs: Vec::new(),
+            business_tabs_customized: false,
+            business_tab_icons_initialized: false,
             active_business_tab: None,
             brand_registry_digest: String::new(),
             brand_registry_backup: None,
@@ -2063,12 +2301,49 @@ pub struct CalendarEvent {
     pub method: Option<String>,
 }
 
-/// A discovered CalDAV calendar collection.
+/// How a calendar connection reaches its server. An account holds at most
+/// one Google or Microsoft connection, which signs in with the account's own
+/// OAuth tokens, and any number of CalDAV connections with their own
+/// username and app password (for example a shared mailbox's calendar).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CalendarConnectionKind {
+    /// Google Calendar over CalDAV, enumerated with the Calendar API.
+    Google,
+    /// Any CalDAV server.
+    Generic,
+    /// Outlook and Microsoft 365 over Microsoft Graph.
+    Microsoft,
+}
+
+impl CalendarConnectionKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Google => "google",
+            Self::Generic => "generic",
+            Self::Microsoft => "microsoft",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "google" => Some(Self::Google),
+            "generic" => Some(Self::Generic),
+            "microsoft" => Some(Self::Microsoft),
+            _ => None,
+        }
+    }
+}
+
+/// A calendar collection synced through one connection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Calendar {
     pub id: i64,
     pub account_id: i64,
+    pub connection_id: i64,
+    /// The owning connection's kind.
+    pub kind: CalendarConnectionKind,
     pub url: String,
     pub display_name: Option<String>,
     pub color: Option<String>,
@@ -2078,17 +2353,20 @@ pub struct Calendar {
     pub last_synced_at: Option<i64>,
 }
 
-/// Per-account calendar-provider connection shown in account settings.
+/// A calendar server connected to an account, shown in account settings.
+/// Events created in its calendars use the account's address as organizer.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalendarConnection {
+    pub id: i64,
     pub account_id: i64,
-    /// google | microsoft | generic
-    pub kind: String,
+    pub kind: CalendarConnectionKind,
     pub base_url: String,
     pub username: String,
     pub enabled: bool,
     pub last_error: Option<String>,
+    /// Display names of the connection's calendars, in sidebar order.
+    pub calendars: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2156,19 +2434,21 @@ pub struct UpdateEventArgs {
 // Deliberately no `Debug`: it would print the CalDAV app password.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectCalendarArgs {
+pub struct ConnectCaldavArgs {
     pub account_id: i64,
-    /// "google" | "generic"
-    pub kind: String,
+    /// The CalDAV connection to change; None adds a new one.
     #[serde(default)]
-    pub url: Option<String>,
+    pub connection_id: Option<i64>,
+    /// A server address, or one calendar's own address.
+    pub url: String,
     #[serde(default)]
-    pub username: Option<String>,
+    pub username: String,
+    /// Required for a new connection; an empty one keeps the saved password.
     #[serde(default)]
     pub password: Option<String>,
 }
 
-/// Standard IMAP folder roles.
+/// Standard folder roles.
 pub mod roles {
     pub const INBOX: &str = "inbox";
     pub const ARCHIVE: &str = "archive";
@@ -2223,7 +2503,13 @@ mod tests {
 
     #[test]
     fn mail_protocol_roundtrip_rejects_unknown_values() {
-        for protocol in [MailProtocol::Gmail, MailProtocol::Imap, MailProtocol::Jmap] {
+        for protocol in [
+            MailProtocol::Gmail,
+            MailProtocol::Imap,
+            MailProtocol::Jmap,
+            MailProtocol::Pop3,
+            MailProtocol::Local,
+        ] {
             assert_eq!(MailProtocol::parse(protocol.as_str()), Some(protocol));
         }
         assert_eq!(MailProtocol::parse("future"), None);
@@ -2251,9 +2537,47 @@ mod tests {
         assert_eq!(s.ai_base_url, crate::ai::DEFAULT_BASE_URL);
         assert!(s.show_avatars);
         assert_eq!(s.message_appearance, MessageAppearance::System);
+        assert_eq!(s.app_icon, AppIcon::Orange);
         assert!(s.group_mail_by_date);
         assert_eq!(s.workspace_layout, "default");
         assert_eq!(s.workspace_list_pane_width, MIN_WORKSPACE_LIST_PANE_WIDTH);
+        assert_eq!(s.time_format, TimeFormat::Automatic);
+    }
+
+    #[test]
+    fn time_formats_round_trip_through_their_stored_names() {
+        for format in [
+            TimeFormat::Automatic,
+            TimeFormat::TwelveHour,
+            TimeFormat::TwentyFourHour,
+        ] {
+            assert_eq!(TimeFormat::parse(format.as_str()), Some(format));
+            let settings = Settings {
+                time_format: format,
+                ..Settings::default()
+            };
+            let serialized = serde_json::to_value(&settings).unwrap();
+            assert_eq!(serialized["timeFormat"], format.as_str());
+            let restored: Settings = serde_json::from_value(serialized).unwrap();
+            assert_eq!(restored.time_format, format);
+        }
+        assert_eq!(TimeFormat::parse("system"), None);
+    }
+
+    #[test]
+    fn app_icon_round_trips_and_tolerates_unknown_values() {
+        for icon in AppIcon::ALL {
+            assert_eq!(AppIcon::parse(icon.as_str()), Some(icon));
+            let json = serde_json::to_string(&icon).unwrap();
+            assert_eq!(json, format!("\"{}\"", icon.as_str()));
+            assert_eq!(serde_json::from_str::<AppIcon>(&json).unwrap(), icon);
+        }
+        assert_eq!(AppIcon::parse("Graphite"), None);
+        let settings: Settings = serde_json::from_str(
+            r#"{"theme":"system","undoSendSeconds":10,"appIcon":"from-a-newer-version"}"#,
+        )
+        .unwrap();
+        assert_eq!(settings.app_icon, AppIcon::Orange);
     }
 
     #[test]

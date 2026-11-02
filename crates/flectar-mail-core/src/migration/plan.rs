@@ -7,12 +7,12 @@
 
 use super::model::{
     AccountCandidate, IdentityCandidate, ImportInventory, ServerCandidate, ServerProtocol,
-    SignatureCandidate, SourceAuth, SourceSecurity,
+    SignatureCandidate, SourceAuth, SourceRetention, SourceSecurity,
 };
-use crate::accounts::providers;
+use crate::accounts::{mailbox_key, providers};
 use crate::models::{
-    AccountSettings, AuthKind, ConnectionSecurity, MailConnectionSettings, MailProtocol,
-    PortableAccountConfig, Provider,
+    AccountSettings, AuthKind, ConnectionSecurity, KeepOnServer, MailConnectionSettings,
+    MailProtocol, PortableAccountConfig, Provider,
 };
 use crate::sender_identities::MAX_DISPLAY_NAME_CHARS;
 use crate::signatures::{MAX_SIGNATURE_BYTES, MAX_SIGNATURES_PER_ACCOUNT};
@@ -124,9 +124,8 @@ pub enum FindingCode {
     /// No identity has a usable email address.
     MissingEmail,
     MissingIncomingServer,
-    /// POP3 accounts cannot be imported; detail is the host.
-    Pop3Unsupported,
-    /// Exchange Web Services, WebDAV, or another non-IMAP protocol.
+    /// Exchange Web Services, WebDAV, or another protocol Flectar can't
+    /// read mail with.
     IncomingProtocolUnsupported,
     MissingOutgoingServer,
     OutgoingProtocolUnsupported,
@@ -165,6 +164,15 @@ pub enum FindingCode {
     /// The provider's standard outgoing server replaces the configured one;
     /// detail is the source host.
     OutgoingServerReplaced,
+    /// A Google or Microsoft account the source downloaded with POP3 syncs
+    /// with the provider instead; detail is the provider's name.
+    ProviderSyncReplacesPop3,
+    /// The POP3 account removes downloaded mail from the server, as the
+    /// source did; detail is the [`KeepOnServer`] choice.
+    RemovesServerMail,
+    /// No choice matches when the source removed mail from the server, so
+    /// the nearest one that keeps mail there longer is used.
+    ServerMailRuleApproximated,
     /// Gmail controls send-as addresses; detail is the number of addresses.
     AliasesManagedByProvider,
     /// Addresses that are invalid, send through another outgoing server, or
@@ -181,7 +189,6 @@ impl FindingCode {
         match self {
             Self::MissingEmail
             | Self::MissingIncomingServer
-            | Self::Pop3Unsupported
             | Self::IncomingProtocolUnsupported
             | Self::MissingOutgoingServer
             | Self::OutgoingProtocolUnsupported
@@ -200,6 +207,9 @@ impl FindingCode {
             | Self::GoogleSignInReplacesPassword
             | Self::OAuthReplacedByPassword
             | Self::OutgoingServerReplaced
+            | Self::ProviderSyncReplacesPop3
+            | Self::RemovesServerMail
+            | Self::ServerMailRuleApproximated
             | Self::AliasesManagedByProvider
             | Self::AliasesSkipped
             | Self::SignatureFileNotImported
@@ -211,7 +221,6 @@ impl FindingCode {
         match self {
             Self::MissingEmail => "missing-email",
             Self::MissingIncomingServer => "missing-incoming-server",
-            Self::Pop3Unsupported => "pop3-unsupported",
             Self::IncomingProtocolUnsupported => "incoming-protocol-unsupported",
             Self::MissingOutgoingServer => "missing-outgoing-server",
             Self::OutgoingProtocolUnsupported => "outgoing-protocol-unsupported",
@@ -230,6 +239,9 @@ impl FindingCode {
             Self::OAuthLoginUnsupported => "oauth-login-unsupported",
             Self::OAuthReplacedByPassword => "oauth-replaced-by-password",
             Self::OutgoingServerReplaced => "outgoing-server-replaced",
+            Self::ProviderSyncReplacesPop3 => "provider-sync-replaces-pop3",
+            Self::RemovesServerMail => "removes-server-mail",
+            Self::ServerMailRuleApproximated => "server-mail-rule-approximated",
             Self::AliasesManagedByProvider => "aliases-managed-by-provider",
             Self::AliasesSkipped => "aliases-skipped",
             Self::SignatureFileNotImported => "signature-file-not-imported",
@@ -239,11 +251,12 @@ impl FindingCode {
 }
 
 /// Plans every account in `inventory`. `existing_emails` are the addresses
-/// Flectar already has; matching accounts are reported, never changed.
+/// Flectar already has; accounts for the same mailbox, in any spelling, are
+/// reported, never changed.
 pub fn plan(inventory: &ImportInventory, existing_emails: &[String]) -> Vec<AccountPlan> {
     let existing = existing_emails
         .iter()
-        .map(|email| email.trim().to_ascii_lowercase())
+        .map(|email| mailbox_key(email))
         .collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     inventory
@@ -274,14 +287,15 @@ fn plan_account(
         findings.push(Finding::new(FindingCode::MissingEmail, ""));
     }
     // Only an importable account claims its address, so an unsupported one
-    // (an old POP3 setup) never hides a later account for the same mailbox.
+    // (an old Exchange setup) never hides a later account for the same
+    // mailbox.
     let blocked = blocking_count(&findings) > 0;
-    if !blocked && !email.is_empty() && !seen.insert(email.to_ascii_lowercase()) {
+    if !blocked && !email.is_empty() && !seen.insert(mailbox_key(&email)) {
         findings.push(Finding::new(FindingCode::DuplicateInSource, email.clone()));
     }
 
     let blocked = blocking_count(&findings) > 0;
-    let already_added = !email.is_empty() && existing.contains(&email.to_ascii_lowercase());
+    let already_added = !email.is_empty() && existing.contains(&mailbox_key(&email));
     let sign_in = mapping.as_ref().map_or(SignIn::Password, |mapping| {
         SignIn::for_provider(mapping.provider)
     });
@@ -324,6 +338,7 @@ struct ServerMapping {
     smtp_host: String,
     smtp_port: u16,
     connection: MailConnectionSettings,
+    keep_on_server: KeepOnServer,
 }
 
 fn map_servers(
@@ -337,12 +352,8 @@ fn map_servers(
     };
     let host = incoming.host.trim().to_ascii_lowercase();
     match incoming.protocol {
-        ServerProtocol::Imap => {}
+        ServerProtocol::Imap | ServerProtocol::Pop3 => {}
         ServerProtocol::Ews if is_microsoft_host(&host) => {}
-        ServerProtocol::Pop3 => {
-            findings.push(Finding::new(FindingCode::Pop3Unsupported, &incoming.host));
-            return None;
-        }
         ServerProtocol::Ews | ServerProtocol::Smtp | ServerProtocol::Other => {
             findings.push(Finding::new(
                 FindingCode::IncomingProtocolUnsupported,
@@ -357,6 +368,12 @@ fn map_servers(
     let oauth = incoming.auth == SourceAuth::OAuth2;
     for oauth_provider in &OAUTH_PROVIDERS {
         if (oauth_provider.owns_host)(&host) {
+            if incoming.protocol == ServerProtocol::Pop3 {
+                findings.push(Finding::new(
+                    FindingCode::ProviderSyncReplacesPop3,
+                    oauth_provider.name,
+                ));
+            }
             if !oauth {
                 findings.push(Finding::new(
                     oauth_provider.replaces_password,
@@ -366,7 +383,10 @@ fn map_servers(
             return provider_mapping(oauth_provider, candidate, incoming, primary_email, findings);
         }
     }
-    if incoming.protocol != ServerProtocol::Imap {
+    if !matches!(
+        incoming.protocol,
+        ServerProtocol::Imap | ServerProtocol::Pop3
+    ) {
         findings.push(Finding::new(
             FindingCode::IncomingProtocolUnsupported,
             &incoming.host,
@@ -380,6 +400,7 @@ fn map_servers(
 /// configuration owns their server names and OAuth scopes.
 struct OAuthProvider {
     provider: Provider,
+    name: &'static str,
     servers: &'static providers::ProviderServers,
     owns_host: fn(&str) -> bool,
     /// Reported when the source signed in with a password instead.
@@ -389,12 +410,14 @@ struct OAuthProvider {
 const OAUTH_PROVIDERS: [OAuthProvider; 2] = [
     OAuthProvider {
         provider: Provider::Gmail,
+        name: "Gmail",
         servers: &providers::GMAIL,
         owns_host: is_google_host,
         replaces_password: FindingCode::GoogleSignInReplacesPassword,
     },
     OAuthProvider {
         provider: Provider::Microsoft,
+        name: "Microsoft",
         servers: &providers::MICROSOFT,
         owns_host: is_microsoft_host,
         replaces_password: FindingCode::MicrosoftSignInReplacesPassword,
@@ -441,6 +464,7 @@ fn provider_mapping(
         smtp_host: servers.smtp_host.to_owned(),
         smtp_port: servers.smtp_port,
         connection: servers.connection(),
+        keep_on_server: KeepOnServer::Always,
     })
 }
 
@@ -510,9 +534,16 @@ fn password_mapping(
     if blocking_count(findings) > blocked_before {
         return None;
     }
+    let (mail_protocol, keep_on_server) = match incoming.protocol {
+        ServerProtocol::Pop3 => (
+            MailProtocol::Pop3,
+            keep_on_server(candidate.retention, findings),
+        ),
+        _ => (MailProtocol::Imap, KeepOnServer::Always),
+    };
     Some(ServerMapping {
         provider: Provider::Generic,
-        mail_protocol: MailProtocol::Imap,
+        mail_protocol,
         email: primary_email.to_owned(),
         // Login names are opaque to the server; keep them byte for byte apart
         // from surrounding whitespace.
@@ -522,7 +553,49 @@ fn password_mapping(
         smtp_host: smtp_host?,
         smtp_port: outgoing.effective_port(),
         connection: MailConnectionSettings::new(incoming_security?, smtp_security?),
+        keep_on_server,
     })
+}
+
+/// The choice that removes mail from the POP3 server as the source did. A
+/// number of days without a matching choice becomes the next longer one, so
+/// mail the user keeps never leaves the server sooner than before.
+fn keep_on_server(retention: Option<SourceRetention>, findings: &mut Vec<Finding>) -> KeepOnServer {
+    // A source that says nothing keeps mail on the server.
+    let retention = retention.unwrap_or(SourceRetention {
+        keep: true,
+        remove_after_days: None,
+        remove_deleted: false,
+    });
+    let keep = match retention.remove_after_days {
+        _ if !retention.keep => KeepOnServer::UntilDownloaded,
+        None if retention.remove_deleted => KeepOnServer::UntilDeleted,
+        None => KeepOnServer::Always,
+        Some(days) => [
+            KeepOnServer::SevenDays,
+            KeepOnServer::FourteenDays,
+            KeepOnServer::ThirtyDays,
+        ]
+        .into_iter()
+        .find(|keep| keep.days().is_some_and(|limit| days <= limit))
+        .unwrap_or(if retention.remove_deleted {
+            KeepOnServer::UntilDeleted
+        } else {
+            KeepOnServer::Always
+        }),
+    };
+    // Every choice that limits the days also removes mail deleted here.
+    let exact = !retention.keep
+        || retention
+            .remove_after_days
+            .is_none_or(|days| keep.days() == Some(days) && retention.remove_deleted);
+    if keep != KeepOnServer::Always {
+        findings.push(Finding::new(FindingCode::RemovesServerMail, keep.as_str()));
+    }
+    if !exact {
+        findings.push(Finding::new(FindingCode::ServerMailRuleApproximated, ""));
+    }
+    keep
 }
 
 fn blocking_count(findings: &[Finding]) -> usize {
@@ -630,16 +703,21 @@ fn draft(
         });
 
     // Every other source identity becomes a sender identity. The account
-    // address itself is the provider-owned primary identity.
+    // address itself is the provider-owned primary identity, in any spelling
+    // Gmail gives the same mailbox.
+    let identity_key = |email: &str| match mapping.provider {
+        Provider::Gmail => mailbox_key(email),
+        Provider::Microsoft | Provider::Generic => email.to_ascii_lowercase(),
+    };
     let mut aliases = Vec::new();
     let mut skipped = 0usize;
-    let mut seen = HashSet::from([mapping.email.to_ascii_lowercase()]);
+    let mut seen = HashSet::from([identity_key(&mapping.email)]);
     for identity in &candidate.identities {
         let Some(email) = sender_address(&identity.email) else {
             skipped += 1;
             continue;
         };
-        if !seen.insert(email.to_ascii_lowercase()) {
+        if !seen.insert(identity_key(&email)) {
             continue;
         }
         // Flectar sends every identity through the account's one outgoing
@@ -729,6 +807,7 @@ fn draft(
 
     let mut settings = AccountSettings::new(mapping.connection);
     settings.default_sender_email = default_sender_email;
+    settings.keep_on_server = mapping.keep_on_server;
     AccountDraft {
         config: PortableAccountConfig {
             email: mapping.email,
@@ -788,7 +867,12 @@ fn clean(value: Option<&str>) -> Option<String> {
 fn is_google_host(host: &str) -> bool {
     matches!(
         host,
-        "imap.gmail.com" | "imap.googlemail.com" | "smtp.gmail.com" | "smtp.googlemail.com"
+        "imap.gmail.com"
+            | "imap.googlemail.com"
+            | "pop.gmail.com"
+            | "pop.googlemail.com"
+            | "smtp.gmail.com"
+            | "smtp.googlemail.com"
     )
 }
 
@@ -799,6 +883,7 @@ fn is_microsoft_host(host: &str) -> bool {
             | "outlook.office.com"
             | "imap-mail.outlook.com"
             | "imap.outlook.com"
+            | "pop-mail.outlook.com"
             | "smtp.office365.com"
             | "smtp-mail.outlook.com"
             | "smtp.outlook.com"
@@ -835,7 +920,52 @@ mod tests {
             incoming: Some(server(ServerProtocol::Imap, "imap.example.com", 993)),
             outgoing: Some(server(ServerProtocol::Smtp, "smtp.example.com", 465)),
             color: None,
+            retention: None,
         }
+    }
+
+    #[test]
+    fn pop3_rules_never_remove_kept_mail_sooner_than_the_source() {
+        let rule = |keep, remove_after_days, remove_deleted| {
+            let mut findings = Vec::new();
+            let choice = keep_on_server(
+                Some(SourceRetention {
+                    keep,
+                    remove_after_days,
+                    remove_deleted,
+                }),
+                &mut findings,
+            );
+            let approximated = findings
+                .iter()
+                .any(|finding| finding.code == FindingCode::ServerMailRuleApproximated);
+            (choice, approximated)
+        };
+        assert_eq!(
+            rule(false, Some(3), true),
+            (KeepOnServer::UntilDownloaded, false)
+        );
+        assert_eq!(rule(true, None, false), (KeepOnServer::Always, false));
+        assert_eq!(rule(true, None, true), (KeepOnServer::UntilDeleted, false));
+        assert_eq!(rule(true, Some(7), true), (KeepOnServer::SevenDays, false));
+        assert_eq!(rule(true, Some(0), true), (KeepOnServer::SevenDays, true));
+        assert_eq!(
+            rule(true, Some(30), true),
+            (KeepOnServer::ThirtyDays, false)
+        );
+        assert_eq!(
+            rule(true, Some(30), false),
+            (KeepOnServer::ThirtyDays, true)
+        );
+        assert_eq!(
+            rule(true, Some(90), true),
+            (KeepOnServer::UntilDeleted, true)
+        );
+        assert_eq!(rule(true, Some(90), false), (KeepOnServer::Always, true));
+
+        let mut findings = Vec::new();
+        assert_eq!(keep_on_server(None, &mut findings), KeepOnServer::Always);
+        assert!(findings.is_empty());
     }
 
     fn plan_one(candidate: AccountCandidate) -> AccountPlan {
@@ -848,6 +978,7 @@ mod tests {
                 source: SourceKind::K9Settings,
                 source_version: None,
                 accounts,
+                mail: Vec::new(),
                 other_entries: Vec::new(),
             },
             existing,
@@ -1024,6 +1155,47 @@ mod tests {
     }
 
     #[test]
+    fn gmail_spellings_of_one_mailbox_are_one_account() {
+        let google = |login: &str| {
+            let mut account = candidate(login);
+            let incoming = account.incoming.as_mut().unwrap();
+            incoming.host = "imap.gmail.com".into();
+            incoming.auth = SourceAuth::OAuth2;
+            incoming.username = login.into();
+            account.outgoing.as_mut().unwrap().host = "smtp.gmail.com".into();
+            account
+        };
+        let plans = plan_all(
+            vec![
+                google("johndoe@gmail.com"),
+                google("John.Doe@googlemail.com"),
+                google("jane.doe@gmail.com"),
+                google("jane.doe@workspace.example"),
+                google("janedoe@workspace.example"),
+            ],
+            &["JaneDoe@gmail.com".into()],
+        );
+        assert_eq!(
+            plans.iter().map(|plan| plan.status).collect::<Vec<_>>(),
+            [
+                PlanStatus::Ready,
+                PlanStatus::Unsupported,
+                PlanStatus::AlreadyAdded,
+                // Workspace addresses keep their dots.
+                PlanStatus::Ready,
+                PlanStatus::Ready,
+            ]
+        );
+        assert_eq!(codes(&plans[1]), [FindingCode::DuplicateInSource]);
+
+        // The source's identity in Google's spelling is the account's own
+        // address, not a send-as address that Gmail manages.
+        let mut account = google("johndoe@gmail.com");
+        account.identities[0].email = "John.Doe@gmail.com".into();
+        assert_eq!(codes(&plan_one(account)), []);
+    }
+
+    #[test]
     fn missing_pieces_are_named() {
         let mut account = candidate("not-an-address");
         account.incoming = None;
@@ -1104,9 +1276,9 @@ mod tests {
 
     #[test]
     fn an_unsupported_account_does_not_hide_a_later_one_for_the_same_address() {
-        let mut pop = candidate("me@example.com");
-        pop.incoming.as_mut().unwrap().protocol = ServerProtocol::Pop3;
-        let plans = plan_all(vec![pop, candidate("me@example.com")], &[]);
+        let mut exchange = candidate("me@example.com");
+        exchange.incoming.as_mut().unwrap().protocol = ServerProtocol::Ews;
+        let plans = plan_all(vec![exchange, candidate("me@example.com")], &[]);
         assert_eq!(plans[0].status, PlanStatus::Unsupported);
         assert_eq!(plans[1].status, PlanStatus::Ready);
     }

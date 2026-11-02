@@ -67,4 +67,19 @@ the database migration does.
 | `accountColors` | Map of email address to `#RRGGBB`. Every address must be one of the accounts in the file. |
 | `mailProfiles` | Profiles. Each entry is `{ "name", "color", "accountEmails" }`. `color` is `#RRGGBB`. Every address must be in the file, and an address is in at most one profile. |
 
-A backup with no `mailProfiles` field leaves existing profiles alone. `"mailProfiles": []` clears them. Profile logos and business tabs are not part of this backup; they travel in the brand registry. A registry import stores the previous profiles and tabs in application settings as `brandRegistryBackup`.
+A backup with no `mailProfiles` field leaves existing profiles alone. `"mailProfiles": []` clears them. Profile logos, independent account icons, and business tabs are not part
+of this account-connection backup. The application database stores
+`accountIcons`, `businessTabs` (including each tab's independent `icon` and
+optional `accountIds`), `businessTabsCustomized`, and the one-time icon
+migration marker `businessTabIconsInitialized`; the referenced PNGs live
+in `account-icons/` and `tab-icons/` under the application data directory.
+Preserve both the database and those folders when copying these local
+customizations to another installation. Local numeric account IDs are not
+portable account identities and are deliberately not exported in this format.
+
+The brand registry supplies default profiles and tabs. A registry import
+stores the previous profiles and tabs as `brandRegistryBackup`, but that is
+not a copy of icon files or an export of local customization. Once a tab has
+been created, edited, deleted, or reordered, imports preserve the entire
+customized list, including deletions and order, while refreshing registry
+profiles. Account icon overrides also survive imports.

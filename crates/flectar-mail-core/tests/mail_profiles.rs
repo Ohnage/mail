@@ -69,6 +69,215 @@ async fn seeded_core() -> (tempfile::TempDir, Core) {
     (temp, core)
 }
 
+#[test]
+fn tab_membership_distinguishes_legacy_inheritance_from_explicit_empty() {
+    use flectar_mail_core::models::{BusinessTab, Settings};
+    let legacy: BusinessTab = serde_json::from_value(serde_json::json!({
+        "id": "legacy", "name": "Legacy", "profileIds": ["work"]
+    }))
+    .unwrap();
+    assert_eq!(legacy.account_ids, None);
+    assert_eq!(legacy.icon, None);
+    let mut settings = Settings::default();
+    settings.business_tabs = vec![
+        legacy.clone(),
+        BusinessTab {
+            id: "empty".into(),
+            account_ids: Some(Vec::new()),
+            ..legacy
+        },
+    ];
+    settings
+        .account_icons
+        .insert("1".into(), "account-icons/account-1.png".into());
+    let restored: Settings =
+        serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+    assert_eq!(restored.business_tabs[0].account_ids, None);
+    assert_eq!(restored.business_tabs[1].account_ids, Some(Vec::new()));
+    assert_eq!(restored.account_icons, settings.account_icons);
+    assert!(!restored.business_tabs_customized);
+}
+
+#[tokio::test]
+async fn tab_details_are_many_to_many_and_preserve_profile_assignments() {
+    let (_temp, core) = seeded_core().await;
+    let (_, profile) = core
+        .save_mail_profile(None, "Work".into(), "#123456".into())
+        .await
+        .unwrap();
+    let before = core
+        .assign_account_profile(1, Some(profile.id))
+        .await
+        .unwrap()
+        .mail_profiles;
+    let settings = core
+        .save_business_tab_details(
+            None,
+            "First".into(),
+            vec![2, 1, 2],
+            Some("tab-icons/tab-first.png".into()),
+        )
+        .await
+        .unwrap();
+    let first = settings.business_tabs[0].id.clone();
+    let settings = core
+        .save_business_tab_details(None, "Second".into(), vec![1], None)
+        .await
+        .unwrap();
+    assert_eq!(settings.business_tabs[0].account_ids, Some(vec![1, 2]));
+    assert_eq!(settings.business_tabs[1].account_ids, Some(vec![1]));
+    assert_eq!(settings.mail_profiles, before);
+    assert!(settings.business_tabs_customized);
+    assert!(settings.business_tab_icons_initialized);
+    let settings = core
+        .save_business_tab_details(Some(first), "Empty".into(), vec![], None)
+        .await
+        .unwrap();
+    assert_eq!(settings.business_tabs[0].account_ids, Some(vec![]));
+    assert_eq!(
+        core.get_settings().await.unwrap().business_tabs,
+        settings.business_tabs
+    );
+}
+
+#[tokio::test]
+async fn editing_rule_tabs_preserves_tim_and_forty7_predicates() {
+    let (_temp, core) = seeded_core().await;
+    let mut settings = core.get_settings().await.unwrap();
+    settings.business_tabs = serde_json::from_value(serde_json::json!([
+        {"id":"tim", "name":"Tim", "scope":"recipients", "profileIds":["personal"], "recipientPatterns":["tim@*.example"]},
+        {"id":"forty7", "name":"Forty7", "scope":"any", "profileIds":["work"], "recipientPatterns":["agent@example.org"], "senderAddresses":["agent@example.org"], "senderNames":["Agent"], "senderDomains":["example.org"]}
+    ])).unwrap();
+    core.set_settings(settings.clone()).await.unwrap();
+    for original in settings.business_tabs {
+        let updated = core
+            .save_business_tab_details(
+                Some(original.id.clone()),
+                format!("{} renamed", original.name),
+                vec![2],
+                Some("tab-icons/tab-custom.png".into()),
+            )
+            .await
+            .unwrap();
+        let tab = updated
+            .business_tabs
+            .iter()
+            .find(|tab| tab.id == original.id)
+            .unwrap();
+        assert_eq!(tab.scope, original.scope);
+        assert_eq!(tab.profile_ids, original.profile_ids);
+        assert_eq!(tab.recipient_patterns, original.recipient_patterns);
+        assert_eq!(tab.sender_addresses, original.sender_addresses);
+        assert_eq!(tab.sender_names, original.sender_names);
+        assert_eq!(tab.sender_domains, original.sender_domains);
+        assert_eq!(tab.account_ids, Some(vec![2]));
+    }
+}
+
+#[tokio::test]
+async fn account_and_tab_icon_validation_is_atomic() {
+    let (_temp, core) = seeded_core().await;
+    let (_, profile) = core
+        .save_mail_profile(None, "Work".into(), "#123456".into())
+        .await
+        .unwrap();
+    core.assign_account_profile(1, Some(profile.id))
+        .await
+        .unwrap();
+    let before = core
+        .set_account_icon(1, Some("account-icons/account-one.png".into()))
+        .await
+        .unwrap();
+    assert_eq!(before.mail_profiles[0].account_ids, vec![1]);
+    for path in [
+        "../escape.png",
+        "C:/escape.png",
+        "account-icons/../escape.png",
+        "tab-icons/sub/icon.png",
+        "account-icons/icon.svg:stream",
+    ] {
+        assert!(core.set_account_icon(1, Some(path.into())).await.is_err());
+        assert!(
+            core.save_business_tab_details(None, "Invalid".into(), vec![1], Some(path.into()))
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        core.set_account_icon(1, Some("tab-icons/wrong.png".into()))
+            .await
+            .is_err()
+    );
+    assert!(
+        core.save_business_tab_details(
+            None,
+            "Invalid".into(),
+            vec![1],
+            Some("account-icons/wrong.png".into())
+        )
+        .await
+        .is_err()
+    );
+    assert!(core.set_account_icon(999, None).await.is_err());
+    assert!(
+        core.save_business_tab_details(None, "Invalid".into(), vec![999], None)
+            .await
+            .is_err()
+    );
+    assert!(
+        core.save_business_tab_details(None, " ".into(), vec![], None)
+            .await
+            .is_err()
+    );
+    assert!(
+        core.save_business_tab_details(Some("missing".into()), "Missing".into(), vec![], None)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        core.get_settings().await.unwrap().account_icons,
+        before.account_icons
+    );
+    assert!(!core.get_settings().await.unwrap().business_tabs_customized);
+    assert!(
+        core.set_account_icon(1, None)
+            .await
+            .unwrap()
+            .account_icons
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn every_tab_mutation_marks_the_list_customized() {
+    let (_temp, core) = seeded_core().await;
+    let settings = core
+        .save_business_tab(None, "First".into(), vec![], vec![])
+        .await
+        .unwrap();
+    assert!(settings.business_tabs_customized);
+    assert!(settings.business_tab_icons_initialized);
+    let first = settings.business_tabs[0].id.clone();
+    let mut settings = core
+        .save_business_tab(None, "Second".into(), vec![], vec![])
+        .await
+        .unwrap();
+    settings.business_tabs_customized = false;
+    core.set_settings(settings).await.unwrap();
+    let mut settings = core.move_business_tab(first.clone(), 1).await.unwrap();
+    assert!(settings.business_tabs_customized);
+    assert!(settings.business_tab_icons_initialized);
+    assert_eq!(settings.business_tabs[1].id, first);
+    settings.business_tabs_customized = false;
+    core.set_settings(settings).await.unwrap();
+    assert!(
+        core.delete_business_tab(first)
+            .await
+            .unwrap()
+            .business_tabs_customized
+    );
+}
+
 #[tokio::test]
 async fn profiles_are_validated_persisted_and_assign_each_account_once() {
     let (_temp, core) = seeded_core().await;

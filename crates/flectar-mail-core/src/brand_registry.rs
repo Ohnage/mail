@@ -7,7 +7,8 @@
 //! profile `id`/`match`/`logo.file`, top-level `accounts[]` assignments, tab
 //! `rule`, recipient lists, and `agentSenders`. Unknown fields are ignored.
 //!
-//! Applying a registry replaces mail profiles and business tabs. Profile ids
+//! Applying a registry replaces mail profiles and untouched default business tabs.
+//! Locally customized tab lists and independent account icons are preserved. Profile ids
 //! are the registry ids, not ids left over from an older grouping that
 //! happened to share a name. Accounts and mail are never deleted. An account
 //! no rule places goes to an Unassigned profile. The previous profiles and
@@ -382,7 +383,9 @@ pub fn apply_brand_registry(
         });
     }
     settings.mail_profiles = profiles;
-    apply_tabs(&mut settings, registry)?;
+    if !settings.business_tabs_customized {
+        apply_tabs(&mut settings, registry)?;
+    }
     retire_active_profile(&mut settings);
     if settings
         .active_business_tab
@@ -598,6 +601,8 @@ fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), S
                 BusinessTab {
                     id,
                     name: name.to_owned(),
+                    icon: None,
+                    account_ids: None,
                     profile_ids: Vec::new(),
                     recipient_patterns: clean_patterns(&registry.tim_addresses),
                     scope: "recipients".to_owned(),
@@ -613,7 +618,19 @@ fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), S
             "no more than {MAX_TABS} business tabs can be saved"
         ));
     }
+    for tab in &mut tabs {
+        if let Some(previous) = settings
+            .business_tabs
+            .iter()
+            .find(|previous| previous.id == tab.id)
+        {
+            tab.icon = previous.icon.clone();
+        }
+    }
     settings.business_tabs = tabs;
+    // New registry defaults may need their first snapshot. Stable existing
+    // icons were carried above and are never inferred from a changed profile.
+    settings.business_tab_icons_initialized = false;
     Ok(())
 }
 
@@ -699,6 +716,8 @@ fn build_tab(
     Ok(BusinessTab {
         id,
         name: name.to_owned(),
+        icon: None,
+        account_ids: None,
         profile_ids,
         recipient_patterns: recipients,
         scope,
@@ -824,6 +843,24 @@ pub fn extension_for(bytes: &[u8]) -> Option<&'static str> {
 }
 
 /// A stored logo path must stay inside `profile-logos/` and name one file.
+/// A flat normalized PNG path within one of the independent icon folders.
+pub fn safe_icon_relative(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let filename = value
+        .strip_prefix("account-icons/")
+        .or_else(|| value.strip_prefix("tab-icons/"))?;
+    if filename.len() <= 4
+        || !filename.ends_with(".png")
+        || filename.contains("..")
+        || !filename
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    {
+        return None;
+    }
+    Some(value)
+}
+
 pub fn safe_logo_relative(value: &str) -> Option<&str> {
     let value = value.trim();
     let rest = value.strip_prefix("profile-logos/")?;
@@ -981,6 +1018,113 @@ mod tests {
             ],
             account_assignments: Vec::new(),
         }
+    }
+
+    #[test]
+    fn refreshed_defaults_keep_independent_tab_icons_by_stable_id() {
+        let mut registry = registry();
+        for (index, tab) in registry.tabs.iter_mut().enumerate() {
+            tab.id = Some(format!("stable-{index}"));
+        }
+        let mut settings = apply_brand_registry(&Settings::default(), &[], &registry, |_| {
+            Err("no file".into())
+        })
+        .unwrap()
+        .settings;
+        let tab_id = settings.business_tabs[0].id.clone();
+        settings.business_tabs[0].icon = Some("tab-icons/red-snapshot.png".into());
+        settings.business_tab_icons_initialized = true;
+        let mut changed = registry.clone();
+        changed.profiles[0].color = Some("#0000FF".into());
+        changed.tabs.reverse();
+        let refreshed = apply_brand_registry(&settings, &[], &changed, |_| Err("no file".into()))
+            .unwrap()
+            .settings;
+        assert_eq!(
+            refreshed
+                .business_tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .unwrap()
+                .icon
+                .as_deref(),
+            Some("tab-icons/red-snapshot.png")
+        );
+        assert!(!refreshed.business_tabs_customized);
+    }
+
+    #[test]
+    fn changed_registry_preserves_customized_tabs_and_account_icons() {
+        let accounts = [account(1, "owner@example.org")];
+        let registry = registry();
+        let mut settings = apply_brand_registry(&Settings::default(), &accounts, &registry, |_| {
+            Err("no file".into())
+        })
+        .unwrap()
+        .settings;
+        settings.business_tabs_customized = true;
+        settings
+            .account_icons
+            .insert("1".into(), "account-icons/local.png".into());
+        settings.business_tabs.remove(0);
+        settings.business_tabs.reverse();
+        settings.business_tabs[0].name = "My company".into();
+        settings.business_tabs[0].icon = Some("tab-icons/custom.png".into());
+        settings.business_tabs[0].account_ids = Some(vec![]);
+        let mut custom = settings.business_tabs[0].clone();
+        custom.id = "local-tab".into();
+        custom.name = "My local tab".into();
+        custom.account_ids = Some(vec![1]);
+        settings.business_tabs.push(custom);
+        let mut changed = registry.clone();
+        changed.profiles[0].name = "Registry renamed".into();
+        changed.tabs.reverse();
+        let applied =
+            apply_brand_registry(&settings, &accounts, &changed, |_| Err("no file".into()))
+                .unwrap()
+                .settings;
+        assert_eq!(applied.business_tabs, settings.business_tabs);
+        assert_eq!(applied.account_icons, settings.account_icons);
+        assert!(applied.business_tabs_customized);
+        assert!(
+            applied
+                .mail_profiles
+                .iter()
+                .any(|profile| profile.name == "Registry renamed")
+        );
+        settings.business_tabs.clear();
+        let applied =
+            apply_brand_registry(&settings, &accounts, &changed, |_| Err("no file".into()))
+                .unwrap()
+                .settings;
+        assert!(
+            applied.business_tabs.is_empty(),
+            "deleting every tab survives import"
+        );
+    }
+
+    #[test]
+    fn untouched_registry_tabs_keep_inherited_membership_and_refresh_defaults() {
+        let registry = registry();
+        let settings = apply_brand_registry(&Settings::default(), &[], &registry, |_| {
+            Err("no file".into())
+        })
+        .unwrap()
+        .settings;
+        assert!(!settings.business_tabs_customized);
+        assert!(
+            settings
+                .business_tabs
+                .iter()
+                .all(|tab| tab.account_ids.is_none() && tab.icon.is_none())
+        );
+        let mut changed = registry.clone();
+        changed.tabs.reverse();
+        let applied = apply_brand_registry(&settings, &[], &changed, |_| Err("no file".into()))
+            .unwrap()
+            .settings;
+        assert_eq!(applied.business_tabs[0].name, changed.tabs[0].name);
+        assert!(!applied.business_tabs_customized);
     }
 
     #[test]

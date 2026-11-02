@@ -1,23 +1,31 @@
 mod account_controller;
+#[cfg(test)]
+mod account_projection_tests;
 mod account_mail_preferences;
+mod app_icon;
 #[cfg(test)]
 mod account_removal_tests;
 mod attachment_controller;
 #[cfg(desktop)]
 mod autostart;
 mod browser;
+#[cfg(test)]
+mod branding_surface_tests;
 pub use browser::ExternalUrlOpener;
 mod calendar;
 mod compose_controller;
 mod compose_editor;
 mod contacts;
+mod custom_icons;
 mod data_controller;
+mod date_format;
 mod document_preview;
 pub mod documents;
 mod email_document;
 pub mod favicon;
 mod files_controller;
 mod import_controller;
+mod keyboard_keys;
 mod latest_load;
 mod mail;
 #[cfg(test)]
@@ -30,6 +38,7 @@ mod mail_setup;
 mod mail_view_model;
 mod mail_work;
 mod message_appearance;
+mod number_format;
 mod oauth_browser;
 #[cfg(test)]
 mod on_screen_surface_tests;
@@ -83,6 +92,7 @@ use contacts::{
     ContactDirectoryState, apply_contact_directory, apply_contact_rows, clear_contact_form,
 };
 use data_controller::register_data_management_callbacks;
+use date_format::DateStyle;
 use favicon::{
     FaviconImage, FaviconImages, FaviconLoader, ProfileAvatarImages, ProfileAvatarLoader,
     physical_pixel_side,
@@ -495,6 +505,9 @@ struct AccountPresentationSettings {
     show_markers: bool,
     account_colors: HashMap<String, String>,
     account_short_names: HashMap<String, String>,
+    account_icons: HashMap<String, String>,
+    account_icon_images: HashMap<String, slint::Image>,
+    tab_icons: HashMap<String, slint::Image>,
     profile_logos: HashMap<String, slint::Image>,
 }
 
@@ -509,15 +522,39 @@ impl AccountPresentationSettings {
             show_markers: settings.show_account_badges,
             account_colors: settings.account_colors.clone(),
             account_short_names: settings.account_short_names.clone(),
+            account_icons: settings.account_icons.clone(),
+            account_icon_images: HashMap::new(),
+            tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
         };
         presentation
     }
 
     fn load_logos(&mut self, data_dir: &std::path::Path) {
+        use flectar_mail_core::brand_registry::safe_icon_relative;
+        self.account_icon_images.clear();
+        self.tab_icons.clear();
+        for (id, relative) in &self.account_icons {
+            if let Some(relative) = safe_icon_relative(relative)
+                && let Some(image) = load_profile_logo(&data_dir.join(relative))
+            {
+                self.account_icon_images.insert(id.clone(), image);
+            }
+        }
+        for tab in &self.business_tabs {
+            if let Some(relative) = tab.icon.as_deref()
+                && let Some(relative) = safe_icon_relative(relative)
+                && let Some(image) = load_profile_logo(&data_dir.join(relative))
+            {
+                self.tab_icons.insert(tab.id.clone(), image);
+            }
+        }
         self.profile_logos.clear();
         for profile in &self.profiles {
             let Some(relative) = profile.logo.as_deref() else {
+                continue;
+            };
+            let Some(relative) = flectar_mail_core::brand_registry::safe_logo_relative(relative) else {
                 continue;
             };
             let Some(image) = load_profile_logo(&data_dir.join(relative)) else {
@@ -545,7 +582,15 @@ impl AccountPresentationSettings {
             let accounts = self.active_profile_accounts();
             return (accounts.clone(), accounts, MailScope::default());
         };
-        let company_accounts = self.accounts_in(&tab.profile_ids);
+        let company_accounts = match &tab.account_ids {
+            Some(ids) => {
+                let mut ids = ids.clone();
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            }
+            None => self.accounts_in(&tab.profile_ids),
+        };
         let recipients = MailScope {
             recipient_patterns: tab.recipient_patterns.clone(),
             sender_addresses: tab.sender_addresses.clone(),
@@ -555,7 +600,11 @@ impl AccountPresentationSettings {
             match_any: false,
         };
         match tab.resolved_scope() {
-            "recipients" => (None, None, recipients),
+            "recipients" => (
+                tab.account_ids.as_ref().map(|_| company_accounts),
+                None,
+                recipients,
+            ),
             "any" => {
                 let mut scope = recipients;
                 scope.match_any = true;
@@ -611,6 +660,14 @@ impl AccountPresentationSettings {
             .find(|profile| profile.account_ids.contains(&account_id))
     }
 
+    /// Account branding is independent of the selected view or its tab icon.
+    fn account_icon(&self, account_id: i64) -> Option<&slint::Image> {
+        self.account_icon_images.get(&account_id.to_string()).or_else(|| {
+            self.profile(account_id)
+                .and_then(|profile| self.profile_logos.get(&profile.id))
+        })
+    }
+
     fn marker_color(&self, account_id: i64) -> slint::Color {
         let configured = self
             .profile(account_id)
@@ -648,6 +705,13 @@ impl AccountPresentationSettings {
         let key = account_id.to_string();
         self.account_colors.remove(&key);
         self.account_short_names.remove(&key);
+        self.account_icons.remove(&key);
+        self.account_icon_images.remove(&key);
+        for tab in &mut self.business_tabs {
+            if let Some(ids) = &mut tab.account_ids {
+                ids.retain(|id| *id != account_id);
+            }
+        }
     }
 }
 
@@ -753,6 +817,12 @@ struct InboxState {
     favicon_tx: UiSender<FaviconUpdate>,
     connected_accounts: Vec<Account>,
     account_configs: Vec<AccountConfig>,
+    /// Mail imported into folders on this device, which belongs to no
+    /// account.
+    local_mail: Option<flectar_mail_core::models::LocalMail>,
+    /// Counts reloads of `local_mail`, so an earlier one never lands after a
+    /// later one.
+    local_mail_reloads: u64,
     account_presentation: AccountPresentationSettings,
     /// The active profile's accounts, sorted. The mail view shows only these;
     /// `None` shows every connected account.
@@ -1049,17 +1119,25 @@ fn perform_mail_list_action(
         } else {
             vec![trigger_id]
         };
+        // Local mail has no archive or spam, so a selection that includes
+        // some moves only the rest.
+        let local_mail = state.local_mail.map(|local| local.account_id);
+        let needs_roles = matches!(action, "archive" | "unarchive" | "spam" | "not_spam");
         let operations = ids
             .into_iter()
-            .map(|id| {
-                let thread_id = state
-                    .messages
-                    .iter()
-                    .find(|message| message.id == id)
-                    .ok_or_else(|| "message is no longer available".to_owned())?
-                    .thread_id
-                    .ok_or_else(|| "message thread is unavailable".to_owned())?;
-                Ok((id, thread_id))
+            .filter_map(|id| {
+                let Some(message) = state.messages.iter().find(|message| message.id == id) else {
+                    return Some(Err("message is no longer available".to_owned()));
+                };
+                if needs_roles && Some(message.account_id) == local_mail {
+                    return None;
+                }
+                Some(
+                    message
+                        .thread_id
+                        .map(|thread_id| (id, thread_id))
+                        .ok_or_else(|| "message thread is unavailable".to_owned()),
+                )
             })
             .collect::<Result<Vec<_>, String>>()?;
         (
@@ -1150,10 +1228,12 @@ fn apply_language(app: &AppWindow, preference: &str) {
             .unwrap_or("en"),
         language => language,
     };
+    number_format::set_language(selected);
     if let Err(error) = slint::select_bundled_translation(selected) {
         eprintln!("could not select {selected} translation: {error}");
     }
     app.set_language_mode(language_mode.into());
+    date_format::reload(app);
 }
 
 impl InboxState {
@@ -1218,6 +1298,8 @@ impl InboxState {
             favicon_tx,
             connected_accounts: Vec::new(),
             account_configs: Vec::new(),
+            local_mail: None,
+            local_mail_reloads: 0,
             account_presentation: AccountPresentationSettings::default(),
             profile_accounts: None,
             calendar_connections: Vec::new(),
@@ -1249,11 +1331,14 @@ impl InboxState {
     }
 
     /// Whether the mail view shows this account's mail: every account's
-    /// unless a profile is active.
+    /// unless a profile is active. Every profile shows local mail.
     fn shows_account(&self, account_id: i64) -> bool {
-        self.profile_accounts
-            .as_ref()
-            .is_none_or(|accounts| accounts.binary_search(&account_id).is_ok())
+        self.local_mail
+            .is_some_and(|local| local.account_id == account_id)
+            || self
+                .profile_accounts
+                .as_ref()
+                .is_none_or(|accounts| accounts.binary_search(&account_id).is_ok())
     }
 
     /// The connected accounts the mail view shows.
@@ -1263,6 +1348,12 @@ impl InboxState {
             .filter(|account| self.shows_account(account.id))
             .cloned()
             .collect()
+    }
+
+    /// Whether there is any mail to show: an account's, or mail kept on this
+    /// device.
+    fn has_mail(&self) -> bool {
+        !self.connected_accounts.is_empty() || self.local_mail.is_some()
     }
 
     /// Whether `scope` belongs to a shown account, or to none. Folders and
@@ -1294,7 +1385,7 @@ impl InboxState {
         self.swap_sidebar_collapse_for_active_tab();
         let (sidebar, query, scope) = self.account_presentation.view_scope();
         let changed = if let Some(core) = &self.core {
-            core.set_view_scope(sidebar.clone(), query, scope)
+            core.set_view_scope(sidebar.clone(), query, scope, self.account_presentation.active_business().is_none())
         } else {
             false
         };
@@ -1599,7 +1690,7 @@ pub fn run_desktop(platform: PlatformContext) -> Result<(), Box<dyn std::error::
     #[cfg(desktop)]
     if let Err(error) = &result
         && error.is::<renderer_preferences::GpuStartupError>()
-        && std::env::var_os("FLECTAR_GPU_FALLBACK").is_none()
+        && !renderer_preferences::gpu_startup_failed()
     {
         return renderer_preferences::restart_cpu(error.as_ref());
     }
@@ -1715,10 +1806,12 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let app = renderer_preferences::initialize_step(use_wgpu, AppWindow::new)?;
     app.global::<MailListNavigation>()
         .on_target(mail_navigation::target);
+    app.global::<KeyboardKeys>().on_chord(keyboard_keys::chord);
     if let Some(width) = startup_presentation.workspace_list_pane_width {
         app.set_workspace_list_pane_width(width as f32);
     }
     window_chrome::register(&app, &runtime);
+    app_icon::apply(&app, startup_presentation.app_icon);
     app.set_app_version(env!("CARGO_PKG_VERSION").into());
     app.on_settings_search_matches(|haystack, query| {
         let query = query.to_string().trim().to_lowercase();
@@ -1730,6 +1823,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         preferred_renderer,
         use_wgpu,
         renderer_preferences::GPU_SUPPORTED,
+        renderer_preferences::gpu_startup_failed(),
     );
     app.global::<ZoomApi>()
         .on_resolve(|action, current, minimum, maximum| {
@@ -2776,6 +2870,28 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     app.set_calendar_sources(Rc::clone(&calendar_state.borrow().source_rows).into());
     let calendar_editing_event_id = Rc::new(Cell::new(None::<i64>));
 
+    // Counts group their digits the way the UI language does.
+    app.global::<Numbers>()
+        .on_count(|value| number_format::count(u64::try_from(value).unwrap_or(0)).into());
+
+    let app_weak = app.as_weak();
+    let state_for_dates = Rc::clone(&state);
+    let runtime_for_dates = Rc::clone(&runtime);
+    let calendar_for_dates = Rc::clone(&calendar_state);
+    let contacts_for_dates = Rc::clone(&contact_state);
+    date_format::on_change(move || {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        refresh_message_dates(&app, &state_for_dates, &runtime_for_dates);
+        apply_calendar(
+            &app,
+            &calendar_for_dates.borrow(),
+            Local::now().date_naive(),
+        );
+        apply_contact_rows(&app, &contacts_for_dates);
+    });
+
     let app_weak = app.as_weak();
     let calendar_for_navigation = Rc::clone(&calendar_state);
     let inbox_for_calendar_navigation = Rc::clone(&state);
@@ -2972,7 +3088,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         app.set_calendar_event_editing(false);
         app.set_calendar_event_title("".into());
         app.set_calendar_event_date(calendar.selected_date.format("%Y-%m-%d").to_string().into());
-        app.set_calendar_event_time("09:00".into());
+        app.set_calendar_event_time(date_format::current().time(9, 0).into());
         app.set_calendar_event_duration("60".into());
         app.set_calendar_event_color(0);
         app.set_calendar_editor_open(true);
@@ -3001,14 +3117,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         app.set_calendar_event_editing(true);
         app.set_calendar_event_title(event.title.into());
         app.set_calendar_event_date(event.date.format("%Y-%m-%d").to_string().into());
-        app.set_calendar_event_time(
-            format!(
-                "{:02}:{:02}",
-                event.start_minutes / 60,
-                event.start_minutes % 60
-            )
-            .into(),
-        );
+        let start = event.start_minutes.clamp(0, 24 * 60 - 1) as u32;
+        app.set_calendar_event_time(date_format::current().time(start / 60, start % 60).into());
         app.set_calendar_event_duration(event.duration_minutes.to_string().into());
         app.set_calendar_event_color(event.color_index);
         app.set_calendar_editor_open(true);
@@ -3076,12 +3186,16 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let Some(app) = app_weak.upgrade() else {
             return;
         };
-        let parsed = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").and_then(|date| {
-            NaiveTime::parse_from_str(time.trim(), "%H:%M").map(|time| (date, time))
-        });
-        let Ok((date, time)) = parsed else {
-            app.set_sync_status(UiMessage::plain(
-                "Use YYYY-MM-DD and a 24-hour time such as 09:30.",
+        let formats = date_format::current();
+        let parsed = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").ok().zip(
+            formats
+                .parse_time(&time)
+                .and_then(|(hour, minute)| NaiveTime::from_hms_opt(hour, minute, 0)),
+        );
+        let Some((date, time)) = parsed else {
+            app.set_sync_status(UiMessage::detail(
+                "Use YYYY-MM-DD for the date and a time such as {}.",
+                formats.time(9, 30),
             ));
             return;
         };
@@ -3692,6 +3806,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     });
 
     let mail_metadata_state = Rc::clone(&state);
+    let mail_metadata_runtime = Rc::clone(&runtime);
     let mail_metadata_app = app.as_weak();
     let mail_metadata_refresh_in_progress_for_result =
         Rc::clone(&mail_metadata_refresh_in_progress);
@@ -3707,10 +3822,27 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         continue;
                     }
                     let mut state = mail_metadata_state.borrow_mut();
+                    // An import created local mail, or its mail was deleted.
+                    let local_mail = metadata.local_mail;
+                    let local_mail_changed =
+                        local_mail != state.local_mail.map(|local| local.account_id);
                     state.mailboxes = metadata.mailboxes;
                     state.unified_mailboxes = metadata.unified_mailboxes;
                     state.inbox_count = metadata.inbox_count;
                     drop(state);
+                    if local_mail_changed {
+                        // Its section is named at once; its size follows.
+                        apply_local_mail(
+                            &app,
+                            &mail_metadata_state,
+                            local_mail.map(|account_id| flectar_mail_core::models::LocalMail {
+                                account_id,
+                                messages: 0,
+                                bytes: 0,
+                            }),
+                        );
+                        refresh_local_mail(&app, &mail_metadata_state, &mail_metadata_runtime);
+                    }
                     refresh_list_metadata(&app, &mail_metadata_state);
                 }
                 Err(error) => {
@@ -3835,6 +3967,12 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let message = UiMessage::detail("Message action failed: {}", error);
             app.set_render_status(message.clone());
             app.set_sync_status(message);
+        }
+        if pending.calendar_changed
+            && let Some(app) = mail_update_app.upgrade()
+            && app.get_settings_open()
+        {
+            app.invoke_reload_calendar_connections();
         }
         if pending.calendar_changed
             && let Some(app) = mail_update_app.upgrade()
@@ -4246,6 +4384,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         remote_images_enabled,
                         accounts,
                         account_configs,
+                        local_mail,
                         settings,
                     } = snapshot;
 
@@ -4268,6 +4407,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         // accounts, which also become the source of truth.
                         let _ = state.set_connected_accounts(accounts);
                         state.account_configs = account_configs;
+                        state.local_mail = local_mail;
                         state.set_scope(scope);
                         state.remote_images_enabled = allow_remote_images;
                         state.mark_read_on_open = settings
@@ -4284,7 +4424,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         } else {
                             None
                         };
-                        if let Some(page) = page.filter(|page| page.account_count > 0) {
+                        if let Some(page) =
+                            page.filter(|page| page.account_count > 0 || local_mail.is_some())
+                        {
                             state.using_core = true;
                             if state.scope == Scope::UNIFIED_INBOX {
                                 state.inbox_count = page.messages.len();
@@ -4339,7 +4481,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         startup_state.borrow().remote_images_enabled,
                     );
 
-                    refresh_connected_accounts(&app, &startup_state);
+                    apply_local_mail(&app, &startup_state, local_mail);
                     refresh_rows_only(&app, &startup_state, &startup_runtime);
                     refresh_list_metadata(&app, &startup_state);
                     app.set_startup_hydrated(true);
@@ -4441,6 +4583,28 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let product_body_generation = body_generation.clone();
     let product_body_pending = body_pending.clone();
     let product_body_requests = body_requests.clone();
+    let connections_state = state.clone();
+    let connections_runtime = runtime.clone();
+    let connections_updates = startup_tx.clone();
+    app.on_reload_calendar_connections(move || {
+        let Some(core) = connections_state.borrow().core.clone() else {
+            return;
+        };
+        let updates = connections_updates.clone();
+        connections_runtime.spawn(async move {
+            let (calendar, contacts) = tokio::join!(
+                core.load_calendar_connections(),
+                core.load_carddav_connections()
+            );
+            // A failed read keeps what Settings shows.
+            if let (Ok(calendar), Ok(contacts)) = (calendar, contacts) {
+                let _ = updates
+                    .send(StartupUpdate::Connections { calendar, contacts })
+                    .await;
+            }
+        });
+    });
+
     let previous_product = Rc::new(RefCell::new(String::from("mail")));
     app.on_product_changed(move |view| {
         let Some(app) = product_app.upgrade() else {
@@ -4737,16 +4901,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 app.set_account_protocol("imap".into());
                 app.set_jmap_url("".into());
                 app.set_incoming_host("".into());
+                app.set_incoming_port("993".into());
                 app.set_smtp_host("".into());
+                app.set_smtp_port("465".into());
             }
             if let Some(removal) = update.account_removal.as_mut().filter(|removal| removal.removed) {
                 let current_page = {
                     let mut state = ui_task_state.borrow_mut();
-                    if let Some(metadata) = removal
-                        .metadata
-                        .take()
-                        .filter(|_| !state.connected_accounts.is_empty())
-                    {
+                    if let Some(metadata) = removal.metadata.take().filter(|_| state.has_mail()) {
                         state.mailboxes = metadata.mailboxes;
                         state.unified_mailboxes = metadata.unified_mailboxes;
                         state.inbox_count = metadata.inbox_count;
@@ -4775,7 +4937,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 clear_contact_form(&app);
                 apply_calendar(&app, &removal_calendar.borrow(), Local::now().date_naive());
                 let _ = render_current(&app, &ui_task_state, &ui_task_runtime);
-                if !current_page && !ui_task_state.borrow().connected_accounts.is_empty() {
+                if !current_page && ui_task_state.borrow().has_mail() {
                     let _ = refresh_from_source(&app, &ui_task_state, &ui_task_runtime, false, &[]);
                 }
                 removal_metadata_requested.set(true);
@@ -4896,15 +5058,20 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             return;
         }
         let account_id = i64::from(account_id);
-        let (core, scope, query, limit, profile) = {
+        let (core, scope, query, limit, profile, local) = {
             let state = state_for_account_delete.borrow();
             let Some(core) = state.core.clone() else {
                 return;
             };
-            if !state
-                .connected_accounts
-                .iter()
-                .any(|account| account.id == account_id)
+            // Mail kept on this device is deleted like an account.
+            let local = state
+                .local_mail
+                .is_some_and(|local| local.account_id == account_id);
+            if !local
+                && !state
+                    .connected_accounts
+                    .iter()
+                    .any(|account| account.id == account_id)
             {
                 return;
             }
@@ -4922,18 +5089,31 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 state.query.clone(),
                 limit,
                 state.profile_accounts.clone(),
+                local,
             )
         };
         let calendar_month = calendar_for_account_delete.borrow().visible_month;
         app.set_account_setup_in_progress(true);
-        app.set_sync_status(UiMessage::plain("Removing account…"));
+        app.set_sync_status(if local {
+            UiMessage::plain("Deleting mail on this device…")
+        } else {
+            UiMessage::plain("Removing account…")
+        });
         let updates = ui_task_tx_for_account_delete.clone();
         runtime_for_account_delete.spawn(async move {
             let result = core.remove_account(account_id).await;
             let accounts = core.load_account_snapshot().await.ok();
             // Core deletion is journaled across stores. A late cleanup error
             // can occur after the account row was deleted; reflect that fact.
-            let removed = account_was_removed(account_id, &result, accounts.as_ref());
+            let removed = if local {
+                result.is_ok()
+                    || core
+                        .load_local_mail()
+                        .await
+                        .is_ok_and(|local| local.is_none_or(|local| local.account_id != account_id))
+            } else {
+                account_was_removed(account_id, &result, accounts.as_ref())
+            };
             // Match the selection `reconcile_removed_account` will leave.
             let scope = accounts.as_ref().map_or(scope, |snapshot| {
                 let shown = snapshot
@@ -4974,6 +5154,17 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     None
                 };
             let message = match result {
+                Ok(()) if local && (metadata.is_none() || page.is_none()) => {
+                    UiMessage::plain("Mail on this device deleted. Mail refresh will retry.")
+                }
+                Ok(()) if local => UiMessage::plain("Mail on this device deleted."),
+                Err(error) if local && removed => UiMessage::detail(
+                    "Mail on this device deleted; local cleanup needs a retry: {}",
+                    error,
+                ),
+                Err(error) if local => {
+                    UiMessage::detail("Could not delete mail on this device: {}", error)
+                }
                 Ok(()) if metadata.is_none() || page.is_none() => {
                     UiMessage::plain("Account removed. Mail refresh will retry.")
                 }
@@ -5035,6 +5226,48 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             };
             // Reload on both success and failure so the selector always shows
             // the authoritative persisted value.
+            let accounts = core.load_account_snapshot().await.ok();
+            let _ = updates
+                .send(UiTaskUpdate {
+                    message,
+                    accounts,
+                    calendar_connections: None,
+                    carddav_connections: None,
+                    calendar_error: None,
+                    account_removal: None,
+                    clear_account_form: false,
+                    finishes_account_setup: false,
+                    finishes_oauth: false,
+                    close_to_tray: None,
+                })
+                .await;
+        });
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_keep_on_server = Rc::clone(&state);
+    let runtime_for_keep_on_server = Rc::clone(&runtime);
+    let ui_task_tx_for_keep_on_server = ui_task_tx.clone();
+    app.on_save_account_keep_on_server(move |account_id, value| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_keep_on_server.borrow().core.clone() else {
+            app.set_sync_status(UiMessage::plain(
+                "Server mail settings require local mail data.",
+            ));
+            return;
+        };
+        let account_id = i64::from(account_id);
+        let value = value.to_string();
+        app.set_sync_status(UiMessage::plain("Updating server mail settings…"));
+        let updates = ui_task_tx_for_keep_on_server.clone();
+        runtime_for_keep_on_server.spawn(async move {
+            let message = match core.set_account_keep_on_server(account_id, &value).await {
+                Ok(()) => UiMessage::plain("Server mail settings updated."),
+                Err(error) => UiMessage::detail("Could not update server mail settings: {}", error),
+            };
+            // Reload either way so the selector shows the saved choice.
             let accounts = core.load_account_snapshot().await.ok();
             let _ = updates
                 .send(UiTaskUpdate {
@@ -6019,12 +6252,18 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     });
 
     let app_weak = app.as_weak();
+    let state_for_open = Rc::clone(&state);
     let intent_for_open = Rc::clone(&compose_intent);
     let document_for_open = Rc::clone(&compose_document);
     let editor_for_open = Rc::clone(&compose_editor);
     app.on_open_compose(move || {
         if let Some(app) = app_weak.upgrade() {
             if app.get_compose_open() {
+                return;
+            }
+            // Only local mail is here: nothing could send it.
+            if state_for_open.borrow().connected_accounts.is_empty() {
+                app.set_render_status(UiMessage::plain("Add an account to send mail."));
                 return;
             }
             *intent_for_open.borrow_mut() = ComposeIntent::default();
@@ -6195,6 +6434,15 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             return;
         }
 
+        // Local mail is answered from an account.
+        if state_for_message_compose
+            .borrow()
+            .connected_accounts
+            .is_empty()
+        {
+            app.set_render_status(UiMessage::plain("Add an account to send mail."));
+            return;
+        }
         let source = match runtime_for_message_compose
             .block_on(core.load_compose_source(&row, conversation_message_id))
         {
@@ -6220,6 +6468,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             &source,
             action.as_str(),
             app.get_selected_plain_text().as_str(),
+            |message| translated(&app, &message).into(),
         ) {
             Ok(prepared) => prepared,
             Err(error) => {
@@ -6370,8 +6619,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     skipped += 1;
                     continue;
                 }
-                let Some(filename) = path.file_name().map(|name| name.to_string_lossy().into_owned())
-                else {
+                let Some(filename) = document.name() else {
                     skipped += 1;
                     continue;
                 };
@@ -6876,7 +7124,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         platform.oauth_redirects.clone(),
         platform.external_urls.clone(),
     );
-    mail_setup::register(&app, &runtime);
+    mail_setup::register(&app, &runtime, &platform.documents);
 
     let suggestion_app = app.as_weak();
     let suggestion_state = Rc::clone(&state);
@@ -6885,6 +7133,15 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let Some(app) = suggestion_app.upgrade() else {
             return;
         };
+        // Only server settings that the form shows are suggested.
+        let (protocol, standard_incoming_port) =
+            match MailProtocol::parse(app.get_account_protocol().as_str()) {
+                Some(MailProtocol::Imap) => (MailProtocol::Imap, "993"),
+                Some(MailProtocol::Pop3) => (MailProtocol::Pop3, "995"),
+                Some(MailProtocol::Gmail | MailProtocol::Jmap | MailProtocol::Local) | None => {
+                    return;
+                }
+            };
         let transport_matches_last_suggestion = last_suggested_transport
             .borrow()
             .as_ref()
@@ -6902,7 +7159,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             });
         let transport_is_pristine = app.get_incoming_host().trim().is_empty()
             && app.get_smtp_host().trim().is_empty()
-            && app.get_incoming_port().as_str() == "993"
+            && app.get_incoming_port().as_str() == standard_incoming_port
             && app.get_smtp_port().as_str() == "465"
             && app.get_incoming_security().as_str() == "tls"
             && app.get_smtp_security().as_str() == "tls"
@@ -6913,12 +7170,12 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         }
         let suggestion = {
             let state = suggestion_state.borrow();
-            reusable_mail_transport(&state.account_configs, email.as_str()).cloned()
+            reusable_mail_transport(&state.account_configs, email.as_str(), protocol).cloned()
         };
         let Some(config) = suggestion else {
             if transport_matches_last_suggestion {
                 app.set_incoming_host("".into());
-                app.set_incoming_port("993".into());
+                app.set_incoming_port(standard_incoming_port.into());
                 app.set_smtp_host("".into());
                 app.set_smtp_port("465".into());
                 app.set_incoming_security("tls".into());
@@ -6982,11 +7239,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     465,
                     UiMessage::plain("Discovering JMAP and checking capabilities…"),
                 ),
-                MailProtocol::Imap => {
+                MailProtocol::Imap | MailProtocol::Pop3 => {
                     let Some(incoming_port) = port(&incoming_port) else {
-                        app.set_sync_status(UiMessage::plain(
-                            "IMAP port must be between 1 and 65535.",
-                        ));
+                        app.set_sync_status(match mail_protocol {
+                            MailProtocol::Pop3 => {
+                                UiMessage::plain("POP3 port must be between 1 and 65535.")
+                            }
+                            _ => UiMessage::plain("IMAP port must be between 1 and 65535."),
+                        });
                         return;
                     };
                     let Some(smtp_port) = port(&smtp_port) else {
@@ -6998,10 +7258,15 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     (
                         incoming_port,
                         smtp_port,
-                        UiMessage::plain("Testing IMAP and SMTP connections…"),
+                        match mail_protocol {
+                            MailProtocol::Pop3 => {
+                                UiMessage::plain("Testing POP3 and SMTP connections…")
+                            }
+                            _ => UiMessage::plain("Testing IMAP and SMTP connections…"),
+                        },
                     )
                 }
-                MailProtocol::Gmail => {
+                MailProtocol::Gmail | MailProtocol::Local => {
                     unsupported();
                     return;
                 }
@@ -7325,14 +7590,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let state_for_calendar_toggle = Rc::clone(&state);
     let runtime_for_calendar_toggle = Rc::clone(&runtime);
     let updates_for_calendar_toggle = ui_task_tx.clone();
-    app.on_set_account_calendar_enabled(move |account_id, enabled| {
+    app.on_set_calendar_connection_enabled(move |connection_id, enabled| {
         let Some(core) = state_for_calendar_toggle.borrow().core.clone() else {
             return;
         };
         let updates = updates_for_calendar_toggle.clone();
         runtime_for_calendar_toggle.spawn(async move {
             let message = match core
-                .set_account_calendar_enabled(i64::from(account_id), enabled)
+                .set_calendar_connection_enabled(i64::from(connection_id), enabled)
                 .await
             {
                 Ok(_) => {
@@ -7362,11 +7627,45 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         });
     });
 
+    let state_for_calendar_removal = Rc::clone(&state);
+    let runtime_for_calendar_removal = Rc::clone(&runtime);
+    let updates_for_calendar_removal = ui_task_tx.clone();
+    app.on_remove_calendar_connection(move |connection_id| {
+        let Some(core) = state_for_calendar_removal.borrow().core.clone() else {
+            return;
+        };
+        let updates = updates_for_calendar_removal.clone();
+        runtime_for_calendar_removal.spawn(async move {
+            let message = match core
+                .remove_calendar_connection(i64::from(connection_id))
+                .await
+            {
+                Ok(()) => UiMessage::plain("Calendar removed."),
+                Err(error) => UiMessage::detail("Could not remove calendar: {}", error),
+            };
+            let connections = core.load_calendar_connections().await.ok();
+            let _ = updates
+                .send(UiTaskUpdate {
+                    message,
+                    accounts: None,
+                    calendar_connections: connections,
+                    carddav_connections: None,
+                    calendar_error: None,
+                    account_removal: None,
+                    clear_account_form: false,
+                    finishes_account_setup: false,
+                    finishes_oauth: false,
+                    close_to_tray: None,
+                })
+                .await;
+        });
+    });
+
     let state_for_caldav = Rc::clone(&state);
     let runtime_for_caldav = Rc::clone(&runtime);
     let updates_for_caldav = ui_task_tx.clone();
     let app_for_caldav = app.as_weak();
-    app.on_connect_caldav(move |account_id, url, username, password| {
+    app.on_connect_caldav(move |account_id, connection_id, url, username, password| {
         let Some(app) = app_for_caldav.upgrade() else {
             return;
         };
@@ -7384,6 +7683,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let result = core
                 .connect_caldav(
                     i64::from(account_id),
+                    (connection_id > 0).then_some(i64::from(connection_id)),
                     url.to_string(),
                     username.to_string(),
                     password.to_string(),
@@ -7396,10 +7696,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             };
             let _ = app.upgrade_in_event_loop(move |app| {
                 app.set_caldav_connecting(false);
-                if connected && app.get_caldav_account_id() == account_id {
+                // Close the form only when it still shows this connection.
+                if connected
+                    && app.get_caldav_account_id() == account_id
+                    && app.get_caldav_connection_id() == connection_id
+                {
                     app.set_caldav_account_id(-1);
+                    app.set_caldav_connection_id(-1);
                     app.set_caldav_password("".into());
-                    app.set_caldav_manage_existing(false);
                 }
             });
             let connections = core.load_calendar_connections().await.ok();
@@ -8069,6 +8373,8 @@ mod tests {
                 sender_addresses: Vec::new(),
                 sender_names: Vec::new(),
                 sender_domains: Vec::new(),
+                icon: None,
+                account_ids: None,
             }],
             active_business_tab: Some("pixelated-cities".into()),
             ..AccountPresentationSettings::default()
@@ -8099,6 +8405,8 @@ mod tests {
                 sender_addresses: Vec::new(),
                 sender_names: Vec::new(),
                 sender_domains: Vec::new(),
+                icon: None,
+                account_ids: None,
             }],
             active_business_tab: Some("tim".into()),
             ..AccountPresentationSettings::default()

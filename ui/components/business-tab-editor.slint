@@ -1,0 +1,149 @@
+import { HorizontalBox, VerticalBox, ListView } from "std-widgets.slint";
+import { BusinessTabRow, ProfileMemberRow } from "../models.slint";
+import { AppTheme } from "../design-system.slint";
+import { TypeScale } from "../typography.slint";
+import { Button } from "button.slint";
+import { IconButton, LineEdit } from "controls.slint";
+import { ProfileMemberChoice } from "profile-controls.slint";
+
+// Saved settings live in Rust. Every field below belongs to an isolated draft.
+export global BusinessTabEditorUi {
+    in property <bool> visible: false;
+    in property <string> editing-id;
+    in-out property <string> name;
+    in-out property <string> query;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <string> error;
+    in property <[ProfileMemberRow]> members;
+    in property <int> selected-count;
+    in property <bool> has-special-rules: false;
+    in property <bool> recipient-only: false;
+    callback open(string);
+    callback choose-icon();
+    callback remove-icon();
+    callback search(string);
+    callback toggle-member(int, bool);
+    callback save() -> bool;
+    callback cancel();
+}
+
+export component BusinessTabEditor inherits VerticalBox {
+    padding: 0px;
+    spacing: 12px;
+    init => { name-field.focus(); }
+    Text {
+        text: BusinessTabEditorUi.editing-id == "" ? @tr("Create tab") : @tr("Edit tab");
+        color: AppTheme.heading;
+        font-size: TypeScale.subtitle;
+        font-weight: 600;
+    }
+    name-field := LineEdit {
+        text <=> BusinessTabEditorUi.name;
+        input-label: @tr("Tab name");
+        placeholder-text: @tr("Tab name");
+    }
+    HorizontalBox {
+        padding: 0px;
+        spacing: 8px;
+        Rectangle {
+            width: 44px; height: 44px;
+            border-radius: 8px;
+            background: AppTheme.muted-control-bg;
+            if BusinessTabEditorUi.has-icon : Image {
+                width: 36px; height: 36px;
+                source: BusinessTabEditorUi.icon;
+                image-fit: contain;
+            }
+            if !BusinessTabEditorUi.has-icon : Text {
+                text: @tr("Icon"); color: AppTheme.secondary; font-size: TypeScale.caption;
+            }
+        }
+        VerticalBox {
+            padding: 0px;
+            spacing: 6px;
+            Button { text: @tr("Upload icon"); width: max(96px, self.content-width); clicked => { BusinessTabEditorUi.choose-icon(); } }
+            Button { text: @tr("Remove icon"); width: max(96px, self.content-width); enabled: BusinessTabEditorUi.has-icon; clicked => { BusinessTabEditorUi.remove-icon(); } }
+        }
+        Rectangle { horizontal-stretch: 1; }
+    }
+    Text {
+        text: @tr("Accounts can appear in several tabs. This does not move mail.");
+        wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
+    }
+    if BusinessTabEditorUi.recipient-only : Text {
+        text: @tr("Selected accounts control the sidebar. Recipient matching still searches every account.");
+        wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
+    }
+    if BusinessTabEditorUi.has-special-rules && !BusinessTabEditorUi.recipient-only : Text {
+        text: @tr("This tab also keeps its existing recipient and sender matching rules.");
+        wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
+    }
+    LineEdit {
+        text <=> BusinessTabEditorUi.query;
+        input-label: @tr("Search accounts for this tab");
+        placeholder-text: @tr("Search accounts");
+        edited(value) => { BusinessTabEditorUi.search(value); }
+    }
+    Text {
+        text: @tr("{} selected", BusinessTabEditorUi.selected-count);
+        color: AppTheme.secondary; font-size: TypeScale.caption;
+    }
+    ListView {
+        height: 208px;
+        for account-choice in BusinessTabEditorUi.members : ProfileMemberChoice {
+            member: account-choice;
+            toggled => { BusinessTabEditorUi.toggle-member(account-choice.id, !account-choice.checked); }
+        }
+    }
+    if BusinessTabEditorUi.members.length == 0 : Text {
+        text: @tr("No accounts match your search."); color: AppTheme.secondary;
+        wrap: word-wrap; font-size: TypeScale.caption;
+    }
+    if BusinessTabEditorUi.error != "" : Text {
+        text: BusinessTabEditorUi.error; color: AppTheme.destructive;
+        wrap: word-wrap; font-size: TypeScale.caption;
+        accessible-role: text;
+    }
+    HorizontalBox {
+        padding: 0px;
+        spacing: 8px;
+        Rectangle { horizontal-stretch: 1; }
+        Button { text: @tr("Cancel"); width: max(80px, self.content-width); clicked => { BusinessTabEditorUi.cancel(); } }
+        Button { text: @tr("Save tab"); width: max(90px, self.content-width); primary: true; enabled: BusinessTabEditorUi.name != ""; clicked => { BusinessTabEditorUi.save(); } }
+    }
+}
+
+export component BusinessTabsCard inherits Rectangle {
+    in property <[BusinessTabRow]> tabs;
+    callback delete-tab(string);
+    callback move-tab(string, int);
+    background: AppTheme.surface;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: AppTheme.border;
+    height: content.preferred-height;
+    content := VerticalBox {
+        padding: 16px;
+        spacing: 12px;
+        Text { text: @tr("Business tabs"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
+        Text { text: @tr("Choose each tab's name, icon and accounts."); color: AppTheme.secondary; font-size: TypeScale.caption; wrap: word-wrap; }
+        if !BusinessTabEditorUi.visible : VerticalBox {
+            padding: 0px;
+            spacing: 8px;
+            for tab[index] in root.tabs : HorizontalBox {
+                padding: 0px;
+                spacing: 4px;
+                height: 36px;
+                if tab.has_logo : Image { width: 28px; height: 28px; source: tab.logo; image-fit: contain; }
+                Text { text: tab.name; color: AppTheme.body; font-size: TypeScale.body; overflow: elide; horizontal-stretch: 1; min-width: 0px; }
+                IconButton { icon: @image-url("../icons/lucide/outline/pencil.svg"); ghost: true; tooltip-text: @tr("Edit {}", tab.name); clicked => { BusinessTabEditorUi.open(tab.id); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/chevron-up.svg"); ghost: true; tooltip-text: @tr("Move {} up", tab.name); interactive: index > 0; clicked => { root.move-tab(tab.id, -1); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/chevron-down.svg"); ghost: true; tooltip-text: @tr("Move {} down", tab.name); interactive: index + 1 < root.tabs.length; clicked => { root.move-tab(tab.id, 1); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/trash.svg"); icon-color: AppTheme.destructive; ghost: true; tooltip-text: @tr("Delete {}", tab.name); clicked => { root.delete-tab(tab.id); } }
+            }
+            Button { text: @tr("Add tab"); width: max(96px, self.content-width); clicked => { BusinessTabEditorUi.open(""); } }
+        }
+        if BusinessTabEditorUi.visible : BusinessTabEditor { }
+    }
+}

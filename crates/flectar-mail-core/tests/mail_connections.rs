@@ -996,10 +996,11 @@ fn smtp_config(port: u16, mode: ConnectionSecurity, certificate: &str) -> Accoun
 }
 /// A relay that takes the message and then never answers must not hold the
 /// submission worker forever.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn smtp_send_gives_up_on_a_stalled_relay() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let (stalled_tx, stalled) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (tcp, _) = listener.accept().await.unwrap();
         let mut stream = BufReader::new(acceptor_for(CERT).accept(tcp).await.unwrap());
@@ -1018,19 +1019,34 @@ async fn smtp_send_gives_up_on_a_stalled_relay() {
         assert_eq!(line(&mut stream).await, "DATA\r\n");
         stream.write_all(b"354 Continue\r\n").await.unwrap();
         while line(&mut stream).await != ".\r\n" {}
+        stalled_tx.send(()).unwrap();
         std::future::pending::<()>().await;
     });
     let config = smtp_config(port, ConnectionSecurity::Tls, CERT);
-    let error = smtp::send_raw(
-        &config,
-        &smtp::SmtpAuth::Password("bridge-password".into()),
-        "user@example.com",
-        &["friend@example.com".into()],
-        b"Subject: Hello\r\n\r\nBody\r\n",
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("timed out"), "{error}");
+    let send = tokio::spawn(async move {
+        smtp::send_raw(
+            &config,
+            &smtp::SmtpAuth::Password("bridge-password".into()),
+            "user@example.com",
+            &["friend@example.com".into()],
+            b"Subject: Hello\r\n\r\nBody\r\n",
+        )
+        .await
+    });
+    // The exchange runs in real time. Time that advances on its own while the
+    // handshake still waits on the network would fire unrelated deadlines, so
+    // the clock only jumps past the idle deadline once the relay has stalled.
+    tokio::time::timeout(std::time::Duration::from_secs(10), stalled)
+        .await
+        .expect("the relay never received the message")
+        .unwrap();
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(61)).await;
+    let error = send.await.unwrap().unwrap_err();
+    assert!(
+        error.to_string().contains("connection timed out after 60s"),
+        "{error}"
+    );
     server.abort();
 }
 
@@ -1475,4 +1491,59 @@ async fn backup_import_preserves_transport_settings_and_rejects_private_keys() {
     config.settings.connection.trusted_certificate_pem = KEY.into();
     assert!(core.import_account_configs(vec![config]).await.is_err());
     assert_eq!(core.list_accounts().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn another_gmail_spelling_does_not_edit_a_password_account() {
+    let temp = tempfile::tempdir().unwrap();
+    let core = Core::start_mail_ui_with_credentials(
+        Paths::for_tests(temp.path()),
+        Arc::new(DevelopmentFileCredentialStore::new(
+            temp.path().join("test-credentials.json"),
+        )),
+    )
+    .await
+    .unwrap();
+    core.import_account_configs(vec![PortableAccountConfig {
+        email: "johndoe@gmail.com".into(),
+        display_name: None,
+        provider: Provider::Generic,
+        auth_kind: AuthKind::Password,
+        mail_protocol: MailProtocol::Imap,
+        username: "johndoe@gmail.com".into(),
+        jmap_url: String::new(),
+        incoming_host: "imap.gmail.com".into(),
+        incoming_port: 993,
+        smtp_host: "smtp.gmail.com".into(),
+        smtp_port: 465,
+        settings: AccountSettings::new(settings(ConnectionSecurity::Tls)),
+    }])
+    .await
+    .unwrap();
+
+    // Taking the new spelling would look like another user to the update
+    // and reset the account's mail, so the form names the existing account.
+    let error = core
+        .add_account_password(AddPasswordAccountArgs {
+            email: "John.Doe@gmail.com".into(),
+            display_name: None,
+            username: "john.doe@gmail.com".into(),
+            password: "app-password".into(),
+            mail_protocol: MailProtocol::Imap,
+            jmap_url: String::new(),
+            incoming_host: "imap.gmail.com".into(),
+            incoming_port: 993,
+            smtp_host: "smtp.gmail.com".into(),
+            smtp_port: 465,
+            connection: settings(ConnectionSecurity::Tls),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "auth failed: johndoe@gmail.com is already added"
+    );
+    let configs = core.list_account_configs().await.unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].username, "johndoe@gmail.com");
 }

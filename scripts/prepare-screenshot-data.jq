@@ -5,6 +5,7 @@ def favicon_path(address):
 | .workspace_layout = $workspace_layout
 | .screenshot_theme_preset = $theme_preset
 | .active_view = $active_view
+| .FilesUi["preview-image"] = $pdf_preview
 # The app always has at least one tab; show the same strip as the frameless
 # screenshots: the current view, a background conversation and the calendar.
 # The tabs showcase adds more conversations and every other workspace.
@@ -67,8 +68,11 @@ def favicon_path(address):
     | .smtp_security = (.smtp_security // "tls")
     | .trusted_certificate_pem = (.trusted_certificate_pem // "")
     | .mail_history = (.mail_history // "sixMonths")
-    | .caldav_url = (.caldav_url // "")
-    | .caldav_username = (.caldav_username // "")
+    | .keep_on_server = (.keep_on_server // "always")
+    | .server_keeps_mail_days = (.server_keeps_mail_days // -1)
+    | .calendar_connections = (.calendar_connections // [])
+    | .provider_calendar_connected = (.provider_calendar_connected // false)
+    | .provider_calendar_error = (.provider_calendar_error // "")
     | .carddav_connected = (.carddav_connected // false)
     | .carddav_enabled = (.carddav_enabled // false)
     | .carddav_status = (.carddav_status // "")
@@ -118,6 +122,11 @@ def favicon_path(address):
 | (.thread_messages // [] | length) as $thread_count
 | .emails |= map(
     .has_replied = (.has_replied // false)
+    | .account_uses_labels = (.account_uses_labels // false)
+    | .verification_code = (.verification_code // "")
+    | .verification_code_spelled = (.verification_code_spelled // "")
+    | .attachment = ({id: "", stem: "", extension: "", kind: "", previewable: false} + (.attachment // {}))
+    | .attachment_total = (.attachment_total // 0)
     | .message_count = (if $show_threads and .selected then ([1, $thread_count] | max) else (.message_count // 1) end)
     | .checked = (.checked // false)
     | .account_id = (if .account == "Flectar Support" then 2 else 1 end)
@@ -144,8 +153,6 @@ def favicon_path(address):
     is_header: false,
     group_key: "",
     group_kind: "",
-    group_month: 0,
-    group_year: 0,
     group_count: 0,
     expanded: false,
     show_row: true,

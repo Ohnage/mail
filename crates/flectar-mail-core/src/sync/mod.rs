@@ -1,11 +1,34 @@
 pub mod engine;
 pub mod folder_map;
 pub mod gmail;
+pub(crate) mod ingest;
+pub(crate) mod local;
+pub(crate) mod pop3;
 pub mod threading;
 
-use crate::{db::repo, error::Result, events::CoreEvent, models::MailProtocol};
+use crate::{
+    db::repo,
+    error::Result,
+    events::CoreEvent,
+    models::{MailProtocol, now_ms},
+};
 use engine::SyncCtx;
 use rusqlite::{OptionalExtension, params};
+
+/// Finished actions are kept this long for undo history.
+const ACTION_HISTORY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Complete every due action of an account whose mail exists only on this
+/// device, then forget finished actions past their undo history.
+pub(crate) async fn complete_device_actions(ctx: &SyncCtx, account_id: i64) -> Result<()> {
+    while crate::queue::execute_due_on_device(ctx, account_id)
+        .await?
+        .due_remaining
+    {}
+    ctx.db
+        .write(|conn| repo::actions::gc(conn, now_ms() - ACTION_HISTORY_MS))
+        .await
+}
 
 /// Only a composer-created draft with no provider identity can be removed
 /// locally once nothing can still create it remotely. A synced draft whose UID
@@ -64,6 +87,8 @@ pub(crate) async fn is_local_only_draft(ctx: &SyncCtx, message_id: i64) -> Resul
                     )?;
                     Ok(!moved_from_server)
                 }
+                // Drafts never leave the device.
+                MailProtocol::Pop3 | MailProtocol::Local => Ok(true),
             }
         })
         .await
@@ -192,5 +217,52 @@ pub(crate) async fn finish_empty_trash(
     if !thread_ids.is_empty() {
         ctx.bus.emit(CoreEvent::MailUpdated { thread_ids });
     }
+    Ok(())
+}
+
+/// Delete a folder and its subfolders from this device together with the
+/// messages they hold, including each message's search entry and files. For
+/// server folders this follows their deletion on the server.
+pub(crate) async fn delete_folder_tree(
+    ctx: &SyncCtx,
+    account_id: i64,
+    path: String,
+    delimiter: String,
+) -> Result<()> {
+    let (thread_ids, paths, staged_paths) = ctx
+        .db
+        .write(move |conn| {
+            let tx = conn.transaction()?;
+            let rows = repo::folders::messages_in_tree(&tx, account_id, &path, &delimiter)?;
+            let mut thread_ids = std::collections::HashSet::new();
+            let mut paths = Vec::new();
+            let mut staged_paths = Vec::new();
+            for message in rows {
+                staged_paths.extend(repo::messages::take_draft_attachment_paths(
+                    &tx, message.id,
+                )?);
+                repo::messages::delete(&tx, message.id)?;
+                thread_ids.extend(message.thread_id);
+                paths.extend(message.raw_path);
+            }
+            repo::folders::delete_tree(&tx, account_id, &path, &delimiter)?;
+            for &thread_id in &thread_ids {
+                repo::threads::recompute(&tx, thread_id)?;
+            }
+            tx.commit()?;
+            Ok((
+                thread_ids.into_iter().collect::<Vec<_>>(),
+                paths,
+                staged_paths,
+            ))
+        })
+        .await?;
+    for path in paths {
+        let _ = tokio::fs::remove_file(path).await;
+    }
+    for path in staged_paths {
+        crate::remove_staged_attachment(&ctx.paths.draft_attachments_dir(), &path).await;
+    }
+    ctx.bus.emit(CoreEvent::MailUpdated { thread_ids });
     Ok(())
 }

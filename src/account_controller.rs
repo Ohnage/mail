@@ -26,16 +26,18 @@ fn same_mail_transport(left: &AccountConfig, right: &AccountConfig) -> bool {
         && left.settings.connection == right.settings.connection
 }
 
-/// Reuse transport details only when every manual IMAP account for the domain
-/// agrees. Ambiguous configurations deliberately leave the new form untouched.
+/// Reuse transport details only when every manual account of the form's
+/// protocol for the domain agrees. Ambiguous configurations deliberately leave
+/// the new form untouched.
 pub(super) fn reusable_mail_transport<'a>(
     configs: &'a [AccountConfig],
     address: &str,
+    protocol: MailProtocol,
 ) -> Option<&'a AccountConfig> {
     let domain = mail_domain(address)?;
     let mut matches = configs.iter().filter(|config| {
         config.provider == Provider::Generic
-            && config.mail_protocol == MailProtocol::Imap
+            && config.mail_protocol == protocol
             && mail_domain(&config.email)
                 .is_some_and(|candidate| candidate.eq_ignore_ascii_case(domain))
     });
@@ -121,6 +123,12 @@ pub(super) fn reconcile_removed_account(state: &mut InboxState, account_id: i64)
     state
         .mailboxes
         .retain(|mailbox| mailbox.account_id != account_id);
+    if state
+        .local_mail
+        .is_some_and(|local| local.account_id == account_id)
+    {
+        state.local_mail = None;
+    }
     let accounts = std::mem::take(&mut state.connected_accounts)
         .into_iter()
         .filter(|account| account.id != account_id)
@@ -167,7 +175,7 @@ pub(super) fn reconcile_removed_account(state: &mut InboxState, account_id: i64)
     for mailbox in &mut state.unified_mailboxes {
         mailbox.count.clear();
     }
-    if state.connected_accounts.is_empty() {
+    if !state.has_mail() {
         state.messages.clear();
         state.mailboxes.clear();
         state.unified_mailboxes.clear();
@@ -192,13 +200,17 @@ pub(super) fn apply_connected_accounts(
     calendar_errors: &HashMap<i64, String>,
     avatars: &HashMap<i64, ProfileAvatarImages>,
     presentation: &AccountPresentationSettings,
+    has_local_mail: bool,
 ) {
     let configs: HashMap<i64, &AccountConfig> =
         configs.iter().map(|config| (config.id, config)).collect();
-    let calendar_connections: HashMap<i64, &CalendarConnection> = calendar_connections
-        .iter()
-        .map(|connection| (connection.account_id, connection))
-        .collect();
+    let mut account_calendars: HashMap<i64, Vec<&CalendarConnection>> = HashMap::new();
+    for connection in calendar_connections {
+        account_calendars
+            .entry(connection.account_id)
+            .or_default()
+            .push(connection);
+    }
     let carddav_connections: HashMap<i64, &CardDavConnection> = carddav_connections
         .iter()
         .map(|connection| (connection.account_id, connection))
@@ -214,7 +226,11 @@ pub(super) fn apply_connected_accounts(
                 .unwrap_or(&account.email)
                 .clone();
             let avatar = avatars.get(&account.id);
-            let calendar = calendar_connections.get(&account.id);
+            let account_icon = presentation.account_icon(account.id);
+            let calendars = account_calendars
+                .get(&account.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             let carddav = carddav_connections.get(&account.id);
             let profile = presentation.profile(account.id);
             Some(AccountRow {
@@ -227,13 +243,14 @@ pub(super) fn apply_connected_accounts(
                 status: account.sync_state.clone().into(),
                 sync_error: account.sync_error.clone().unwrap_or_default().into(),
                 initials: avatar_initials(&name).into(),
-                avatar: avatar
-                    .map(|images| slint_image(&images.regular))
+                avatar: account_icon.cloned().or_else(|| avatar
+                    .map(|images| slint_image(&images.regular)))
                     .unwrap_or_default(),
-                avatar_small: avatar
-                    .map(|images| slint_image(&images.small))
+                avatar_small: account_icon.cloned().or_else(|| avatar
+                    .map(|images| slint_image(&images.small)))
                     .unwrap_or_default(),
-                has_avatar: avatar.is_some(),
+                has_avatar: account_icon.is_some() || avatar.is_some(),
+                has_custom_icon: presentation.account_icons.contains_key(&account.id.to_string()),
                 profile_id: profile
                     .map(|profile| profile.id.clone())
                     .unwrap_or_default()
@@ -261,22 +278,19 @@ pub(super) fn apply_connected_accounts(
                 smtp_port: config.smtp_port.to_string().into(),
                 mail_history: config.settings.mail_history.as_str().into(),
                 sent_copy_policy: config.settings.sent_copy_policy.as_str().into(),
-                calendar_connected: calendar.is_some(),
-                calendar_enabled: calendar.is_some_and(|connection| connection.enabled),
-                calendar_status: calendar
-                    .and_then(|connection| connection.last_error.clone())
-                    .or_else(|| calendar_errors.get(&account.id).cloned())
+                keep_on_server: config.settings.keep_on_server.as_str().into(),
+                server_keeps_mail_days: account
+                    .server_keeps_mail_days
+                    .and_then(|days| i32::try_from(days).ok())
+                    .unwrap_or(-1),
+                calendar_connections: calendar_connection_rows(calendars),
+                provider_calendar_connected: calendars.iter().any(|connection| {
+                    connection.kind != flectar_mail_core::models::CalendarConnectionKind::Generic
+                }),
+                provider_calendar_error: calendar_errors
+                    .get(&account.id)
+                    .cloned()
                     .unwrap_or_default()
-                    .into(),
-                caldav_url: calendar
-                    .filter(|connection| connection.kind == "generic")
-                    .map(|connection| connection.base_url.clone())
-                    .unwrap_or_default()
-                    .into(),
-                caldav_username: calendar
-                    .filter(|connection| connection.kind == "generic")
-                    .map(|connection| connection.username.clone())
-                    .unwrap_or_else(|| config.username.clone())
                     .into(),
                 carddav_connected: carddav.is_some(),
                 carddav_enabled: carddav.is_some_and(|connection| connection.enabled),
@@ -296,6 +310,12 @@ pub(super) fn apply_connected_accounts(
         })
         .collect::<Vec<_>>();
     apply_connected_account_rows(app, rows);
+    app.set_has_device_mail(
+        has_local_mail
+            || accounts
+                .iter()
+                .any(|account| account.mail_protocol == MailProtocol::Pop3),
+    );
     let known_accounts = accounts
         .iter()
         .map(|account| account.id)
@@ -339,15 +359,14 @@ pub(super) fn apply_connected_accounts(
         .business_tabs
         .iter()
         .map(|tab| {
-            let profile = tab.icon_profile(&presentation.profiles);
+            let profile = tab.profile_ids.iter().find_map(|id| presentation.profiles.iter().find(|profile| &profile.id == id));
             let color = profile
                 .map(|profile| {
                     parse_marker_color(&profile.color)
                         .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
                 })
                 .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128));
-            let logo = profile
-                .and_then(|profile| presentation.profile_logos.get(&profile.id))
+            let logo = presentation.tab_icons.get(&tab.id)
                 .cloned()
                 .unwrap_or_default();
             BusinessTabRow {
@@ -355,9 +374,7 @@ pub(super) fn apply_connected_accounts(
                 name: tab.name.clone().into(),
                 color,
                 logo,
-                has_logo: profile.is_some_and(|profile| {
-                    presentation.profile_logos.contains_key(&profile.id)
-                }),
+                has_logo: presentation.tab_icons.contains_key(&tab.id),
                 active: presentation.active_business_tab.as_deref() == Some(tab.id.as_str()),
             }
         })
@@ -376,12 +393,76 @@ pub(super) fn refresh_connected_accounts(app: &AppWindow, state: &Rc<RefCell<Inb
         &state.calendar_errors,
         &state.profile_avatar_images,
         &state.account_presentation,
+        state.local_mail.is_some(),
+    );
+    let ui = app.global::<LocalMailUi>();
+    ui.set_can_send(!state.connected_accounts.is_empty());
+    ui.set_account_id(
+        state
+            .local_mail
+            .and_then(|local| i32::try_from(local.account_id).ok())
+            .unwrap_or(-1),
+    );
+    ui.set_messages(
+        state
+            .local_mail
+            .map_or(0, |local| i32::try_from(local.messages).unwrap_or(i32::MAX)),
+    );
+    ui.set_size(
+        state
+            .local_mail
+            .map(|local| crate::data_controller::format_storage_size(local.bytes))
+            .unwrap_or_default()
+            .into(),
     );
     prefer_shown_compose_account(app, &state);
     drop(state);
     app.global::<AccountMailPreferences>()
         .invoke_context_changed();
     app.global::<FilesUi>().invoke_context_changed();
+}
+
+/// Show the mail kept on this device, or that there is none.
+pub(super) fn apply_local_mail(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    local_mail: Option<flectar_mail_core::models::LocalMail>,
+) {
+    state.borrow_mut().local_mail = local_mail;
+    refresh_connected_accounts(app, state);
+}
+
+/// Reload the mail kept on this device, as an import or its removal left it.
+/// Counting a large import takes a moment, so it happens off the UI thread.
+pub(super) fn refresh_local_mail(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    runtime: &tokio::runtime::Runtime,
+) {
+    let (core, reload) = {
+        let mut state = state.borrow_mut();
+        let Some(core) = state.core.clone() else {
+            return;
+        };
+        state.local_mail_reloads += 1;
+        (core, state.local_mail_reloads)
+    };
+    let load: documents::DocumentFuture<Option<flectar_mail_core::models::LocalMail>> =
+        Box::pin(async move { core.load_local_mail().await });
+    let app = app.as_weak();
+    let state = Rc::clone(state);
+    documents::run_request(runtime, load, move |local_mail| {
+        let Some(app) = app.upgrade() else {
+            return;
+        };
+        if state.borrow().local_mail_reloads != reload {
+            return;
+        }
+        match local_mail {
+            Ok(local_mail) => apply_local_mail(&app, &state, local_mail),
+            Err(error) => tracing::warn!(%error, "reloading local mail failed"),
+        }
+    });
 }
 
 pub(super) fn update_connected_accounts(
@@ -447,6 +528,34 @@ pub(super) fn update_connected_accounts(
     if shows_new_account {
         app.invoke_select_mail_profile("".into());
     }
+}
+
+/// One account's calendar connections as settings shows them.
+fn calendar_connection_rows(connections: &[&CalendarConnection]) -> ModelRc<CalendarConnectionRow> {
+    let rows = connections
+        .iter()
+        .filter_map(|connection| {
+            Some(CalendarConnectionRow {
+                id: i32::try_from(connection.id).ok()?,
+                kind: connection.kind.as_str().into(),
+                base_url: connection.base_url.as_str().into(),
+                host: url::Url::parse(&connection.base_url)
+                    .ok()
+                    .and_then(|url| url.host_str().map(str::to_owned))
+                    .unwrap_or_default()
+                    .into(),
+                username: connection.username.as_str().into(),
+                calendar_name: match connection.calendars.as_slice() {
+                    [name] => name.as_str().into(),
+                    _ => Default::default(),
+                },
+                calendar_count: i32::try_from(connection.calendars.len()).unwrap_or(i32::MAX),
+                enabled: connection.enabled,
+                error: connection.last_error.as_deref().unwrap_or_default().into(),
+            })
+        })
+        .collect::<Vec<_>>();
+    ModelRc::new(VecModel::from(rows))
 }
 
 pub(super) fn connected_account_rows(app: &AppWindow) -> Vec<AccountRow> {
@@ -680,7 +789,8 @@ mod mail_transport_suggestion_tests {
             "imap.example.com",
             "smtp.example.com",
         )];
-        let suggestion = reusable_mail_transport(&configs, "second@example.COM").unwrap();
+        let suggestion =
+            reusable_mail_transport(&configs, "second@example.COM", MailProtocol::Imap).unwrap();
         assert_eq!(suggestion.incoming_host, "imap.example.com");
         assert_eq!(suggestion.smtp_host, "smtp.example.com");
     }
@@ -701,7 +811,29 @@ mod mail_transport_suggestion_tests {
                 "smtp.example.com",
             ),
         ];
-        assert!(reusable_mail_transport(&configs, "new@example.com").is_none());
-        assert!(reusable_mail_transport(&configs, "new@").is_none());
+        assert!(reusable_mail_transport(&configs, "new@example.com", MailProtocol::Imap).is_none());
+        assert!(reusable_mail_transport(&configs, "new@", MailProtocol::Imap).is_none());
+    }
+
+    #[test]
+    fn only_accounts_of_the_form_protocol_are_reused() {
+        let mut pop3 = config(2, "pop@example.com", "pop.example.com", "smtp.example.com");
+        pop3.mail_protocol = MailProtocol::Pop3;
+        let configs = vec![
+            config(
+                1,
+                "imap@example.com",
+                "imap.example.com",
+                "smtp.example.com",
+            ),
+            pop3,
+        ];
+        let host = |protocol| {
+            reusable_mail_transport(&configs, "new@example.com", protocol)
+                .map(|config| config.incoming_host.as_str())
+        };
+        assert_eq!(host(MailProtocol::Pop3), Some("pop.example.com"));
+        assert_eq!(host(MailProtocol::Imap), Some("imap.example.com"));
+        assert_eq!(host(MailProtocol::Jmap), None);
     }
 }

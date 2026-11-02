@@ -33,6 +33,7 @@ pub(super) fn register_settings_preference_callbacks(
     state: &Rc<RefCell<InboxState>>,
     runtime: &Rc<tokio::runtime::Runtime>,
 ) {
+    register_branding_callbacks(app, state, runtime);
     let app_weak = app.as_weak();
     let state_for_notifications = Rc::clone(state);
     let runtime_for_notifications = Rc::clone(runtime);
@@ -304,6 +305,52 @@ pub(super) fn register_settings_preference_callbacks(
             Ok(()) => app.set_sync_status(UiMessage::plain("Language preference saved.")),
             Err(error) => {
                 app.set_sync_status(UiMessage::detail("Could not save language: {}", error))
+            }
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_time_format = Rc::clone(state);
+    let runtime_for_time_format = Rc::clone(runtime);
+    app.on_save_time_format(move |value| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(format) = flectar_mail_core::models::TimeFormat::parse(&value) else {
+            return;
+        };
+        date_format::reload(&app);
+        let Some(core) = state_for_time_format.borrow().core.clone() else {
+            app.set_sync_status(UiMessage::plain("Time format updated for this session."));
+            return;
+        };
+        match runtime_for_time_format.block_on(core.set_time_format(format)) {
+            Ok(()) => app.set_sync_status(UiMessage::plain("Time format preference saved.")),
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not save time format: {}", error))
+            }
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_app_icon = Rc::clone(state);
+    let runtime_for_app_icon = Rc::clone(runtime);
+    app.global::<AppIcon>().on_choose(move |variant| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let previous = crate::app_icon::choice(app.global::<AppIcon>().get_variant());
+        let icon = crate::app_icon::choice(variant);
+        crate::app_icon::apply(&app, icon);
+        let Some(core) = state_for_app_icon.borrow().core.clone() else {
+            app.set_sync_status(UiMessage::plain("App icon updated for this session."));
+            return;
+        };
+        match runtime_for_app_icon.block_on(core.set_app_icon(icon)) {
+            Ok(()) => app.set_sync_status(UiMessage::plain("App icon saved.")),
+            Err(error) => {
+                crate::app_icon::apply(&app, previous);
+                app.set_sync_status(UiMessage::detail("Could not save app icon: {}", error));
             }
         }
     });
@@ -698,7 +745,9 @@ pub(super) fn register_settings_preference_callbacks(
             return;
         };
         let Some(core) = state_for_registry.borrow().core.clone() else {
-            app.set_sync_status(UiMessage::plain("Importing a brand registry requires local mail data."));
+            app.set_sync_status(UiMessage::plain(
+                "Importing a brand registry requires local mail data.",
+            ));
             return;
         };
         let Some(path) = rfd::FileDialog::new()
@@ -743,9 +792,10 @@ pub(super) fn register_settings_preference_callbacks(
                 &runtime_for_tab,
                 &settings,
             ),
-            Err(error) => {
-                app.set_sync_status(UiMessage::detail("Could not open that business tab: {}", error))
-            }
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not open that business tab: {}",
+                error,
+            )),
         }
     });
 
@@ -787,9 +837,10 @@ pub(super) fn register_settings_preference_callbacks(
                 &runtime_for_save_tab,
                 &settings,
             ),
-            Err(error) => {
-                app.set_sync_status(UiMessage::detail("Could not save that business tab: {}", error))
-            }
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not save that business tab: {}",
+                error,
+            )),
         }
     });
 
@@ -834,9 +885,10 @@ pub(super) fn register_settings_preference_callbacks(
                 &runtime_for_move_tab,
                 &settings,
             ),
-            Err(error) => {
-                app.set_sync_status(UiMessage::detail("Could not move that business tab: {}", error))
-            }
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not move that business tab: {}",
+                error,
+            )),
         }
     });
 
@@ -865,7 +917,9 @@ pub(super) fn register_settings_preference_callbacks(
             }
         };
         let Some(extension) = flectar_mail_core::brand_registry::extension_for(&bytes) else {
-            app.set_sync_status(UiMessage::plain("A profile logo must be a PNG, JPEG, GIF, or WebP image."));
+            app.set_sync_status(UiMessage::plain(
+                "A profile logo must be a PNG, JPEG, GIF, or WebP image.",
+            ));
             return;
         };
         if bytes.len() > 2 * 1024 * 1024 {
@@ -884,7 +938,9 @@ pub(super) fn register_settings_preference_callbacks(
             app.set_sync_status(UiMessage::detail("Could not store that logo: {}", error));
             return;
         }
-        match runtime_for_logo.block_on(core.set_profile_logo(profile_id.to_string(), Some(relative))) {
+        match runtime_for_logo
+            .block_on(core.set_profile_logo(profile_id.to_string(), Some(relative)))
+        {
             Ok(settings) => apply_account_presentation_settings(
                 &app,
                 &state_for_logo,
@@ -995,9 +1051,7 @@ fn save_oauth_settings(
             }
         });
     });
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1042,4 +1096,338 @@ mod tests {
         slint::platform::update_timers_and_animations();
         assert_eq!(theme.get_custom_light_primary(), chosen);
     }
+}
+
+#[derive(Default)]
+struct BusinessTabDraft {
+    id: Option<String>,
+    icon: Option<String>,
+    accounts: std::collections::BTreeSet<i64>,
+}
+
+// The draft starts from the sidebar's current membership. Recipient-only
+// views inherit every connected account until an explicit checklist is saved.
+fn initial_tab_accounts(
+    explicit: Option<&[i64]>,
+    scope: &str,
+    inherited: &[i64],
+    connected: &[i64],
+) -> std::collections::BTreeSet<i64> {
+    explicit
+        .unwrap_or(if scope == "recipients" {
+            connected
+        } else {
+            inherited
+        })
+        .iter()
+        .copied()
+        .collect()
+}
+
+#[cfg(test)]
+mod branding_draft_tests {
+    use super::initial_tab_accounts;
+
+    #[test]
+    fn recipient_tab_without_explicit_members_starts_with_every_connected_account() {
+        let selected = initial_tab_accounts(None, "recipients", &[9], &[3, 1, 3, 2]);
+        assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn recipient_tab_keeps_explicit_members_including_empty_selection() {
+        assert!(initial_tab_accounts(Some(&[]), "recipients", &[9], &[1, 2]).is_empty());
+        let selected = initial_tab_accounts(Some(&[2, 2]), "recipients", &[9], &[1, 2]);
+        assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn other_scopes_keep_inherited_profile_membership() {
+        for scope in ["accounts", "any", "narrow"] {
+            let selected = initial_tab_accounts(None, scope, &[9, 4, 9], &[1, 2]);
+            assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![4, 9]);
+        }
+    }
+}
+
+fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
+    let editor = app.global::<BusinessTabEditorUi>();
+    let query = editor.get_query().trim().to_lowercase();
+    let members = app
+        .get_connected_accounts()
+        .iter()
+        .filter(|account| {
+            query.is_empty()
+                || account.name.to_lowercase().contains(&query)
+                || account.email.to_lowercase().contains(&query)
+        })
+        .map(|account| ProfileMemberRow {
+            id: account.id,
+            name: account.name,
+            email: account.email,
+            initials: account.initials,
+            avatar: account.avatar_small,
+            has_avatar: account.has_avatar,
+            other_profile: Default::default(),
+            checked: draft.accounts.contains(&i64::from(account.id)),
+        })
+        .collect::<Vec<_>>();
+    editor.set_members(ModelRc::new(VecModel::from(members)));
+    editor.set_selected_count(draft.accounts.len().try_into().unwrap_or(i32::MAX));
+}
+
+fn choose_custom_icon_path() -> Option<std::path::PathBuf> {
+    #[cfg(desktop)]
+    {
+        rfd::FileDialog::new()
+            .set_title("Choose icon")
+            .add_filter("Image", &["png", "jpg", "jpeg", "gif", "webp", "ico"])
+            .pick_file()
+    }
+    #[cfg(not(desktop))]
+    {
+        None
+    }
+}
+
+fn register_branding_callbacks(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    runtime: &Rc<tokio::runtime::Runtime>,
+) {
+    use crate::custom_icons::{IconKind, import_icon};
+    let draft = Rc::new(RefCell::new(None::<BusinessTabDraft>));
+    let weak = app.as_weak();
+    let open_state = Rc::clone(state);
+    let open_draft = Rc::clone(&draft);
+    app.global::<BusinessTabEditorUi>().on_open(move |id| {
+        let Some(app) = weak.upgrade() else { return };
+        let state = open_state.borrow();
+        let presentation = &state.account_presentation;
+        let tab = presentation
+            .business_tabs
+            .iter()
+            .find(|tab| tab.id == id.as_str());
+        if !id.is_empty() && tab.is_none() {
+            return;
+        }
+        let data_root = state.core.as_ref().map(|core| core.data_dir());
+        let icon = tab.and_then(|tab| tab.icon.clone());
+        let preview = icon.as_ref().and_then(|relative| {
+            data_root
+                .as_ref()
+                .and_then(|root| load_profile_logo(&root.join(relative)))
+        });
+        let initial = BusinessTabDraft {
+            id: tab.map(|tab| tab.id.clone()),
+            icon,
+            accounts: tab
+                .map(|tab| {
+                    initial_tab_accounts(
+                        tab.account_ids.as_deref(),
+                        tab.resolved_scope(),
+                        &presentation.accounts_in(&tab.profile_ids),
+                        &app.get_connected_accounts()
+                            .iter()
+                            .map(|account| i64::from(account.id))
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .unwrap_or_default(),
+        };
+        let editor = app.global::<BusinessTabEditorUi>();
+        editor.set_editing_id(id);
+        editor.set_name(tab.map(|tab| tab.name.clone()).unwrap_or_default().into());
+        editor.set_query(Default::default());
+        editor.set_error(Default::default());
+        editor.set_has_icon(initial.icon.is_some());
+        editor.set_icon(preview.unwrap_or_default());
+        editor.set_recipient_only(tab.is_some_and(|tab| tab.resolved_scope() == "recipients"));
+        editor.set_has_special_rules(tab.is_some_and(|tab| {
+            !tab.recipient_patterns.is_empty()
+                || !tab.sender_addresses.is_empty()
+                || !tab.sender_names.is_empty()
+                || !tab.sender_domains.is_empty()
+        }));
+        publish_tab_members(&app, &initial);
+        *open_draft.borrow_mut() = Some(initial);
+        editor.set_visible(true);
+    });
+
+    let weak = app.as_weak();
+    let search_draft = Rc::clone(&draft);
+    app.global::<BusinessTabEditorUi>().on_search(move |query| {
+        let Some(app) = weak.upgrade() else { return };
+        app.global::<BusinessTabEditorUi>().set_query(query);
+        if let Some(draft) = search_draft.borrow().as_ref() {
+            publish_tab_members(&app, draft);
+        }
+    });
+    let weak = app.as_weak();
+    let member_draft = Rc::clone(&draft);
+    app.global::<BusinessTabEditorUi>()
+        .on_toggle_member(move |id, checked| {
+            let Some(app) = weak.upgrade() else { return };
+            if let Some(draft) = member_draft.borrow_mut().as_mut() {
+                if checked {
+                    draft.accounts.insert(i64::from(id));
+                } else {
+                    draft.accounts.remove(&i64::from(id));
+                }
+                publish_tab_members(&app, draft);
+            }
+        });
+    let weak = app.as_weak();
+    let icon_draft = Rc::clone(&draft);
+    let icon_state = Rc::clone(state);
+    app.global::<BusinessTabEditorUi>().on_choose_icon(move || {
+        let Some(app) = weak.upgrade() else { return };
+        if icon_draft.borrow().is_none() {
+            return;
+        }
+        let editor = app.global::<BusinessTabEditorUi>();
+        let Some(core) = icon_state.borrow().core.clone() else {
+            editor.set_error("Icon changes require local mail data.".into());
+            return;
+        };
+        let Some(source) = choose_custom_icon_path() else {
+            return;
+        };
+        let data_root = core.data_dir();
+        match import_icon(&data_root, &source, IconKind::Tab) {
+            Ok(relative) => {
+                let Some(image) = load_profile_logo(&data_root.join(&relative)) else {
+                    editor.set_error("Could not preview that icon. The draft is unchanged.".into());
+                    return;
+                };
+                if let Some(draft) = icon_draft.borrow_mut().as_mut() {
+                    draft.icon = Some(relative);
+                }
+                editor.set_icon(image);
+                editor.set_has_icon(true);
+                editor.set_error(Default::default());
+            }
+            Err(error) => editor.set_error(format!("Could not import icon: {error}").into()),
+        }
+    });
+    let weak = app.as_weak();
+    let remove_draft = Rc::clone(&draft);
+    app.global::<BusinessTabEditorUi>().on_remove_icon(move || {
+        let Some(app) = weak.upgrade() else { return };
+        if let Some(draft) = remove_draft.borrow_mut().as_mut() {
+            draft.icon = None;
+        }
+        let editor = app.global::<BusinessTabEditorUi>();
+        editor.set_icon(Default::default());
+        editor.set_has_icon(false);
+        editor.set_error(Default::default());
+    });
+    let weak = app.as_weak();
+    let cancel_draft = Rc::clone(&draft);
+    app.global::<BusinessTabEditorUi>().on_cancel(move || {
+        *cancel_draft.borrow_mut() = None;
+        if let Some(app) = weak.upgrade() {
+            app.global::<BusinessTabEditorUi>().set_visible(false);
+        }
+    });
+    let weak = app.as_weak();
+    let save_draft = Rc::clone(&draft);
+    let save_state = Rc::clone(state);
+    let save_runtime = Rc::clone(runtime);
+    app.global::<BusinessTabEditorUi>().on_save(move || {
+        let Some(app) = weak.upgrade() else {
+            return false;
+        };
+        let editor = app.global::<BusinessTabEditorUi>();
+        let Some(core) = save_state.borrow().core.clone() else {
+            editor.set_error("Tab changes require local mail data.".into());
+            return false;
+        };
+        let borrowed = save_draft.borrow();
+        let Some(draft) = borrowed.as_ref() else {
+            return false;
+        };
+        let name = editor.get_name().trim().to_string();
+        if name.is_empty() {
+            editor.set_error("Enter a tab name.".into());
+            return false;
+        }
+        let result = save_runtime.block_on(core.save_business_tab_details(
+            draft.id.clone(),
+            name,
+            draft.accounts.iter().copied().collect(),
+            draft.icon.clone(),
+        ));
+        drop(borrowed);
+        match result {
+            Ok(settings) => {
+                apply_account_presentation_settings(&app, &save_state, &save_runtime, &settings);
+                *save_draft.borrow_mut() = None;
+                editor.set_visible(false);
+                editor.set_error(Default::default());
+                app.set_sync_status(UiMessage::plain("Tab saved."));
+                true
+            }
+            Err(error) => {
+                editor.set_error(format!("Could not save tab: {error}").into());
+                false
+            }
+        }
+    });
+
+    let weak = app.as_weak();
+    let icon_state = Rc::clone(state);
+    let icon_runtime = Rc::clone(runtime);
+    app.on_choose_account_icon(move |id| {
+        let Some(app) = weak.upgrade() else { return };
+        let Some(core) = icon_state.borrow().core.clone() else {
+            return;
+        };
+        let Some(source) = choose_custom_icon_path() else {
+            return;
+        };
+        let relative = match import_icon(&core.data_dir(), &source, IconKind::Account) {
+            Ok(relative) => relative,
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail(
+                    "Could not import account icon: {}",
+                    error,
+                ));
+                return;
+            }
+        };
+        match icon_runtime.block_on(core.set_account_icon(i64::from(id), Some(relative))) {
+            Ok(settings) => {
+                apply_account_presentation_settings(&app, &icon_state, &icon_runtime, &settings);
+                app.set_sync_status(UiMessage::plain("Account icon saved."));
+            }
+            Err(error) => {
+                app.set_sync_status(UiMessage::detail("Could not save account icon: {}", error))
+            }
+        }
+    });
+    let weak = app.as_weak();
+    let remove_state = Rc::clone(state);
+    let remove_runtime = Rc::clone(runtime);
+    app.on_remove_account_icon(move |id| {
+        let Some(app) = weak.upgrade() else { return };
+        let Some(core) = remove_state.borrow().core.clone() else {
+            return;
+        };
+        match remove_runtime.block_on(core.set_account_icon(i64::from(id), None)) {
+            Ok(settings) => {
+                apply_account_presentation_settings(
+                    &app,
+                    &remove_state,
+                    &remove_runtime,
+                    &settings,
+                );
+                app.set_sync_status(UiMessage::plain("Account icon removed."));
+            }
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not remove account icon: {}",
+                error,
+            )),
+        }
+    });
 }

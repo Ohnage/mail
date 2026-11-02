@@ -2374,7 +2374,7 @@ msgstr "Название вкладки"
 
 #: ui/components/business-tab-editor.slint:57
 msgid "Show name in the tab strip"
-msgstr ""
+msgstr "Показывать название на панели вкладок"
 
 #: ui/components/business-tab-editor.slint:74
 msgid "Icon"
@@ -2394,6 +2394,10 @@ msgid ""
 "includes all its mail; an address inbox shows mail received at that address. "
 "This does not enable sending from an alias."
 msgstr ""
+"Почтовые ящики и входящие по адресам могут отображаться в нескольких "
+"группах. В почтовом ящике отображается вся его почта, а во входящих по "
+"адресу — письма, полученные на этот адрес. Это не разрешает отправку с "
+"адреса-псевдонима."
 
 #: ui/components/business-tab-editor.slint:90
 msgid ""
@@ -2401,6 +2405,10 @@ msgid ""
 "searches every account. Address inboxes keep their own receiving-address and "
 "source filters."
 msgstr ""
+"Выбранные почтовые ящики определяют содержимое боковой панели. Существующие "
+"правила сопоставления получателей по-прежнему проверяют все учётные записи. "
+"Входящие по адресам сохраняют собственные фильтры по адресу получателя и "
+"источнику."
 
 #: ui/components/business-tab-editor.slint:94
 msgid "This tab also keeps its existing recipient and sender matching rules."
@@ -2410,11 +2418,11 @@ msgstr ""
 
 #: ui/components/business-tab-editor.slint:99
 msgid "Search mailboxes and address inboxes for this group"
-msgstr ""
+msgstr "Поиск почтовых ящиков и входящих по адресам для этой группы"
 
 #: ui/components/business-tab-editor.slint:100
 msgid "Search mailboxes and address inboxes"
-msgstr ""
+msgstr "Поиск почтовых ящиков и входящих по адресам"
 
 #: ui/components/business-tab-editor.slint:104
 msgid "{} selected"
@@ -2422,7 +2430,7 @@ msgstr "Выбрано: {}"
 
 #: ui/components/business-tab-editor.slint:115
 msgid "No mailboxes or address inboxes match your search."
-msgstr ""
+msgstr "По запросу не найдены почтовые ящики или входящие по адресам."
 
 #: ui/components/business-tab-editor.slint:128
 msgid "Save tab"
@@ -2435,6 +2443,7 @@ msgstr "Вкладки компаний"
 #: ui/components/business-tab-editor.slint:145
 msgid "Organize your groups with a name, icon, mailboxes and address inboxes."
 msgstr ""
+"Настройте группы: название, значок, почтовые ящики и входящие по адресам."
 
 #: ui/components/business-tab-editor.slint:155
 msgid "Edit {}"
@@ -2458,35 +2467,41 @@ msgstr "Добавить вкладку"
 
 #: ui/components/business-tab-editor.slint:175
 msgid "Add a receiving-only inbox"
-msgstr ""
+msgstr "Добавить входящие (только приём)"
 
 #: ui/components/business-tab-editor.slint:176
 msgid ""
 "Create an inbox view for an address you receive mail at. This does not "
 "authorize sending from that address."
 msgstr ""
+"Создайте представление входящих для адреса, на который вы получаете почту. "
+"Это не даёт разрешения отправлять письма с этого адреса."
 
 #: ui/components/business-tab-editor.slint:177
 msgid "Receiving address"
-msgstr ""
+msgstr "Адрес получения"
 
 #: ui/components/business-tab-editor.slint:178
 msgid "Source mailboxes (optional, comma-separated)"
-msgstr ""
+msgstr "Почтовые ящики-источники (необязательно, через запятую)"
 
 #: ui/components/business-tab-editor.slint:179
 msgid ""
 "Leave sources empty to search all connected accounts. A source that is not "
 "connected stays selectable and will show no mail until it is connected."
 msgstr ""
+"Не указывайте источники, чтобы искать во всех подключённых учётных записях. "
+"Неподключённый источник можно выбрать, но до его подключения письма "
+"отображаться не будут."
 
 #: ui/components/business-tab-editor.slint:181
 msgid "Receiving-only inbox added. You can now select it in a group."
 msgstr ""
+"Входящие только для приёма добавлены. Теперь их можно выбрать в группе."
 
 #: ui/components/business-tab-editor.slint:182
 msgid "Add inbox view"
-msgstr ""
+msgstr "Добавить представление входящих"
 
 #: ui/components/calendar-agenda.slint:39
 msgid "Filter calendars · {} hidden"
@@ -3015,11 +3030,11 @@ msgstr "Удалить этот шаблон с этого устройства?
 
 #: ui/components/inbox-view-choice.slint:15
 msgid "Address inbox"
-msgstr ""
+msgstr "Входящие по адресу"
 
 #: ui/components/inbox-view-choice.slint:15
 msgid "Mailbox (all mail)"
-msgstr ""
+msgstr "Почтовый ящик (вся почта)"
 
 #: ui/components/kbd.slint:23
 msgctxt "Keyboard key"
@@ -3394,7 +3409,7 @@ msgstr "УЧЁТНЫЕ ЗАПИСИ"
 
 #: ui/components/sidebar.slint:501
 msgid "Address inbox {}"
-msgstr ""
+msgstr "Входящие по адресу {}"
 
 #: ui/components/sidebar.slint:617
 msgid "{} label, {} account"
@@ -7409,27 +7424,3 @@ msgstr "Восстановить"
 #: ui/window-chrome.slint:202 ui/window-chrome.slint:239
 msgid "Maximize"
 msgstr "Развернуть"
-
-#~ msgid "Accounts can appear in several tabs. This does not move mail."
-#~ msgstr ""
-#~ "Учётные записи могут отображаться на нескольких вкладках. Письма при этом "
-#~ "не перемещаются."
-
-#~ msgid ""
-#~ "Selected accounts control the sidebar. Recipient matching still searches "
-#~ "every account."
-#~ msgstr ""
-#~ "Выбранные учётные записи определяют содержимое боковой панели. При "
-#~ "сопоставлении получателей по-прежнему проверяются все учётные записи."
-
-#~ msgid "Search accounts for this tab"
-#~ msgstr "Поиск учётных записей для этой вкладки"
-
-#~ msgid "Search accounts"
-#~ msgstr "Поиск учётных записей"
-
-#~ msgid "No accounts match your search."
-#~ msgstr "Нет учётных записей, соответствующих запросу."
-
-#~ msgid "Choose each tab's name, icon and accounts."
-#~ msgstr "Выберите название, значок и учётные записи для каждой вкладки."

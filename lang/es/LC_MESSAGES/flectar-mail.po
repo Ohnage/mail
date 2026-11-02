@@ -2401,7 +2401,7 @@ msgstr "Nombre de la pestaña"
 
 #: ui/components/business-tab-editor.slint:57
 msgid "Show name in the tab strip"
-msgstr ""
+msgstr "Mostrar el nombre en la barra de pestañas"
 
 #: ui/components/business-tab-editor.slint:74
 msgid "Icon"
@@ -2421,6 +2421,9 @@ msgid ""
 "includes all its mail; an address inbox shows mail received at that address. "
 "This does not enable sending from an alias."
 msgstr ""
+"Los buzones y las bandejas por dirección pueden aparecer en varios grupos. "
+"Un buzón incluye todo su correo; una bandeja por dirección muestra el correo "
+"recibido en esa dirección. Esto no permite enviar desde un alias."
 
 #: ui/components/business-tab-editor.slint:90
 msgid ""
@@ -2428,6 +2431,10 @@ msgid ""
 "searches every account. Address inboxes keep their own receiving-address and "
 "source filters."
 msgstr ""
+"Los buzones seleccionados determinan el contenido de la barra lateral. La "
+"búsqueda actual por destinatarios sigue abarcando todas las cuentas. Las "
+"bandejas por dirección conservan sus propios filtros de dirección de "
+"recepción y origen."
 
 #: ui/components/business-tab-editor.slint:94
 msgid "This tab also keeps its existing recipient and sender matching rules."
@@ -2437,11 +2444,11 @@ msgstr ""
 
 #: ui/components/business-tab-editor.slint:99
 msgid "Search mailboxes and address inboxes for this group"
-msgstr ""
+msgstr "Buscar buzones y bandejas por dirección para este grupo"
 
 #: ui/components/business-tab-editor.slint:100
 msgid "Search mailboxes and address inboxes"
-msgstr ""
+msgstr "Buscar buzones y bandejas por dirección"
 
 #: ui/components/business-tab-editor.slint:104
 msgid "{} selected"
@@ -2449,7 +2456,7 @@ msgstr "{} seleccionadas"
 
 #: ui/components/business-tab-editor.slint:115
 msgid "No mailboxes or address inboxes match your search."
-msgstr ""
+msgstr "Ningún buzón ni bandeja por dirección coincide con tu búsqueda."
 
 #: ui/components/business-tab-editor.slint:128
 msgid "Save tab"
@@ -2462,6 +2469,8 @@ msgstr "Pestañas de empresas"
 #: ui/components/business-tab-editor.slint:145
 msgid "Organize your groups with a name, icon, mailboxes and address inboxes."
 msgstr ""
+"Organiza tus grupos con un nombre, un icono, buzones y bandejas por "
+"dirección."
 
 #: ui/components/business-tab-editor.slint:155
 msgid "Edit {}"
@@ -2485,35 +2494,41 @@ msgstr "Añadir pestaña"
 
 #: ui/components/business-tab-editor.slint:175
 msgid "Add a receiving-only inbox"
-msgstr ""
+msgstr "Añadir una bandeja solo de recepción"
 
 #: ui/components/business-tab-editor.slint:176
 msgid ""
 "Create an inbox view for an address you receive mail at. This does not "
 "authorize sending from that address."
 msgstr ""
+"Crea una vista de bandeja de entrada para una dirección en la que recibes "
+"correo. Esto no autoriza el envío desde esa dirección."
 
 #: ui/components/business-tab-editor.slint:177
 msgid "Receiving address"
-msgstr ""
+msgstr "Dirección de recepción"
 
 #: ui/components/business-tab-editor.slint:178
 msgid "Source mailboxes (optional, comma-separated)"
-msgstr ""
+msgstr "Buzones de origen (opcionales, separados por comas)"
 
 #: ui/components/business-tab-editor.slint:179
 msgid ""
 "Leave sources empty to search all connected accounts. A source that is not "
 "connected stays selectable and will show no mail until it is connected."
 msgstr ""
+"Deja el campo de orígenes en blanco para buscar en todas las cuentas "
+"conectadas. Los orígenes no conectados se pueden seleccionar, pero no "
+"mostrarán correo hasta que se conecten."
 
 #: ui/components/business-tab-editor.slint:181
 msgid "Receiving-only inbox added. You can now select it in a group."
 msgstr ""
+"Bandeja solo de recepción añadida. Ya puedes seleccionarla en un grupo."
 
 #: ui/components/business-tab-editor.slint:182
 msgid "Add inbox view"
-msgstr ""
+msgstr "Añadir vista de bandeja de entrada"
 
 #: ui/components/calendar-agenda.slint:39
 msgid "Filter calendars · {} hidden"
@@ -3041,11 +3056,11 @@ msgstr "¿Eliminar esta plantilla de este dispositivo?"
 
 #: ui/components/inbox-view-choice.slint:15
 msgid "Address inbox"
-msgstr ""
+msgstr "Bandeja por dirección"
 
 #: ui/components/inbox-view-choice.slint:15
 msgid "Mailbox (all mail)"
-msgstr ""
+msgstr "Buzón (todo el correo)"
 
 #: ui/components/kbd.slint:23
 msgctxt "Keyboard key"
@@ -3421,7 +3436,7 @@ msgstr "CUENTAS"
 
 #: ui/components/sidebar.slint:501
 msgid "Address inbox {}"
-msgstr ""
+msgstr "Bandeja por dirección {}"
 
 #: ui/components/sidebar.slint:617
 msgid "{} label, {} account"
@@ -7420,27 +7435,3 @@ msgstr "Restaurar"
 #: ui/window-chrome.slint:202 ui/window-chrome.slint:239
 msgid "Maximize"
 msgstr "Maximizar"
-
-#~ msgid "Accounts can appear in several tabs. This does not move mail."
-#~ msgstr ""
-#~ "Las cuentas pueden aparecer en varias pestañas. Esto no mueve el correo."
-
-#~ msgid ""
-#~ "Selected accounts control the sidebar. Recipient matching still searches "
-#~ "every account."
-#~ msgstr ""
-#~ "Las cuentas seleccionadas determinan el contenido de la barra lateral. La "
-#~ "búsqueda de coincidencias de destinatarios sigue abarcando todas las "
-#~ "cuentas."
-
-#~ msgid "Search accounts for this tab"
-#~ msgstr "Buscar cuentas para esta pestaña"
-
-#~ msgid "Search accounts"
-#~ msgstr "Buscar cuentas"
-
-#~ msgid "No accounts match your search."
-#~ msgstr "Ninguna cuenta coincide con tu búsqueda."
-
-#~ msgid "Choose each tab's name, icon and accounts."
-#~ msgstr "Elige el nombre, el icono y las cuentas de cada pestaña."

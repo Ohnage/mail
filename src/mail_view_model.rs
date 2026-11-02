@@ -524,14 +524,7 @@ pub(super) fn render_current(
     refresh_sidebar(state);
     app.set_selected_scope_title(
         match scope {
-            Scope::AddressInbox(id) => state
-                .borrow()
-                .account_presentation
-                .address_views
-                .iter()
-                .find(|view| view.id == id)
-                .map(|view| view.address.clone())
-                .unwrap_or_else(|| "Address inbox".into()),
+            Scope::AddressInbox(id) => state.borrow().account_presentation.inbox_title(id),
             _ => mailbox_scope_title(scope, &mailboxes, &labels),
         }
         .into(),
@@ -1347,14 +1340,7 @@ pub(super) fn refresh_list_metadata(app: &AppWindow, state: &Rc<RefCell<InboxSta
     refresh_sidebar(state);
     app.set_selected_scope_title(
         match scope {
-            Scope::AddressInbox(id) => state
-                .borrow()
-                .account_presentation
-                .address_views
-                .iter()
-                .find(|view| view.id == id)
-                .map(|view| view.address.clone())
-                .unwrap_or_else(|| "Address inbox".into()),
+            Scope::AddressInbox(id) => state.borrow().account_presentation.inbox_title(id),
             _ => mailbox_scope_title(scope, &mailboxes, &labels),
         }
         .into(),

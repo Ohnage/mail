@@ -577,7 +577,13 @@ pub(crate) async fn load_startup_snapshot(
     let core = CoreMailSource::start(paths, credentials, oauth_redirects).await?;
     metrics.emit("core_opened", serde_json::Value::Null);
     // The first page shows only the active profile's accounts.
-    let mut settings = core.load_settings().await.ok();
+    let mut settings = match core.refresh_inbox_catalog().await {
+        Ok(settings) => Some(settings),
+        Err(error) => {
+            tracing::warn!(%error, "Receiving address discovery failed; retaining saved settings");
+            core.load_settings().await.ok()
+        }
+    };
     if let Ok(Some(updated)) = core.import_brand_registry_if_changed().await {
         settings = Some(updated);
     }
@@ -758,6 +764,10 @@ pub(crate) fn apply_settings(app: &AppWindow, settings: &Settings) {
     app.set_google_client_id(settings.google_client_id.clone().into());
     app.set_google_client_secret(settings.google_client_secret.clone().into());
     app.set_ms_client_id(settings.ms_client_id.clone().into());
+    app.set_download_directory(
+        crate::documents::download_directory_label(&settings.download_directory).into(),
+    );
+    app.set_download_directory_available(cfg!(desktop));
     app.set_notifications_enabled(settings.notifications_enabled);
     app.set_notification_sound_enabled(settings.sound_enabled);
     app.set_notification_scope(settings.notification_scope.clone().into());
@@ -779,6 +789,7 @@ pub(crate) fn apply_settings(app: &AppWindow, settings: &Settings) {
     crate::app_icon::apply(app, settings.app_icon);
     app.set_show_avatars(settings.show_avatars);
     app.set_group_mail_by_date(settings.group_mail_by_date);
+    app.set_show_tabs(settings.show_tabs);
     app.set_show_account_markers(settings.show_account_badges);
     app.set_show_message_preview(settings.show_message_preview);
     app.set_workspace_layout(

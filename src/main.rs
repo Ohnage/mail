@@ -13,6 +13,7 @@ mod autostart;
 #[cfg(test)]
 mod branding_surface_tests;
 mod browser;
+mod inbox_account_presentation;
 pub use browser::ExternalUrlOpener;
 mod calendar;
 mod compose_controller;
@@ -498,6 +499,8 @@ struct UiTaskUpdate {
 
 #[derive(Clone, Default)]
 struct AccountPresentationSettings {
+    inbox_accounts: Vec<flectar_mail_core::models::InboxAccount>,
+    business_tab_accounts: HashMap<String, Vec<i64>>,
     address_views: Vec<flectar_mail_core::models::AddressView>,
     address_rules: Vec<flectar_mail_core::models::AddressRule>,
     connected_account_emails: HashMap<String, i64>,
@@ -519,6 +522,8 @@ struct AccountPresentationSettings {
 impl AccountPresentationSettings {
     fn from_settings(settings: &Settings) -> Self {
         Self {
+            inbox_accounts: settings.inbox_accounts.clone(),
+            business_tab_accounts: settings.business_tab_accounts.clone(),
             address_views: settings.address_views.clone(),
             address_rules: settings.address_rules.clone(),
             connected_account_emails: HashMap::new(),
@@ -541,6 +546,16 @@ impl AccountPresentationSettings {
         use flectar_mail_core::brand_registry::safe_icon_relative;
         self.account_icon_images.clear();
         self.tab_icons.clear();
+        for account in &self.inbox_accounts {
+            if let Some(relative) = account.icon.as_deref().and_then(|path| {
+                safe_icon_relative(path)
+                    .or_else(|| flectar_mail_core::brand_registry::safe_logo_relative(path))
+            }) && let Some(image) = load_profile_logo(&data_dir.join(relative))
+            {
+                self.account_icon_images
+                    .insert(format!("inbox:{}", account.id), image);
+            }
+        }
         for (id, relative) in &self.account_icons {
             if let Some(relative) = safe_icon_relative(relative)
                 && let Some(image) = load_profile_logo(&data_dir.join(relative))
@@ -653,6 +668,14 @@ impl AccountPresentationSettings {
             let accounts = self.active_profile_accounts();
             return (accounts.clone(), accounts, MailScope::default());
         };
+        if self.business_tab_accounts.contains_key(&tab.id)
+            || (!self.inbox_accounts.is_empty()
+                && tab.account_ids.is_none()
+                && tab.address_view_ids.is_none()
+                && matches!(tab.resolved_scope(), "profiles" | "any" | "recipients"))
+        {
+            return (Some(Vec::new()), None, self.named_tab_scope(tab));
+        }
         let company_accounts = match &tab.account_ids {
             Some(ids) => {
                 let mut ids = ids.clone();
@@ -1487,6 +1510,11 @@ impl InboxState {
     /// inbox if they are not.
     fn shows_scope(&self, scope: Scope) -> bool {
         match scope {
+            Scope::AddressInbox(id) if id < 0 => self
+                .account_presentation
+                .visible_inbox_accounts()
+                .iter()
+                .any(|account| account.id == id),
             Scope::AddressInbox(id) => self
                 .account_presentation
                 .visible_address_views()

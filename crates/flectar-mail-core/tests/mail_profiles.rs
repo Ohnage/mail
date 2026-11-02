@@ -69,6 +69,84 @@ async fn seeded_core() -> (tempfile::TempDir, Core) {
     (temp, core)
 }
 
+#[tokio::test]
+async fn named_accounts_share_aliases_and_tabs_save_atomically_without_catalog_refresh() {
+    use flectar_mail_core::models::InboxAccount;
+    let (_temp, core) = seeded_core().await;
+    let settings = core
+        .save_address_view("alias@example.org".into(), vec!["alice@example.org".into()])
+        .await
+        .unwrap();
+    let address = settings.address_views[0].id;
+    for name in ["Design", "Support"] {
+        core.save_inbox_account(InboxAccount {
+            id: 0,
+            name: name.into(),
+            icon: None,
+            account_ids: vec![2],
+            address_view_ids: vec![address],
+            automatic_profile: None,
+            profile_id: None,
+        })
+        .await
+        .unwrap();
+    }
+    let settings = core.get_settings().await.unwrap();
+    assert_eq!(settings.inbox_accounts.len(), 2);
+    let members = settings
+        .inbox_accounts
+        .iter()
+        .map(|account| account.id)
+        .collect::<Vec<_>>();
+    let saved = core
+        .save_account_tab(None, "Business".into(), None, true, Some(members.clone()))
+        .await
+        .unwrap();
+    let tab = saved.business_tabs[0].clone();
+    let unchanged = core
+        .save_account_tab(
+            Some(tab.id.clone()),
+            tab.name.clone(),
+            tab.icon.clone(),
+            tab.show_name,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(unchanged.business_tabs[0], tab);
+    let mut sorted = members.clone();
+    sorted.sort_unstable();
+    assert_eq!(unchanged.business_tab_accounts[&tab.id], sorted);
+    let mut edited = unchanged.inbox_accounts[0].clone();
+    edited.name = "Design renamed".into();
+    edited.icon = Some("profile-logos/seed.png".into());
+    core.save_inbox_account(edited.clone()).await.unwrap();
+    core.save_inbox_account(edited).await.unwrap();
+    let before = core.get_settings().await.unwrap();
+    assert!(
+        core.save_account_tab(
+            Some(tab.id.clone()),
+            "Must not commit".into(),
+            None,
+            false,
+            Some(vec![-999])
+        )
+        .await
+        .is_err()
+    );
+    let after = core.get_settings().await.unwrap();
+    assert_eq!(after.business_tabs, before.business_tabs);
+    assert_eq!(after.business_tab_accounts, before.business_tab_accounts);
+    let deleted = core.delete_inbox_account(members[0]).await.unwrap();
+    assert_eq!(deleted.inbox_accounts.len(), 1);
+    assert_eq!(deleted.business_tab_accounts[&tab.id], vec![members[1]]);
+    assert_eq!(
+        core.list_accounts().await.unwrap().len(),
+        2,
+        "Removing a view never disconnects mailboxes"
+    );
+}
+
 #[test]
 fn tab_membership_distinguishes_legacy_inheritance_from_explicit_empty() {
     use flectar_mail_core::models::{BusinessTab, Settings};

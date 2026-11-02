@@ -1317,7 +1317,7 @@ impl CoreMailSource {
     pub async fn load_settings(&self) -> Result<Settings, String> {
         let mut settings = self
             .core
-            .refresh_address_views()
+            .get_settings()
             .await
             .map_err(|error| error.to_string())?;
         if snapshot_legacy_tab_icons(&mut settings, &self.data_dir()) {
@@ -1327,6 +1327,10 @@ impl CoreMailSource {
                 .map_err(|error| error.to_string())?;
         }
         Ok(settings)
+    }
+
+    pub async fn refresh_inbox_catalog(&self) -> Result<Settings, String> {
+        self.core.refresh_address_views().await.map_err(|error| error.to_string())
     }
 
     pub async fn set_notification_settings(
@@ -1456,6 +1460,20 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    /// Stores the directory desktop save dialogs open in. The path is not
+    /// checked here: a location can be unavailable later, such as an unmounted
+    /// network share, and downloads fall back to the platform default instead
+    /// of failing.
+    #[cfg(desktop)]
+    pub async fn set_download_directory(&self, directory: &str) -> Result<(), String> {
+        let mut settings = self.load_settings().await?;
+        settings.download_directory = directory.trim().to_owned();
+        self.core
+            .set_settings(settings)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn set_message_appearance(&self, preference: &str) -> Result<(), String> {
         let preference = flectar_mail_core::models::MessageAppearance::parse(preference)
             .ok_or("Unknown message appearance")?;
@@ -1509,6 +1527,15 @@ impl CoreMailSource {
     pub async fn set_show_avatars(&self, enabled: bool) -> Result<(), String> {
         let mut settings = self.load_settings().await?;
         settings.show_avatars = enabled;
+        self.core
+            .set_settings(settings)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn set_show_tabs(&self, enabled: bool) -> Result<(), String> {
+        let mut settings = self.load_settings().await?;
+        settings.show_tabs = enabled;
         self.core
             .set_settings(settings)
             .await
@@ -1651,6 +1678,9 @@ impl CoreMailSource {
         let accounts = self.load_accounts().await?;
         let mut presentation = crate::AccountPresentationSettings::from_settings(&settings);
         presentation.bind_accounts(&accounts);
+        if let Some(account) = presentation.inbox_accounts.iter().find(|account| account.id == id) {
+            return Ok(presentation.inbox_scope(account));
+        }
         let view = presentation
             .address_views
             .iter()
@@ -1660,22 +1690,6 @@ impl CoreMailSource {
             address_inboxes: vec![presentation.address_filter(view)],
             ..Default::default()
         })
-    }
-
-    pub async fn save_business_tab_details(
-        &self,
-        tab_id: Option<String>,
-        name: String,
-        account_ids: Option<Vec<i64>>,
-        address_view_ids: Option<Vec<i64>>,
-        icon: Option<String>,
-        show_name: bool,
-    ) -> Result<Settings, String> {
-        self.load_settings().await?;
-        self.core
-            .save_business_tab_details(tab_id, name, account_ids, address_view_ids, icon, show_name)
-            .await
-            .map_err(|error| error.to_string())
     }
 
     pub async fn save_business_tab(
@@ -2562,7 +2576,9 @@ fn append_mailboxes(
             role_folder_ids.contains(&folder.id) || (!gmail && !is_standard_folder(folder))
         })
         .collect::<Vec<_>>();
-    tree_folders.sort_by_key(|folder| (folder.display_name.to_lowercase(), folder.id));
+    // Lowercase once per folder: `sort_by_key` would re-allocate the key on
+    // every comparison (O(n log n) allocations for n folders).
+    tree_folders.sort_by_cached_key(|folder| (folder.display_name.to_lowercase(), folder.id));
 
     // Fresh discovery provides explicit local parent ids. Path inference
     // preserves an upgraded database's existing hierarchy until its first
@@ -2602,15 +2618,13 @@ fn append_mailboxes(
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
+    // Children inherit `tree_folders`' name order, so they need no sort.
     let mut children = std::collections::HashMap::<i64, Vec<&FolderInfo>>::new();
     for folder in &tree_folders {
         let parent_id = parent_ids.get(&folder.id).copied().unwrap_or(-1);
         if parent_id >= 0 {
             children.entry(parent_id).or_default().push(folder);
         }
-    }
-    for descendants in children.values_mut() {
-        descendants.sort_by_key(|folder| (folder.display_name.to_lowercase(), folder.id));
     }
 
     let mut visited = std::collections::HashSet::new();
@@ -3745,6 +3759,39 @@ mod tests {
         assert_eq!(duplicate_leaf.scope, Some(Scope::Folder(12)));
         assert_eq!(custom_inbox.scope, Some(Scope::Folder(13)));
         assert!(custom_inbox.count.is_empty());
+    }
+
+    #[test]
+    fn mailbox_entries_sort_folders_and_subfolders_by_name() {
+        let folder = |id: i64, parent_id: Option<i64>, display_name: &str, path: &str| FolderInfo {
+            id,
+            account_id: 1,
+            parent_id,
+            display_name: display_name.into(),
+            is_jmap: false,
+            path: path.into(),
+            delimiter: Some("/".into()),
+            role: None,
+            selectable: true,
+            can_create_children: true,
+            can_rename: true,
+            can_delete: true,
+        };
+        let folders = vec![
+            folder(30, None, "Zeta", "Zeta"),
+            folder(23, Some(20), "beta", "Projects/beta"),
+            folder(20, None, "Projects", "Projects"),
+            folder(24, Some(20), "gamma", "Projects/gamma"),
+            folder(22, Some(20), "alpha", "Projects/alpha"),
+            folder(21, Some(20), "Alpha", "Projects/Alpha"),
+        ];
+
+        let order = mailbox_entries(&[test_account()], &folders, None)
+            .into_iter()
+            .filter(|entry| entry.folder_id >= 20)
+            .map(|entry| entry.folder_id)
+            .collect::<Vec<_>>();
+        assert_eq!(order, [20, 21, 22, 23, 24, 30]);
     }
 
     #[test]

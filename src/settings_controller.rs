@@ -28,6 +28,35 @@ fn apply_account_presentation_settings(
     app.invoke_mail_profile_changed();
 }
 
+/// Persists the download location and only then reflects it in the UI, so a
+/// failed write never leaves Settings showing a directory that was not saved.
+#[cfg(desktop)]
+fn save_download_directory(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    runtime: &tokio::runtime::Runtime,
+    directory: String,
+) {
+    let Some(core) = state.borrow().core.clone() else {
+        app.set_sync_status(UiMessage::plain(
+            "Download location is saved once an account is set up.",
+        ));
+        return;
+    };
+    match runtime.block_on(core.set_download_directory(&directory)) {
+        Ok(()) => {
+            app.set_download_directory(
+                crate::documents::download_directory_label(&directory).into(),
+            );
+            app.set_sync_status(UiMessage::plain("Download location saved."));
+        }
+        Err(error) => app.set_sync_status(UiMessage::detail(
+            "Could not save the download location: {}",
+            error,
+        )),
+    }
+}
+
 pub(super) fn register_settings_preference_callbacks(
     app: &AppWindow,
     state: &Rc<RefCell<InboxState>>,
@@ -191,6 +220,84 @@ pub(super) fn register_settings_preference_callbacks(
     });
 
     let app_weak = app.as_weak();
+    // Only desktop hosts pick a filesystem directory; mobile hosts export
+    // through their own document provider and hide the setting entirely.
+    #[cfg(desktop)]
+    {
+        let state_for_download = Rc::clone(state);
+        let runtime_for_download = Rc::clone(runtime);
+        let app_weak_for_download = app_weak.clone();
+        let picking_download = Rc::new(Cell::new(false));
+        app.on_choose_download_directory(move || {
+            let Some(app) = app_weak_for_download.upgrade() else {
+                return;
+            };
+            if picking_download.replace(true) {
+                return;
+            }
+            let title = translated(&app, &UiMessage::plain("Choose download location")).to_string();
+            let core = state_for_download.borrow().core.clone();
+            // The portal picker needs the runtime: rfd's blocking dialog
+            // panics on the UI thread, which has no Tokio context.
+            let request: crate::documents::DocumentFuture<Option<std::path::PathBuf>> =
+                Box::pin(async move {
+                    // Starts in the saved folder as stored, not as Settings
+                    // shows it: inside Flatpak the shown host path may be
+                    // outside the sandbox.
+                    let current = match core {
+                        Some(core) => core.load_settings().await.ok().and_then(|settings| {
+                            crate::documents::resolve_download_directory(
+                                &settings.download_directory,
+                            )
+                        }),
+                        None => None,
+                    };
+                    let dialog = rfd::AsyncFileDialog::new().set_title(title);
+                    let dialog = match current {
+                        Some(directory) => {
+                            dialog.set_directory(crate::documents::picker_directory(&directory))
+                        }
+                        None => dialog,
+                    };
+                    Ok(dialog
+                        .pick_folder()
+                        .await
+                        .map(|folder| folder.path().to_owned()))
+                });
+            let state = Rc::clone(&state_for_download);
+            let runtime = Rc::clone(&runtime_for_download);
+            let picking = Rc::clone(&picking_download);
+            let app_weak = app.as_weak();
+            crate::documents::run_request(&runtime_for_download, request, move |picked| {
+                picking.set(false);
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                match picked {
+                    Ok(Some(directory)) => save_download_directory(
+                        &app,
+                        &state,
+                        &runtime,
+                        directory.to_string_lossy().into_owned(),
+                    ),
+                    Ok(None) => {}
+                    Err(error) => app.set_sync_status(UiMessage::detail(
+                        "Could not save the download location: {}",
+                        error,
+                    )),
+                }
+            });
+        });
+        let state_for_clear = Rc::clone(state);
+        let runtime_for_clear = Rc::clone(runtime);
+        let app_weak_for_clear = app_weak.clone();
+        app.on_clear_download_directory(move || {
+            let Some(app) = app_weak_for_clear.upgrade() else {
+                return;
+            };
+            save_download_directory(&app, &state_for_clear, &runtime_for_clear, String::new());
+        });
+    }
     let state_for_theme_preset = Rc::clone(state);
     let runtime_for_theme_preset = Rc::clone(runtime);
     app.on_save_theme_preset(move |preset| {
@@ -394,6 +501,28 @@ pub(super) fn register_settings_preference_callbacks(
             Ok(()) => app.set_sync_status(UiMessage::plain("Avatar preference saved.")),
             Err(error) => app.set_sync_status(UiMessage::detail(
                 "Could not save avatar preference: {}",
+                error,
+            )),
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_tabs = Rc::clone(state);
+    let runtime_for_tabs = Rc::clone(runtime);
+    app.on_save_show_tabs(move |enabled| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(core) = state_for_tabs.borrow().core.clone() else {
+            app.set_sync_status(UiMessage::plain(
+                "Tabs preference updated for this session.",
+            ));
+            return;
+        };
+        match runtime_for_tabs.block_on(core.set_show_tabs(enabled)) {
+            Ok(()) => app.set_sync_status(UiMessage::plain("Tabs preference saved.")),
+            Err(error) => app.set_sync_status(UiMessage::detail(
+                "Could not save tabs preference: {}",
                 error,
             )),
         }
@@ -1098,6 +1227,8 @@ mod tests {
 
 #[derive(Default)]
 struct BusinessTabDraft {
+    inbox_account: Option<flectar_mail_core::models::InboxAccount>,
+    named_accounts: std::collections::BTreeSet<i64>,
     id: Option<String>,
     icon: Option<String>,
     accounts: std::collections::BTreeSet<i64>,
@@ -1125,6 +1256,19 @@ fn parse_inbox_choice_key(key: &str) -> Option<InboxChoiceKey> {
 
 impl BusinessTabDraft {
     fn set_choice(&mut self, key: &str, checked: bool) -> bool {
+        if let Some(id) = key
+            .strip_prefix("inbox:")
+            .and_then(|id| id.parse::<i64>().ok())
+            .filter(|id| *id < 0)
+        {
+            let changed = if checked {
+                self.named_accounts.insert(id)
+            } else {
+                self.named_accounts.remove(&id)
+            };
+            self.membership_dirty |= changed;
+            return true;
+        }
         let (choices, id) = match parse_inbox_choice_key(key) {
             Some(InboxChoiceKey::Account(id)) => (&mut self.accounts, id),
             Some(InboxChoiceKey::Alias(id)) => (&mut self.address_views, id),
@@ -1193,6 +1337,8 @@ mod branding_draft_tests {
             id: Some("automatic-group".into()),
             accounts: [3].into_iter().collect(),
             address_views: [101, 102].into_iter().collect(),
+            inbox_account: None,
+            named_accounts: Default::default(),
             ..Default::default()
         }
     }
@@ -1312,6 +1458,29 @@ mod branding_draft_tests {
 }
 
 fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
+    if draft.inbox_account.is_none() {
+        let editor = app.global::<BusinessTabEditorUi>();
+        let query = editor.get_query().to_lowercase();
+        let choices = app
+            .global::<InboxAccountsUi>()
+            .get_accounts()
+            .iter()
+            .filter_map(|mut row| {
+                if !query.is_empty() && !row.name.to_lowercase().contains(&query) {
+                    return None;
+                }
+                row.checked = row
+                    .key
+                    .strip_prefix("inbox:")
+                    .and_then(|id| id.parse::<i64>().ok())
+                    .is_some_and(|id| draft.named_accounts.contains(&id));
+                Some(row)
+            })
+            .collect::<Vec<_>>();
+        editor.set_members(ModelRc::new(VecModel::from(choices)));
+        editor.set_selected_count(draft.named_accounts.len().try_into().unwrap_or(i32::MAX));
+        return;
+    }
     let editor = app.global::<BusinessTabEditorUi>();
     let query = editor.get_query().trim().to_lowercase();
     let mut choices = app
@@ -1389,6 +1558,8 @@ fn register_branding_callbacks(
     runtime: &Rc<tokio::runtime::Runtime>,
 ) {
     use crate::custom_icons::{IconKind, import_icon};
+    let draft = Rc::new(RefCell::new(None::<BusinessTabDraft>));
+    let catalog_draft = Rc::clone(&draft);
     let weak = app.as_weak();
     let catalog_state = Rc::clone(state);
     let catalog_runtime = Rc::clone(runtime);
@@ -1422,6 +1593,9 @@ fn register_branding_callbacks(
                 form.set_source_emails(Default::default());
                 form.set_error(Default::default());
                 form.set_created(true);
+                if let Some(draft) = catalog_draft.borrow().as_ref() {
+                    publish_tab_members(&app, draft);
+                }
                 true
             }
             Err(error) => {
@@ -1431,7 +1605,6 @@ fn register_branding_callbacks(
         }
     });
 
-    let draft = Rc::new(RefCell::new(None::<BusinessTabDraft>));
     let weak = app.as_weak();
     let open_state = Rc::clone(state);
     let open_draft = Rc::clone(&draft);
@@ -1454,6 +1627,12 @@ fn register_branding_callbacks(
                 .and_then(|root| load_profile_logo(&root.join(relative)))
         });
         let initial = BusinessTabDraft {
+            inbox_account: None,
+            named_accounts: tab
+                .map(|tab| presentation.selected_inbox_accounts(tab))
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
             id: tab.map(|tab| tab.id.clone()),
             icon,
             original_account_ids: tab.and_then(|tab| tab.account_ids.clone()),
@@ -1493,6 +1672,7 @@ fn register_branding_callbacks(
                 .collect(),
         };
         let editor = app.global::<BusinessTabEditorUi>();
+        editor.set_account_mode(false);
         editor.set_editing_id(id);
         editor.set_name(tab.map(|tab| tab.name.clone()).unwrap_or_default().into());
         editor.set_show_name(tab.map(|tab| tab.show_name).unwrap_or(true));
@@ -1512,6 +1692,100 @@ fn register_branding_callbacks(
         editor.set_visible(true);
     });
 
+    let weak = app.as_weak();
+    let account_draft = Rc::clone(&draft);
+    let account_state = Rc::clone(state);
+    app.global::<BusinessTabEditorUi>()
+        .on_open_account(move |key| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let state = account_state.borrow();
+            let p = &state.account_presentation;
+            let id = key
+                .as_str()
+                .strip_prefix("inbox:")
+                .unwrap_or(key.as_str())
+                .parse::<i64>()
+                .unwrap_or(0);
+            let account = if id == 0 {
+                flectar_mail_core::models::InboxAccount {
+                    id: 0,
+                    name: String::new(),
+                    icon: None,
+                    account_ids: vec![],
+                    address_view_ids: vec![],
+                    automatic_profile: None,
+                    profile_id: None,
+                }
+            } else {
+                let Some(account) = p.inbox_accounts.iter().find(|account| account.id == id) else {
+                    return;
+                };
+                account.clone()
+            };
+            let initial = BusinessTabDraft {
+                accounts: account.account_ids.iter().copied().collect(),
+                address_views: p.inbox_members(&account).into_iter().collect(),
+                icon: account.icon.clone(),
+                inbox_account: Some(account.clone()),
+                ..Default::default()
+            };
+            let editor = app.global::<BusinessTabEditorUi>();
+            editor.set_account_mode(true);
+            editor.set_editing_id(if id == 0 {
+                "".into()
+            } else {
+                id.to_string().into()
+            });
+            editor.set_name(account.name.into());
+            editor.set_query(Default::default());
+            editor.set_error(Default::default());
+            let image = account.icon.as_ref().and_then(|relative| {
+                state
+                    .core
+                    .as_ref()
+                    .and_then(|core| load_profile_logo(&core.data_dir().join(relative)))
+            });
+            editor.set_has_icon(image.is_some());
+            editor.set_icon(image.unwrap_or_default());
+            editor.set_has_special_rules(false);
+            editor.set_recipient_only(false);
+            publish_tab_members(&app, &initial);
+            *account_draft.borrow_mut() = Some(initial);
+            editor.set_visible(true);
+        });
+    let weak = app.as_weak();
+    let delete_state = Rc::clone(state);
+    let delete_runtime = Rc::clone(runtime);
+    app.global::<InboxAccountsUi>()
+        .on_delete_account(move |key| {
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            let Some(id) = key
+                .strip_prefix("inbox:")
+                .and_then(|id| id.parse::<i64>().ok())
+            else {
+                return;
+            };
+            let Some(core) = delete_state.borrow().core.clone() else {
+                return;
+            };
+            match delete_runtime.block_on(core.account_preferences_core().delete_inbox_account(id))
+            {
+                Ok(settings) => apply_account_presentation_settings(
+                    &app,
+                    &delete_state,
+                    &delete_runtime,
+                    &settings,
+                ),
+                Err(error) => app.set_sync_status(UiMessage::detail(
+                    "Could not delete account view: {}",
+                    error.to_string(),
+                )),
+            }
+        });
     let weak = app.as_weak();
     let search_draft = Rc::clone(&draft);
     app.global::<BusinessTabEditorUi>().on_search(move |query| {
@@ -1548,7 +1822,15 @@ fn register_branding_callbacks(
             return;
         };
         let data_root = core.data_dir();
-        match import_icon(&data_root, &source, IconKind::Tab) {
+        match import_icon(
+            &data_root,
+            &source,
+            if editor.get_account_mode() {
+                IconKind::Account
+            } else {
+                IconKind::Tab
+            },
+        ) {
             Ok(relative) => {
                 let Some(image) = load_profile_logo(&data_root.join(&relative)) else {
                     editor.set_error("Could not preview that icon. The draft is unchanged.".into());
@@ -1603,18 +1885,38 @@ fn register_branding_callbacks(
         };
         let name = editor.get_name().trim().to_string();
         if name.is_empty() {
-            editor.set_error("Enter a tab name.".into());
+            editor.set_error(
+                if editor.get_account_mode() {
+                    "Enter an account name."
+                } else {
+                    "Enter a tab name."
+                }
+                .into(),
+            );
             return false;
         }
-        let (account_ids, address_view_ids) = draft.memberships_for_save();
-        let result = save_runtime.block_on(core.save_business_tab_details(
-            draft.id.clone(),
-            name,
-            account_ids,
-            address_view_ids,
-            draft.icon.clone(),
-            editor.get_show_name(),
-        ));
+        let result = if let Some(original) = &draft.inbox_account {
+            let mut account = original.clone();
+            account.name = name;
+            account.icon = draft.icon.clone();
+            if draft.membership_dirty || account.id == 0 {
+                let (mailboxes, addresses) = draft.memberships_for_save();
+                account.account_ids = mailboxes.unwrap_or_default();
+                account.address_view_ids = addresses.unwrap_or_default();
+                account.automatic_profile = None;
+            }
+            save_runtime.block_on(core.account_preferences_core().save_inbox_account(account))
+        } else {
+            let members = (draft.membership_dirty || draft.id.is_none())
+                .then(|| draft.named_accounts.iter().copied().collect());
+            save_runtime.block_on(core.account_preferences_core().save_account_tab(
+                draft.id.clone(),
+                name,
+                draft.icon.clone(),
+                editor.get_show_name(),
+                members,
+            ))
+        };
         drop(borrowed);
         match result {
             Ok(settings) => {
@@ -1622,11 +1924,15 @@ fn register_branding_callbacks(
                 *save_draft.borrow_mut() = None;
                 editor.set_visible(false);
                 editor.set_error(Default::default());
-                app.set_sync_status(UiMessage::plain("Tab saved."));
+                app.set_sync_status(if editor.get_account_mode() {
+                    UiMessage::plain("Account saved.")
+                } else {
+                    UiMessage::plain("Tab saved.")
+                });
                 true
             }
             Err(error) => {
-                editor.set_error(format!("Could not save tab: {error}").into());
+                editor.set_error(format!("Could not save: {error}").into());
                 false
             }
         }

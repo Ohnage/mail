@@ -324,49 +324,44 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
     };
     let mut address_rows = state
         .account_presentation
-        .visible_address_views()
+        .visible_inbox_accounts()
         .into_iter()
-        .filter(|view| !filtering || view.address.to_lowercase().contains(&query.to_lowercase()))
-        .map(|view| {
+        .filter(|account| !filtering || account.name.to_lowercase().contains(&query.to_lowercase()))
+        .map(|account| {
+            let choice = state.account_presentation.inbox_choice(account);
             let mut entry = row(
                 SidebarRowKind::AddressInbox,
-                format!("address-inbox:{}", view.id),
+                format!("inbox-account:{}", account.id),
             );
-            let profile = view.profile_id.as_ref().and_then(|id| {
-                state
-                    .account_presentation
-                    .profiles
-                    .iter()
-                    .find(|p| &p.id == id)
-            });
-            let image = view
-                .profile_id
-                .as_ref()
-                .and_then(|id| state.account_presentation.profile_logos.get(id));
-
             entry.mailbox = MailboxRow {
                 account_id: -1,
                 folder_id: -1,
-                scope: Scope::AddressInbox(view.id).to_string().into(),
-                label: view.address.clone().into(),
-                detail: state.account_presentation.address_detail(view).into(),
-                avatar: avatar_initials(&view.address).into(),
-                avatar_image: image.cloned().unwrap_or_default(),
-                has_avatar: image.is_some(),
-                count: if state.scope == Scope::AddressInbox(view.id) && state.inbox_count > 0 {
+                scope: Scope::AddressInbox(account.id).to_string().into(),
+                label: choice.name,
+                detail: choice.detail,
+                avatar: choice.initials,
+                avatar_image: choice.avatar,
+                has_avatar: choice.has_avatar,
+                count: if state.scope == Scope::AddressInbox(account.id) && state.inbox_count > 0 {
                     state.inbox_count.to_string().into()
                 } else {
                     Default::default()
                 },
-                color: profile
-                    .and_then(|p| parse_marker_color(&p.color))
-                    .unwrap_or_default(),
-                has_custom_color: profile.is_some(),
                 ..Default::default()
             };
             entry
         })
         .collect::<Vec<_>>();
+    if !state.account_presentation.inbox_accounts.is_empty() {
+        rows.retain(|row| {
+            !matches!(
+                row.kind,
+                SidebarRowKind::Account
+                    | SidebarRowKind::AccountLabelsSection
+                    | SidebarRowKind::AccountLabel
+            ) && row.mailbox.account_id <= 0
+        });
+    }
     address_rows.append(&mut rows);
     let rows = address_rows;
     // Model notifications can synchronously inspect application state.

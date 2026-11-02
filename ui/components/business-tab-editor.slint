@@ -9,6 +9,7 @@ import { FormField } from "settings-components.slint";
 
 // Saved settings live in Rust. Every field below belongs to an isolated draft.
 export global BusinessTabEditorUi {
+    in property <bool> account-mode: false;
     in property <bool> visible: false;
     in property <string> editing-id;
     in-out property <string> name;
@@ -22,6 +23,7 @@ export global BusinessTabEditorUi {
     in property <bool> has-special-rules: false;
     in property <bool> recipient-only: false;
     callback open(string);
+    callback open-account(string);
     callback choose-icon();
     callback remove-icon();
     callback search(string);
@@ -43,17 +45,17 @@ export component BusinessTabEditor inherits VerticalBox {
     spacing: 12px;
     init => { name-field.focus(); }
     Text {
-        text: BusinessTabEditorUi.editing-id == "" ? @tr("Create tab") : @tr("Edit tab");
+        text: BusinessTabEditorUi.account-mode ? (BusinessTabEditorUi.editing-id == "" ? @tr("Create account") : @tr("Edit account")) : (BusinessTabEditorUi.editing-id == "" ? @tr("Create tab") : @tr("Edit tab"));
         color: AppTheme.heading;
         font-size: TypeScale.subtitle;
         font-weight: 600;
     }
     name-field := LineEdit {
         text <=> BusinessTabEditorUi.name;
-        input-label: @tr("Tab name");
-        placeholder-text: @tr("Tab name");
+        input-label: BusinessTabEditorUi.account-mode ? @tr("Account name") : @tr("Tab name");
+        placeholder-text: BusinessTabEditorUi.account-mode ? @tr("Account name") : @tr("Tab name");
     }
-    CheckBox {
+    if !BusinessTabEditorUi.account-mode : CheckBox {
         text: @tr("Show name in the tab strip");
         checked <=> BusinessTabEditorUi.show-name;
         accessible-label: @tr("Show name in the tab strip");
@@ -83,7 +85,7 @@ export component BusinessTabEditor inherits VerticalBox {
         Rectangle { horizontal-stretch: 1; }
     }
     Text {
-        text: @tr("Mailboxes and address inboxes can appear in several groups. A mailbox includes all its mail; an address inbox shows mail received at that address. This does not enable sending from an alias.");
+        text: BusinessTabEditorUi.account-mode ? @tr("Choose the email addresses and mailboxes that belong to this account. The same inbox can belong to more than one account.") : @tr("Choose the accounts to show in this business tab. An account can appear in more than one tab.");
         wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
     }
     if BusinessTabEditorUi.recipient-only : Text {
@@ -96,8 +98,8 @@ export component BusinessTabEditor inherits VerticalBox {
     }
     LineEdit {
         text <=> BusinessTabEditorUi.query;
-        input-label: @tr("Search mailboxes and address inboxes for this group");
-        placeholder-text: @tr("Search mailboxes and address inboxes");
+        input-label: BusinessTabEditorUi.account-mode ? @tr("Search mailboxes and addresses") : @tr("Search accounts");
+        placeholder-text: BusinessTabEditorUi.account-mode ? @tr("Search mailboxes and addresses") : @tr("Search accounts");
         edited(value) => { BusinessTabEditorUi.search(value); }
     }
     Text {
@@ -112,7 +114,7 @@ export component BusinessTabEditor inherits VerticalBox {
         }
     }
     if BusinessTabEditorUi.members.length == 0 : Text {
-        text: @tr("No mailboxes or address inboxes match your search."); color: AppTheme.secondary;
+        text: @tr("No matches."); color: AppTheme.secondary;
         wrap: word-wrap; font-size: TypeScale.caption;
     }
     if BusinessTabEditorUi.error != "" : Text {
@@ -125,7 +127,7 @@ export component BusinessTabEditor inherits VerticalBox {
         spacing: 8px;
         Rectangle { horizontal-stretch: 1; }
         Button { text: @tr("Cancel"); width: max(80px, self.content-width); clicked => { BusinessTabEditorUi.cancel(); } }
-        Button { text: @tr("Save tab"); width: max(90px, self.content-width); primary: true; enabled: BusinessTabEditorUi.name != ""; clicked => { BusinessTabEditorUi.save(); } }
+        Button { text: BusinessTabEditorUi.account-mode ? @tr("Save account") : @tr("Save tab"); width: max(90px, self.content-width); primary: true; enabled: BusinessTabEditorUi.name != ""; clicked => { BusinessTabEditorUi.save(); } }
     }
 }
 
@@ -142,8 +144,8 @@ export component BusinessTabsCard inherits Rectangle {
         padding: 16px;
         spacing: 12px;
         Text { text: @tr("Business tabs"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
-        Text { text: @tr("Organize your groups with a name, icon, mailboxes and address inboxes."); color: AppTheme.secondary; font-size: TypeScale.caption; wrap: word-wrap; }
-        if !BusinessTabEditorUi.visible : VerticalBox {
+        Text { text: @tr("Group your accounts under a tab with its own name and icon."); color: AppTheme.secondary; font-size: TypeScale.caption; wrap: word-wrap; }
+        if !BusinessTabEditorUi.visible || BusinessTabEditorUi.account-mode : VerticalBox {
             padding: 0px;
             spacing: 8px;
             for tab[index] in root.tabs : HorizontalBox {
@@ -152,14 +154,14 @@ export component BusinessTabsCard inherits Rectangle {
                 height: 36px;
                 if tab.has_logo : Image { width: 28px; height: 28px; source: tab.logo; image-fit: contain; }
                 Text { text: tab.name; color: AppTheme.body; font-size: TypeScale.body; overflow: elide; horizontal-stretch: 1; min-width: 0px; }
-                IconButton { icon: @image-url("../icons/lucide/outline/pencil.svg"); ghost: true; tooltip-text: @tr("Edit {}", tab.name); clicked => { BusinessTabEditorUi.open(tab.id); } }
-                IconButton { icon: @image-url("../icons/lucide/outline/chevron-up.svg"); ghost: true; tooltip-text: @tr("Move {} up", tab.name); interactive: index > 0; clicked => { root.move-tab(tab.id, -1); } }
-                IconButton { icon: @image-url("../icons/lucide/outline/chevron-down.svg"); ghost: true; tooltip-text: @tr("Move {} down", tab.name); interactive: index + 1 < root.tabs.length; clicked => { root.move-tab(tab.id, 1); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/pencil.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Edit {}", tab.name); clicked => { BusinessTabEditorUi.open(tab.id); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/chevron-up.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Move {} up", tab.name); interactive: index > 0; clicked => { root.move-tab(tab.id, -1); } }
+                IconButton { icon: @image-url("../icons/lucide/outline/chevron-down.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Move {} down", tab.name); interactive: index + 1 < root.tabs.length; clicked => { root.move-tab(tab.id, 1); } }
                 IconButton { icon: @image-url("../icons/lucide/outline/trash.svg"); icon-color: AppTheme.destructive; ghost: true; tooltip-text: @tr("Delete {}", tab.name); clicked => { root.delete-tab(tab.id); } }
             }
             Button { text: @tr("Add tab"); width: max(96px, self.content-width); clicked => { BusinessTabEditorUi.open(""); } }
         }
-        if BusinessTabEditorUi.visible : BusinessTabEditor { }
+        if BusinessTabEditorUi.visible && !BusinessTabEditorUi.account-mode : BusinessTabEditor { }
     }
 }
 
@@ -172,13 +174,52 @@ export component ReceivingInboxCard inherits Rectangle {
     height: form.preferred-height;
     form := VerticalBox {
         padding: 16px; spacing: 10px;
-        Text { text: @tr("Add a receiving-only inbox"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
+        Text { text: @tr("Add an address to the inbox list"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
         Text { text: @tr("Create an inbox view for an address you receive mail at. This does not authorize sending from that address."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
         FormField { label: @tr("Receiving address"); value <=> ReceivingInboxUi.address; placeholder: "team@example.com"; label-color: AppTheme.heading; }
         FormField { label: @tr("Source mailboxes (optional, comma-separated)"); value <=> ReceivingInboxUi.source-emails; placeholder: "mailbox@example.com"; label-color: AppTheme.heading; }
         Text { text: @tr("Leave sources empty to search all connected accounts. A source that is not connected stays selectable and will show no mail until it is connected."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
         if ReceivingInboxUi.error != "" : Text { text: ReceivingInboxUi.error; wrap: word-wrap; color: AppTheme.destructive; font-size: TypeScale.caption; }
-        if ReceivingInboxUi.created : Text { text: @tr("Receiving-only inbox added. You can now select it in a group."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
+        if ReceivingInboxUi.created : Text { text: @tr("Address added. You can now select it in an account."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
         Button { text: @tr("Add inbox view"); width: max(120px, self.content-width); enabled: ReceivingInboxUi.address != ""; clicked => { ReceivingInboxUi.create(); } }
+    }
+}
+
+export global InboxAccountsUi {
+    in property <[InboxViewChoiceRow]> accounts;
+    in-out property <string> query;
+    callback delete-account(string);
+}
+
+export component InboxAccountsCard inherits Rectangle {
+    background: AppTheme.surface;
+    border-radius: 10px; border-width: 1px; border-color: AppTheme.border;
+    height: content.preferred-height;
+    content := VerticalBox {
+        padding: 16px; spacing: 12px;
+        Text { text: @tr("Accounts"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
+        Text { text: @tr("Give each inbox a name and icon, then choose its email addresses or mailboxes. Add these accounts to your business tabs."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
+        if !BusinessTabEditorUi.visible || !BusinessTabEditorUi.account-mode : VerticalBox {
+            padding: 0px; spacing: 8px;
+            ListView {
+                height: min(304px, InboxAccountsUi.accounts.length * 54px);
+                for account in InboxAccountsUi.accounts : Rectangle {
+                    height: 54px;
+                    HorizontalBox {
+                        padding: 4px; spacing: 8px;
+                        if account.has_avatar : Image { width: 30px; height: 30px; source: account.avatar; image-fit: contain; }
+                        VerticalBox {
+                            padding: 0px; spacing: 2px; horizontal-stretch: 1; min-width: 0px;
+                            Text { text: account.name; color: AppTheme.heading; overflow: elide; font-size: TypeScale.body; }
+                            Text { text: account.detail; color: AppTheme.secondary; overflow: elide; font-size: TypeScale.caption; }
+                        }
+                        IconButton { icon: @image-url("../icons/lucide/outline/pencil.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Edit {}", account.name); clicked => { BusinessTabEditorUi.open-account(account.key); } }
+                        IconButton { icon: @image-url("../icons/lucide/outline/trash.svg"); icon-color: AppTheme.destructive; ghost: true; tooltip-text: @tr("Remove {} from Accounts", account.name); clicked => { InboxAccountsUi.delete-account(account.key); } }
+                    }
+                }
+            }
+            Button { text: @tr("Add account"); width: max(110px, self.content-width); clicked => { BusinessTabEditorUi.open-account(""); } }
+        }
+        if BusinessTabEditorUi.visible && BusinessTabEditorUi.account-mode : BusinessTabEditor { }
     }
 }

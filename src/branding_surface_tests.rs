@@ -203,6 +203,24 @@ fn branding_surfaces_screenshots() {
     let accounts = accounts(&icon);
     app.set_connected_accounts(ModelRc::new(VecModel::from(accounts.clone())));
     app.set_address_inboxes(ModelRc::new(VecModel::from(alias_choices(&icon))));
+    app.global::<InboxAccountsUi>()
+        .set_accounts(ModelRc::new(VecModel::from(
+            ["Design Studio", "Customer Support", "Community Services"]
+                .iter()
+                .enumerate()
+                .map(|(i, name)| InboxViewChoiceRow {
+                    key: format!("inbox:-{}", i + 1).into(),
+                    kind: InboxViewKind::NamedAccount,
+                    name: (*name).into(),
+                    detail: "2 mailboxes · 14 addresses".into(),
+                    initials: "DS".into(),
+                    avatar: icon.clone(),
+                    has_avatar: true,
+                    checked: i != 2,
+                })
+                .collect::<Vec<_>>(),
+        )));
+
     app.set_business_tabs(ModelRc::new(VecModel::from(
         (1..=5)
             .map(|id| BusinessTabRow {
@@ -363,6 +381,23 @@ fn branding_surfaces_screenshots() {
                 Vec::<InboxViewChoiceRow>::new(),
             )));
             draw("editor-no-results");
+            editor.set_account_mode(false);
+            editor.set_name("Parent business".into());
+            editor.set_query(Default::default());
+            editor.set_recipient_only(false);
+            editor.set_has_special_rules(false);
+            editor.set_members(app.global::<InboxAccountsUi>().get_accounts());
+            editor.set_selected_count(2);
+            scroll(&app, width, height, -1_000_000.0);
+            scroll(&app, width, height, 650.0);
+            draw("named-tab-editor");
+            editor.set_account_mode(true);
+            editor.set_name("Design Studio".into());
+            editor.set_members(ModelRc::new(VecModel::from(members(&accounts, "", false))));
+            scroll(&app, width, height, -1_000_000.0);
+            scroll(&app, width, height, 400.0);
+            draw("named-account-editor");
+            editor.set_account_mode(false);
         }
     }
     app.hide().unwrap();

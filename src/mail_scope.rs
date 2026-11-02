@@ -164,6 +164,9 @@ const ACCOUNT_PREFIX: &str = "Account:";
 impl fmt::Display for Scope {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AddressInbox(id) if *id < 0 => {
+                write!(formatter, "InboxAccount:{}", id.unsigned_abs())
+            }
             Self::AddressInbox(id) => write!(formatter, "AddressInbox:{id}"),
             Self::Unified(mailbox) => write!(formatter, "{UNIFIED_PREFIX}{}", mailbox.label()),
             Self::Important => formatter.write_str("Important"),
@@ -199,6 +202,14 @@ impl FromStr for Scope {
     fn from_str(key: &str) -> Result<Self, Self::Err> {
         let error = || ParseScopeError(key.to_owned());
         let id = |value: &str| value.parse::<i64>().map_err(|_| error());
+        if let Some(account_id) = key.strip_prefix("InboxAccount:") {
+            let account_id = id(account_id)?;
+            return if account_id > 0 {
+                Ok(Self::AddressInbox(-account_id))
+            } else {
+                Err(error())
+            };
+        }
         if let Some(address_id) = key.strip_prefix("AddressInbox:") {
             let address_id = id(address_id)?;
             return if address_id > 0 {

@@ -357,6 +357,28 @@ fn previous_address_views(
     Ok((views, ids))
 }
 
+#[cfg(test)]
+mod large_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn provider_catalog_over_twenty_thousand_remains_complete_and_idempotent() {
+        let mut settings = Settings::default();
+        let accounts = vec![RegistryAccount {
+            id: 1,
+            email: "storage@example.org".into(),
+        }];
+        let identities = (0..28_663)
+            .map(|i| (accounts[0].email.clone(), format!("alias{i}@example.org")))
+            .collect::<Vec<_>>();
+        assert!(merge_cached_address_views(&mut settings, &accounts, &identities).unwrap());
+        assert_eq!(settings.address_views.len(), 28_664);
+        let before = settings.address_views.clone();
+        assert!(!merge_cached_address_views(&mut settings, &accounts, &identities).unwrap());
+        assert_eq!(settings.address_views, before);
+    }
+}
+
 fn insert_address_candidate(
     views: &mut BTreeMap<String, AddressView>,
     previous: &BTreeMap<String, AddressView>,
@@ -382,9 +404,6 @@ fn insert_address_candidate(
             }
         }
         return Ok(());
-    }
-    if views.len() >= 20_000 {
-        return Err("no more than 20000 receiving addresses can be stored".into());
     }
     let id = previous
         .get(&address)
@@ -595,6 +614,12 @@ fn apply_address_catalog(
         .filter_map(|tab| tab.address_view_ids.as_ref())
         .flatten()
         .copied()
+        .chain(
+            settings
+                .inbox_accounts
+                .iter()
+                .flat_map(|account| account.address_view_ids.iter().copied()),
+        )
         .collect::<HashSet<_>>();
     for (address, view) in &previous {
         if selected.contains(&view.id) && !views.contains_key(address) {
@@ -820,6 +845,7 @@ pub fn apply_brand_registry(
     {
         settings.active_business_tab = None;
     }
+    crate::inbox_accounts::initialize(&mut settings, accounts);
     Ok(BrandApply {
         settings,
         logos,

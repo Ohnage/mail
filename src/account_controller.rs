@@ -314,6 +314,14 @@ pub(super) fn apply_connected_accounts(
         })
         .collect::<Vec<_>>();
     apply_connected_account_rows(app, rows);
+    app.global::<InboxAccountsUi>()
+        .set_accounts(ModelRc::new(VecModel::from(
+            presentation
+                .inbox_accounts
+                .iter()
+                .map(|account| presentation.inbox_choice(account))
+                .collect::<Vec<_>>(),
+        )));
     app.set_address_inboxes(ModelRc::new(VecModel::from(
         presentation
             .address_views

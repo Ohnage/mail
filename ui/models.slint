@@ -194,7 +194,7 @@ export struct BusinessTabRow {
 }
 
 // Receiving inbox views are separate from physical accounts and From identities.
-export enum InboxViewKind { account, alias }
+export enum InboxViewKind { account, alias, named-account }
 export struct InboxViewChoiceRow {
     key: string,
     kind: InboxViewKind,

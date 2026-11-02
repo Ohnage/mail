@@ -750,10 +750,8 @@ pub(super) fn register_settings_preference_callbacks(
             ));
             return;
         };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Import brand registry")
-            .add_filter("Brand registry", &["json"])
-            .pick_file()
+        let Some(path) =
+            choose_settings_file_path("Import brand registry", "Brand registry", &["json"])
         else {
             return;
         };
@@ -902,11 +900,11 @@ pub(super) fn register_settings_preference_callbacks(
         let Some(core) = state_for_logo.borrow().core.clone() else {
             return;
         };
-        let Some(path) = rfd::FileDialog::new()
-            .set_title("Choose profile logo")
-            .add_filter("Image", &["png", "jpg", "jpeg", "gif", "webp"])
-            .pick_file()
-        else {
+        let Some(path) = choose_settings_file_path(
+            "Choose profile logo",
+            "Image",
+            &["png", "jpg", "jpeg", "gif", "webp"],
+        ) else {
             return;
         };
         let bytes = match std::fs::read(&path) {
@@ -1174,6 +1172,27 @@ fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
         .collect::<Vec<_>>();
     editor.set_members(ModelRc::new(VecModel::from(members)));
     editor.set_selected_count(draft.accounts.len().try_into().unwrap_or(i32::MAX));
+}
+
+#[cfg(desktop)]
+fn choose_settings_file_path(
+    title: &str,
+    filter_name: &str,
+    extensions: &[&str],
+) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .set_title(title)
+        .add_filter(filter_name, extensions)
+        .pick_file()
+}
+
+#[cfg(mobile)]
+fn choose_settings_file_path(
+    _title: &str,
+    _filter_name: &str,
+    _extensions: &[&str],
+) -> Option<std::path::PathBuf> {
+    None
 }
 
 fn choose_custom_icon_path() -> Option<std::path::PathBuf> {

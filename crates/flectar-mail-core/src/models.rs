@@ -1466,9 +1466,11 @@ pub struct MailProfile {
 /// A pinned mail scope shown after All accounts.
 ///
 /// `scope` selects how the fields combine:
-/// - `profiles` — only the accounts in `profile_ids` (empty means every account)
+/// - `profiles` — only the accounts in `profile_ids`. An empty list matches
+///   nothing; it does not mean every account.
 /// - `recipients` — `recipient_patterns` across every account
-/// - `narrow` — those accounts, and the recipient patterns
+/// - `narrow` — those accounts, and the recipient patterns. An empty account
+///   list matches nothing.
 /// - `any` — those accounts, or a recipient pattern, or a sender rule
 ///
 /// An empty `scope` is a tab saved before scopes existed: recipients across
@@ -1476,8 +1478,8 @@ pub struct MailProfile {
 /// set, otherwise the profiles.
 ///
 /// `recipient_patterns` are address wildcards (`*` and `?`) matched against
-/// To, Cc, and the mailbox address (Delivered-To). Sender display names match
-/// only when the sender's domain is in `sender_domains`.
+/// To, Cc, Bcc, and the mailbox address (Delivered-To). Sender display names
+/// match only when the sender's domain is in `sender_domains`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BusinessTab {
@@ -1513,6 +1515,42 @@ impl BusinessTab {
             }
         }
     }
+
+    /// The company whose logo and color the tab itself shows.
+    ///
+    /// Prefer the profile whose id is the tab id (`mentink-media` on the
+    /// Mentink Media tab). Otherwise a listed profile with the tab's name
+    /// (Tim Mentink is profile `tim-personal`). Otherwise the first listed
+    /// profile.
+    pub fn icon_profile<'a>(&self, profiles: &'a [MailProfile]) -> Option<&'a MailProfile> {
+        profiles
+            .iter()
+            .find(|profile| profile.id == self.id)
+            .or_else(|| {
+                profiles.iter().find(|profile| {
+                    self.profile_ids.iter().any(|id| id == &profile.id)
+                        && profile.name.eq_ignore_ascii_case(&self.name)
+                })
+            })
+            .or_else(|| {
+                self.profile_ids
+                    .iter()
+                    .find_map(|id| profiles.iter().find(|profile| profile.id == *id))
+            })
+    }
+}
+
+/// Profiles and business tabs from before the last brand-registry import.
+///
+/// Written once, when `brand_registry_backup` is empty, so a later import
+/// does not overwrite the copy that makes the replace reversible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrandRegistryBackup {
+    #[serde(default)]
+    pub mail_profiles: Vec<MailProfile>,
+    #[serde(default)]
+    pub business_tabs: Vec<BusinessTab>,
 }
 
 /// The reading surface follows the application unless explicitly overridden.
@@ -1761,10 +1799,15 @@ pub struct Settings {
     /// The business tab scoping the mail view. `None` means it is not applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_business_tab: Option<String>,
-    /// SHA-256 of the brand registry last applied from disk, so an unchanged
-    /// file is not imported again.
+    /// SHA-256 of the importer version plus the brand registry last applied
+    /// from disk, so an unchanged file is not imported again. The version is
+    /// part of the hash: a fixed importer re-applies a file that was imported
+    /// by an older one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub brand_registry_digest: String,
+    /// Previous profiles and tabs, kept when a registry import replaces them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brand_registry_backup: Option<BrandRegistryBackup>,
 }
 
 /// A named, rich-HTML signature belonging to one account.
@@ -1942,6 +1985,7 @@ impl Default for Settings {
             business_tabs: Vec::new(),
             active_business_tab: None,
             brand_registry_digest: String::new(),
+            brand_registry_backup: None,
         }
     }
 }

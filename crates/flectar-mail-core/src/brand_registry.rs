@@ -7,16 +7,17 @@
 //! profile `id`/`match`/`logo.file`, top-level `accounts[]` assignments, tab
 //! `rule`, recipient lists, and `agentSenders`. Unknown fields are ignored.
 //!
-//! Applying a registry is idempotent. It creates or updates profiles and tabs
-//! and moves an account only when a rule matches it. Accounts and mail are
-//! never deleted, and an account no rule names stays in the profile it already
-//! has. An explicit address beats a domain, and the first matching rule in
-//! that group wins. The generator's "fallback to Tim Personal" is not applied:
-//! an address the file does not name stays put. A domain token that is not a
-//! domain (the Pixelated Cities hub placeholder) is skipped; those mailboxes
-//! are assigned from `accounts[]`.
+//! Applying a registry replaces mail profiles and business tabs. Profile ids
+//! are the registry ids, not ids left over from an older grouping that
+//! happened to share a name. Accounts and mail are never deleted. An account
+//! no rule places goes to an Unassigned profile. The previous profiles and
+//! tabs are kept once, on `settings.brand_registry_backup`, so the replace
+//! can be undone. An explicit address beats a domain, and the first matching
+//! rule in that group wins. The generator's "fallback to Tim Personal" is not
+//! applied. A domain token that is not a domain (the Pixelated Cities hub
+//! placeholder) is skipped; those mailboxes are assigned from `accounts[]`.
 
-use crate::models::{BusinessTab, MailProfile, Settings};
+use crate::models::{BrandRegistryBackup, BusinessTab, MailProfile, Settings};
 use crate::recipient_match::email_matches;
 use base64::Engine;
 use serde_json::Value;
@@ -81,6 +82,10 @@ pub struct BrandApply {
     /// Accounts a rule moved or confirmed.
     pub matched: usize,
 }
+
+/// Prefixed to the registry bytes before hashing. Bumping it makes the next
+/// launch re-apply a file whose bytes have not changed.
+pub const IMPORTER_DIGEST_PREFIX: &str = "flectar-brand-importer/2\n";
 
 const MAX_PROFILES: usize = 50;
 const MAX_TABS: usize = 24;
@@ -260,10 +265,13 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Apply `registry` onto `settings`. `read_file` loads a logo path from the
-/// registry; data URLs are decoded here. A logo path the host cannot read is
-/// skipped and the profile's stored logo is left as it was. The returned logos
-/// are bytes for the host to store under the profile's id.
+/// Apply `registry` onto `settings`, replacing profiles and tabs.
+///
+/// `read_file` loads a logo path. Data URLs are decoded here. A registry logo
+/// overwrites whatever was stored. When that file cannot be read, the bytes
+/// of a previous logo with the same profile id, or else the same name, are
+/// reused and written under the registry id. The returned logos are bytes for
+/// the host to store under `profile-logos/<id>.<ext>`.
 pub fn apply_brand_registry(
     settings: &Settings,
     accounts: &[RegistryAccount],
@@ -280,6 +288,14 @@ pub fn apply_brand_registry(
     }
 
     let mut settings = settings.clone();
+    if settings.brand_registry_backup.is_none() {
+        settings.brand_registry_backup = Some(BrandRegistryBackup {
+            mail_profiles: settings.mail_profiles.clone(),
+            business_tabs: settings.business_tabs.clone(),
+        });
+    }
+    let previous = settings.mail_profiles.clone();
+    let mut profiles: Vec<MailProfile> = Vec::new();
     let mut logos = Vec::new();
     let mut touched = HashSet::new();
 
@@ -302,57 +318,70 @@ pub fn apply_brand_registry(
             Some(color) => normalize_color(color)?,
             None => None,
         };
-        let profile_id = if let Some(position) = find_profile(&settings, incoming) {
-            let profile = &mut settings.mail_profiles[position];
-            profile.name = name;
-            if let Some(color) = color {
-                profile.color = color;
-            }
-            profile.id.clone()
-        } else {
-            if settings.mail_profiles.len() >= MAX_PROFILES {
-                return Err(format!(
-                    "no more than {MAX_PROFILES} mail profiles can be created"
-                ));
-            }
-            let id = incoming
-                .id
-                .as_deref()
-                .and_then(safe_slug)
-                .filter(|id| {
-                    settings
-                        .mail_profiles
-                        .iter()
-                        .all(|profile| profile.id != *id)
-                })
-                .unwrap_or_else(|| fresh_id("profile", &settings.mail_profiles, index));
-            settings.mail_profiles.push(MailProfile {
-                id: id.clone(),
-                name,
-                color: color.unwrap_or_else(|| PALETTE[index % PALETTE.len()].to_owned()),
-                account_ids: Vec::new(),
-                logo: None,
-            });
-            id
+        let profile_id = incoming
+            .id
+            .as_deref()
+            .and_then(safe_slug)
+            .filter(|id| profiles.iter().all(|profile| profile.id != *id))
+            .unwrap_or_else(|| fresh_id("profile", &profiles, index));
+        let mut profile = MailProfile {
+            id: profile_id.clone(),
+            name,
+            color: color.unwrap_or_else(|| PALETTE[index % PALETTE.len()].to_owned()),
+            account_ids: Vec::new(),
+            logo: None,
         };
         if let Some(logo) = incoming.logo.as_deref()
             && let Some(applied) = decode_logo(&profile_id, logo, &mut read_file)?
         {
-            if let Some(profile) = settings
-                .mail_profiles
-                .iter_mut()
-                .find(|profile| profile.id == profile_id)
-            {
-                profile.logo = Some(format!(
-                    "profile-logos/{}.{}",
-                    profile_id, applied.extension
-                ));
-            }
+            profile.logo = Some(format!(
+                "profile-logos/{}.{}",
+                profile_id, applied.extension
+            ));
             logos.push(applied);
         }
+        if profile.logo.is_none()
+            && let Some(applied) = carry_logo(&previous, incoming, &profile_id, &mut read_file)?
+        {
+            profile.logo = Some(format!(
+                "profile-logos/{}.{}",
+                profile_id, applied.extension
+            ));
+            logos.push(applied);
+        }
+        if profile.logo.is_none() {
+            profile.logo = previous_logo_path(&previous, incoming, &profile_id);
+        }
+        profiles.push(profile);
     }
 
-    let matched = assign_accounts(&mut settings, accounts, registry)?;
+    let matched = assign_accounts(&mut profiles, accounts, registry)?;
+    let mut placed = HashSet::new();
+    for profile in &profiles {
+        placed.extend(profile.account_ids.iter().copied());
+    }
+    let mut unassigned = accounts
+        .iter()
+        .map(|account| account.id)
+        .filter(|id| placed.insert(*id))
+        .collect::<Vec<_>>();
+    unassigned.sort_unstable();
+    unassigned.dedup();
+    if !unassigned.is_empty() {
+        if profiles.len() >= MAX_PROFILES {
+            return Err(format!(
+                "no more than {MAX_PROFILES} mail profiles can be created"
+            ));
+        }
+        profiles.push(MailProfile {
+            id: "unassigned".into(),
+            name: "Unassigned".into(),
+            color: "#6B7280".into(),
+            account_ids: unassigned,
+            logo: None,
+        });
+    }
+    settings.mail_profiles = profiles;
     apply_tabs(&mut settings, registry)?;
     retire_active_profile(&mut settings);
     if settings
@@ -369,28 +398,52 @@ pub fn apply_brand_registry(
     })
 }
 
-fn find_profile(settings: &Settings, incoming: &RegistryProfile) -> Option<usize> {
-    if let Some(id) = incoming.id.as_deref()
-        && let Some(position) = settings
-            .mail_profiles
-            .iter()
-            .position(|profile| profile.id == id)
-    {
-        return Some(position);
-    }
-    settings
-        .mail_profiles
+fn carry_logo(
+    previous: &[MailProfile],
+    incoming: &RegistryProfile,
+    profile_id: &str,
+    read_file: &mut impl FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<Option<AppliedLogo>, String> {
+    let stored = previous
         .iter()
-        .position(|profile| profile.name.eq_ignore_ascii_case(incoming.name.trim()))
+        .find(|profile| profile.id == profile_id)
+        .or_else(|| {
+            previous
+                .iter()
+                .find(|profile| profile.name.eq_ignore_ascii_case(incoming.name.trim()))
+        })
+        .and_then(|profile| profile.logo.as_deref());
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+    decode_logo(profile_id, stored, read_file)
+}
+
+fn previous_logo_path(
+    previous: &[MailProfile],
+    incoming: &RegistryProfile,
+    profile_id: &str,
+) -> Option<String> {
+    previous
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .or_else(|| {
+            previous
+                .iter()
+                .find(|profile| profile.name.eq_ignore_ascii_case(incoming.name.trim()))
+        })
+        .and_then(|profile| profile.logo.as_deref())
+        .and_then(safe_logo_relative)
+        .map(str::to_owned)
 }
 
 fn assign_accounts(
-    settings: &mut Settings,
+    profiles: &mut [MailProfile],
     accounts: &[RegistryAccount],
     registry: &BrandRegistry,
 ) -> Result<usize, String> {
     let index_of = |key: &str| -> Option<usize> {
-        settings.mail_profiles.iter().position(|profile| {
+        profiles.iter().position(|profile| {
             profile.id.eq_ignore_ascii_case(key) || profile.name.eq_ignore_ascii_case(key)
         })
     };
@@ -477,7 +530,7 @@ fn assign_accounts(
             continue;
         };
         matched += 1;
-        for (index, profile) in settings.mail_profiles.iter_mut().enumerate() {
+        for (index, profile) in profiles.iter_mut().enumerate() {
             profile.account_ids.retain(|id| *id != account.id);
             if index == winner {
                 profile.account_ids.push(account.id);
@@ -502,7 +555,8 @@ fn is_domain(value: &str) -> bool {
 
 fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), String> {
     let sender_domains = sender_domains(registry);
-    let mut ordered = Vec::new();
+    let profiles = settings.mail_profiles.clone();
+    let mut tabs = Vec::new();
     let mut seen = HashSet::new();
     for (index, incoming) in registry.tabs.iter().enumerate() {
         if incoming.builtin {
@@ -517,8 +571,9 @@ fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), S
         if !seen.insert(key) {
             return Err(format!("brand registry repeats tab {name:?}"));
         }
-        ordered.push(upsert_tab(
-            settings,
+        tabs.push(build_tab(
+            &profiles,
+            &tabs,
             &name,
             incoming,
             index,
@@ -527,58 +582,30 @@ fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), S
     }
     if !registry.tim_addresses.is_empty() {
         let name = "Tim Mentink";
-        if let Some(position) = ordered.iter().position(|id| {
-            settings.business_tabs.iter().any(|tab| {
-                &tab.id == id && (tab.id == "tim" || tab.name.eq_ignore_ascii_case(name))
-            })
-        }) {
-            let id = ordered[position].clone();
-            if let Some(tab) = settings.business_tabs.iter_mut().find(|tab| tab.id == id) {
-                tab.recipient_patterns =
-                    merge_patterns(&tab.recipient_patterns, &registry.tim_addresses);
-                if tab.scope.is_empty() || (tab.scope == "profiles" && tab.profile_ids.is_empty()) {
-                    tab.scope = "recipients".to_owned();
-                }
-            }
-        } else if let Some(existing) = settings
-            .business_tabs
+        if let Some(tab) = tabs
             .iter_mut()
             .find(|tab| tab.id == "tim" || tab.name.eq_ignore_ascii_case(name))
         {
-            existing.recipient_patterns =
-                merge_patterns(&existing.recipient_patterns, &registry.tim_addresses);
-            if existing.scope.is_empty()
-                || (existing.scope == "profiles" && existing.profile_ids.is_empty())
-            {
-                existing.scope = "recipients".to_owned();
+            tab.recipient_patterns =
+                merge_patterns(&tab.recipient_patterns, &registry.tim_addresses);
+            if tab.scope.is_empty() || (tab.scope == "profiles" && tab.profile_ids.is_empty()) {
+                tab.scope = "recipients".to_owned();
             }
-            ordered.insert(0, existing.id.clone());
         } else {
-            let id = fresh_tab_id(settings, registry.tabs.len());
-            settings.business_tabs.push(BusinessTab {
-                id: id.clone(),
-                name: name.to_owned(),
-                profile_ids: Vec::new(),
-                recipient_patterns: clean_patterns(&registry.tim_addresses),
-                scope: "recipients".to_owned(),
-                sender_addresses: Vec::new(),
-                sender_names: Vec::new(),
-                sender_domains: Vec::new(),
-            });
-            ordered.insert(0, id);
-        }
-    }
-    let mut rest = settings
-        .business_tabs
-        .iter()
-        .map(|tab| tab.id.clone())
-        .filter(|id| !ordered.iter().any(|kept| kept == id))
-        .collect::<Vec<_>>();
-    ordered.append(&mut rest);
-    let mut tabs = Vec::with_capacity(ordered.len());
-    for id in ordered {
-        if let Some(tab) = settings.business_tabs.iter().find(|tab| tab.id == id) {
-            tabs.push(tab.clone());
+            let id = incoming_tab_id("tim", &tabs, registry.tabs.len());
+            tabs.insert(
+                0,
+                BusinessTab {
+                    id,
+                    name: name.to_owned(),
+                    profile_ids: Vec::new(),
+                    recipient_patterns: clean_patterns(&registry.tim_addresses),
+                    scope: "recipients".to_owned(),
+                    sender_addresses: Vec::new(),
+                    sender_names: Vec::new(),
+                    sender_domains: Vec::new(),
+                },
+            );
         }
     }
     if tabs.len() > MAX_TABS {
@@ -621,20 +648,20 @@ fn sender_domains(registry: &BrandRegistry) -> Vec<String> {
     domains
 }
 
-fn upsert_tab(
-    settings: &mut Settings,
+fn build_tab(
+    profiles: &[MailProfile],
+    taken: &[BusinessTab],
     name: &str,
     incoming: &RegistryTab,
     index: usize,
     sender_domains: &[String],
-) -> Result<String, String> {
+) -> Result<BusinessTab, String> {
     let profile_ids = incoming
         .profiles
         .iter()
         .filter_map(|key| {
             let key = key.trim();
-            settings
-                .mail_profiles
+            profiles
                 .iter()
                 .find(|profile| {
                     profile.id.eq_ignore_ascii_case(key) || profile.name.eq_ignore_ascii_case(key)
@@ -663,35 +690,14 @@ fn upsert_tab(
     } else {
         incoming.scope.clone()
     };
-    let position = incoming
-        .id
-        .as_deref()
-        .and_then(|id| settings.business_tabs.iter().position(|tab| tab.id == id))
-        .or_else(|| {
-            settings
-                .business_tabs
-                .iter()
-                .position(|tab| tab.name.eq_ignore_ascii_case(name))
-        });
-    if let Some(position) = position {
-        let tab = &mut settings.business_tabs[position];
-        tab.name = name.to_owned();
-        tab.profile_ids = profile_ids;
-        tab.recipient_patterns = recipients;
-        tab.scope = scope;
-        tab.sender_addresses = sender_addresses;
-        tab.sender_names = sender_names;
-        tab.sender_domains = sender_domains;
-        return Ok(tab.id.clone());
-    }
     let id = incoming
         .id
         .as_deref()
         .and_then(safe_slug)
-        .filter(|id| settings.business_tabs.iter().all(|tab| tab.id != *id))
-        .unwrap_or_else(|| fresh_tab_id(settings, index));
-    settings.business_tabs.push(BusinessTab {
-        id: id.clone(),
+        .filter(|id| taken.iter().all(|tab| tab.id != *id))
+        .unwrap_or_else(|| incoming_tab_id(&format!("tab-{index}"), taken, index));
+    Ok(BusinessTab {
+        id,
         name: name.to_owned(),
         profile_ids,
         recipient_patterns: recipients,
@@ -699,8 +705,21 @@ fn upsert_tab(
         sender_addresses,
         sender_names,
         sender_domains,
-    });
-    Ok(id)
+    })
+}
+
+fn incoming_tab_id(preferred: &str, taken: &[BusinessTab], salt: usize) -> String {
+    let mut id = preferred.to_owned();
+    if !taken.iter().any(|tab| tab.id == id) && safe_slug(&id).is_some() {
+        return id;
+    }
+    id = format!("tab-{salt}-{}", taken.len());
+    let mut suffix = 2u32;
+    while taken.iter().any(|tab| tab.id == id) {
+        id = format!("tab-{salt}-{}-{suffix}", taken.len());
+        suffix += 1;
+    }
+    id
 }
 
 fn merge_patterns(current: &[String], extra: &[String]) -> Vec<String> {
@@ -872,16 +891,6 @@ fn fresh_id(prefix: &str, profiles: &[MailProfile], salt: usize) -> String {
     id
 }
 
-fn fresh_tab_id(settings: &Settings, salt: usize) -> String {
-    let mut id = format!("tab-{salt}-{}", settings.business_tabs.len());
-    let mut suffix = 2u32;
-    while settings.business_tabs.iter().any(|tab| tab.id == id) {
-        id = format!("tab-{salt}-{}-{suffix}", settings.business_tabs.len());
-        suffix += 1;
-    }
-    id
-}
-
 fn retire_active_profile(settings: &mut Settings) {
     let showable = settings
         .active_mail_profile
@@ -1006,6 +1015,7 @@ mod tests {
         assert_eq!(profile("Personal").account_ids, vec![1]);
         assert_eq!(profile("Mentinkizm LLC").account_ids, vec![2]);
         assert!(profile("Pixelated Cities").account_ids.is_empty());
+        assert_eq!(profile("Unassigned").account_ids, vec![3]);
         assert_eq!(applied.matched, 2);
         assert!(
             profile("Mentinkizm LLC")
@@ -1034,7 +1044,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_twice_keeps_unmatched_accounts_and_ids() {
+    fn applying_twice_replaces_legacy_profiles_and_keeps_the_backup() {
         let mut settings = Settings::default();
         settings.mail_profiles.push(MailProfile {
             id: "personal".into(),
@@ -1044,28 +1054,39 @@ mod tests {
             logo: None,
         });
         let registry = registry();
-        let once = apply_brand_registry(
-            &settings,
-            &[account(9, "owner@mentinkizm.com")],
-            &registry,
-            |_| Err("no file".into()),
-        )
-        .unwrap();
+        let accounts = [
+            account(3, "keep@elsewhere.test"),
+            account(9, "owner@mentinkizm.com"),
+        ];
+        let once = apply_brand_registry(&settings, &accounts, &registry, |_| Err("no file".into()))
+            .unwrap();
         assert!(
             once.settings
                 .mail_profiles
                 .iter()
-                .any(|profile| profile.id == "personal" && profile.account_ids == vec![3])
+                .all(|profile| profile.id != "personal")
         );
-        let twice = apply_brand_registry(
-            &once.settings,
-            &[account(9, "owner@mentinkizm.com")],
-            &registry,
-            |_| Err("no file".into()),
-        )
+        assert_eq!(
+            once.settings
+                .mail_profiles
+                .iter()
+                .find(|profile| profile.id == "unassigned")
+                .unwrap()
+                .account_ids,
+            vec![3]
+        );
+        let backup = once.settings.brand_registry_backup.as_ref().unwrap();
+        assert_eq!(backup.mail_profiles[0].id, "personal");
+        let twice = apply_brand_registry(&once.settings, &accounts, &registry, |_| {
+            Err("no file".into())
+        })
         .unwrap();
         assert_eq!(once.settings.mail_profiles, twice.settings.mail_profiles);
         assert_eq!(once.settings.business_tabs, twice.settings.business_tabs);
+        assert_eq!(
+            once.settings.brand_registry_backup,
+            twice.settings.brand_registry_backup
+        );
     }
 
     #[test]
@@ -1122,12 +1143,13 @@ mod tests {
         assert_eq!(profile("mentinkizm").account_ids, vec![2]);
         assert_eq!(profile("forty7").account_ids, vec![3]);
         assert_eq!(profile("pixelated-cities").account_ids, vec![4]);
+        assert_eq!(profile("unassigned").account_ids, vec![9]);
         assert!(
             applied
                 .settings
                 .mail_profiles
                 .iter()
-                .any(|profile| profile.id == "personal" && profile.account_ids == vec![9])
+                .all(|profile| profile.id != "personal")
         );
         assert!(profile("forty7").logo.as_deref().unwrap().ends_with(".png"));
         assert!(applied.logos.iter().any(|logo| logo.profile_id == "forty7"));
@@ -1212,5 +1234,163 @@ mod tests {
         .unwrap();
         assert_eq!(applied.settings.mail_profiles, again.settings.mail_profiles);
         assert_eq!(applied.settings.business_tabs, again.settings.business_tabs);
+    }
+
+    #[test]
+    fn installed_settings_are_replaced_by_the_real_registry() {
+        let registry = parse_brand_registry(include_bytes!(
+            "../../../docs/fixtures/brand-registry/tim-registry.json"
+        ))
+        .unwrap();
+        let excerpt: Value = serde_json::from_str(include_str!(
+            "../../../docs/fixtures/brand-registry/settings-excerpt.json"
+        ))
+        .unwrap();
+        let mut settings = Settings::default();
+        settings.mail_profiles = serde_json::from_value(excerpt["mailProfiles"].clone()).unwrap();
+        settings.business_tabs = serde_json::from_value(excerpt["businessTabs"].clone()).unwrap();
+        settings.active_business_tab = excerpt["activeBusinessTab"].as_str().map(str::to_owned);
+        settings.brand_registry_digest = excerpt["brandRegistryDigest"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let accounts = excerpt["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|account| RegistryAccount {
+                id: account["id"].as_i64().unwrap(),
+                email: account["email"].as_str().unwrap().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(accounts.len(), 288);
+        assert!(
+            settings
+                .mail_profiles
+                .iter()
+                .any(|profile| profile.id.starts_with("profile-"))
+        );
+        let png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let applied = apply_brand_registry(&settings, &accounts, &registry, |path| {
+            if path.ends_with("mentink-media.png") {
+                Ok(png.clone())
+            } else {
+                Err(format!("missing {path}"))
+            }
+        })
+        .unwrap();
+        assert!(
+            applied
+                .settings
+                .mail_profiles
+                .iter()
+                .all(|profile| !profile.id.starts_with("profile-"))
+        );
+        let mut assigned = applied
+            .settings
+            .mail_profiles
+            .iter()
+            .flat_map(|profile| profile.account_ids.iter().copied())
+            .collect::<Vec<_>>();
+        assigned.sort_unstable();
+        let mut expected = accounts
+            .iter()
+            .map(|account| account.id)
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+        assert_eq!(assigned, expected);
+        assert!(
+            applied
+                .settings
+                .mail_profiles
+                .iter()
+                .all(|profile| profile.id != "unassigned")
+        );
+        let profile = |id: &str| {
+            applied
+                .settings
+                .mail_profiles
+                .iter()
+                .find(|profile| profile.id == id)
+                .unwrap()
+        };
+        let tab = |id: &str| {
+            applied
+                .settings
+                .business_tabs
+                .iter()
+                .find(|tab| tab.id == id)
+                .unwrap()
+        };
+        assert!(profile("pixelated-cities").account_ids.len() >= 275);
+        assert_eq!(
+            tab("pixelated-cities").profile_ids,
+            vec!["pixelated-cities".to_owned()]
+        );
+        let contact = accounts
+            .iter()
+            .find(|account| account.email.eq_ignore_ascii_case("contact@mentinkizm.com"))
+            .unwrap();
+        assert!(profile("mentinkizm").account_ids.contains(&contact.id));
+        assert!(
+            tab("mentinkizm")
+                .profile_ids
+                .iter()
+                .any(|id| id == "mentinkizm")
+        );
+        let tim = tab("tim");
+        assert_eq!(tim.resolved_scope(), "recipients");
+        let matcher = crate::recipient_match::RecipientMatcher::compile(&tim.recipient_patterns);
+        assert!(matcher.matches_email("tim.mentink@mentinkizm.com"));
+        assert!(matcher.matches_headers(
+            r#"[{"name":null,"email":"tim.mentink@mentinkizm.com"}]"#,
+            "[]",
+            "[]",
+            "hub@example.org",
+        ));
+        assert_eq!(
+            tab("mentink-media")
+                .icon_profile(&applied.settings.mail_profiles)
+                .unwrap()
+                .id,
+            "mentink-media"
+        );
+        assert!(
+            profile("mentink-media")
+                .logo
+                .as_deref()
+                .unwrap()
+                .ends_with("mentink-media.png")
+        );
+        assert_eq!(
+            applied.settings.active_business_tab.as_deref(),
+            Some("forty7")
+        );
+        assert_eq!(tab("forty7").resolved_scope(), "any");
+        assert!(
+            applied
+                .settings
+                .brand_registry_backup
+                .as_ref()
+                .unwrap()
+                .mail_profiles
+                .iter()
+                .any(|profile| profile.id.starts_with("profile-"))
+        );
+        let again = apply_brand_registry(&applied.settings, &accounts, &registry, |path| {
+            if path.ends_with("mentink-media.png") {
+                Ok(png.clone())
+            } else {
+                Err(format!("missing {path}"))
+            }
+        })
+        .unwrap();
+        assert_eq!(applied.settings.mail_profiles, again.settings.mail_profiles);
+        assert_eq!(applied.settings.business_tabs, again.settings.business_tabs);
+        assert_eq!(
+            applied.settings.brand_registry_backup,
+            again.settings.brand_registry_backup
+        );
+        assert!(IMPORTER_DIGEST_PREFIX.contains("flectar-brand-importer/2"));
     }
 }

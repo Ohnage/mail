@@ -3,10 +3,15 @@
 //! A pattern is an address with `*` meaning any sequence and `?` meaning one
 //! character, compared without regard to case. `tim@*` matches
 //! `tim@example.com` and not `tmentink@gmail.com`. `ohnage?@*` matches
-//! `ohnage1@x.com` and not `ohnage@x.com`. The SQL clause treats a matching
-//! mailbox address as Delivered-To (that is the address the message was
-//! delivered into) and also matches `To` and `Cc`. Sender display names match
-//! only together with one of the scope's own domains.
+//! `ohnage1@x.com` and not `ohnage@x.com`. A recipient filter matches To, Cc,
+//! Bcc, and the mailbox address (the address the message was delivered into,
+//! used as Delivered-To). Literal addresses are an exact set. The SQL clause
+//! is one scalar function, so a few hundred patterns do not build an `OR`
+//! tree SQLite will reject. Sender display names match only together with
+//! one of the scope's own domains.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 /// `true` when `email` matches `pattern`. Both sides are trimmed. `*` is the
 /// only wildcard; an empty pattern matches nothing.
@@ -51,8 +56,191 @@ fn glob(pattern: &str, text: &str) -> bool {
     pattern_index == pattern.len()
 }
 
+/// Precompiled recipient patterns. Exact addresses are a set lookup; `*` and
+/// `?` patterns are globs.
+#[derive(Debug, Clone)]
+pub struct RecipientMatcher {
+    exact: HashSet<String>,
+    globs: Vec<String>,
+}
+
+impl RecipientMatcher {
+    pub fn compile(patterns: &[String]) -> Self {
+        let mut exact = HashSet::new();
+        let mut globs = Vec::new();
+        for pattern in patterns {
+            let pattern = pattern.trim().to_ascii_lowercase();
+            if pattern.is_empty() || pattern.len() > 200 {
+                continue;
+            }
+            if pattern.contains('*') || pattern.contains('?') {
+                if !globs.iter().any(|kept: &String| kept == &pattern) {
+                    globs.push(pattern);
+                }
+            } else {
+                exact.insert(pattern);
+            }
+        }
+        Self { exact, globs }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.exact.is_empty() && self.globs.is_empty()
+    }
+
+    /// `true` when `email` matches any compiled pattern.
+    pub fn matches_email(&self, email: &str) -> bool {
+        let email = email.trim().to_ascii_lowercase();
+        if email.is_empty() {
+            return false;
+        }
+        self.exact.contains(&email) || self.globs.iter().any(|pattern| glob(pattern, &email))
+    }
+
+    /// `true` when the mailbox or any To/Cc/Bcc address matches.
+    pub fn matches_headers(
+        &self,
+        to_json: &str,
+        cc_json: &str,
+        bcc_json: &str,
+        mailbox: &str,
+    ) -> bool {
+        if self.is_empty() {
+            return false;
+        }
+        self.matches_email(mailbox)
+            || json_has_match(to_json, self)
+            || json_has_match(cc_json, self)
+            || json_has_match(bcc_json, self)
+    }
+}
+
+fn json_has_match(json: &str, matcher: &RecipientMatcher) -> bool {
+    let bytes = json.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        index += 1;
+        let start = index;
+        let end = skip_json_string(bytes, &mut index);
+        if &json[start..end] != "email" {
+            continue;
+        }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b':' {
+            continue;
+        }
+        index += 1;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'"' {
+            continue;
+        }
+        index += 1;
+        let value_start = index;
+        let value_end = skip_json_string(bytes, &mut index);
+        if matcher.matches_email(&json[value_start..value_end]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `index` points at the first byte of a JSON string. Returns the end of the
+/// decoded span and leaves `index` just past the closing quote.
+fn skip_json_string(bytes: &[u8], index: &mut usize) -> usize {
+    let start = *index;
+    let mut escaped = false;
+    while *index < bytes.len() {
+        let byte = bytes[*index];
+        if escaped {
+            escaped = false;
+            *index += 1;
+            continue;
+        }
+        if byte == b'\\' {
+            escaped = true;
+            *index += 1;
+            continue;
+        }
+        if byte == b'"' {
+            let end = *index;
+            *index += 1;
+            return end;
+        }
+        *index += 1;
+    }
+    start
+}
+
+struct MatcherSlot {
+    matcher: RwLock<Arc<RecipientMatcher>>,
+}
+
+fn matcher_slots() -> &'static Mutex<HashMap<usize, Arc<MatcherSlot>>> {
+    static SLOTS: OnceLock<Mutex<HashMap<usize, Arc<MatcherSlot>>>> = OnceLock::new();
+    SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Register `flectar_recipient_match(to_json, cc_json, bcc_json, mailbox)` on
+/// `conn`. The function reads a slot updated in place, so a cached statement
+/// keeps calling the patterns installed for the latest query on that
+/// connection. An empty pattern list leaves the clause unused and is a no-op.
+pub fn install_recipient_matcher(
+    conn: &rusqlite::Connection,
+    patterns: &[String],
+) -> rusqlite::Result<()> {
+    let compiled = Arc::new(RecipientMatcher::compile(patterns));
+    if compiled.is_empty() {
+        return Ok(());
+    }
+    // Identity only: the pointer is not dereferenced. A reopened database has
+    // a new handle, so it gets its own function instead of a stale slot.
+    let key = unsafe { conn.handle() as usize };
+    let mut slots = matcher_slots()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(slot) = slots.get(&key) {
+        *slot
+            .matcher
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = compiled;
+        return Ok(());
+    }
+    let slot = Arc::new(MatcherSlot {
+        matcher: RwLock::new(compiled),
+    });
+    slots.insert(key, Arc::clone(&slot));
+    drop(slots);
+    conn.create_scalar_function(
+        "flectar_recipient_match",
+        4,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
+            | rusqlite::functions::FunctionFlags::SQLITE_INNOCUOUS,
+        move |ctx| {
+            let matcher = slot
+                .matcher
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let to_json = ctx.get::<Option<String>>(0)?.unwrap_or_default();
+            let cc_json = ctx.get::<Option<String>>(1)?.unwrap_or_default();
+            let bcc_json = ctx.get::<Option<String>>(2)?.unwrap_or_default();
+            let mailbox = ctx.get::<Option<String>>(3)?.unwrap_or_default();
+            Ok(matcher.matches_headers(&to_json, &cc_json, &bcc_json, &mailbox))
+        },
+    )
+}
+
 /// Bound values for one pattern: the mailbox address, then the same address
-/// as it appears in a `{"email":"..."}` JSON list (To or Cc).
+/// as it appears in a `{"email":"..."}` JSON list (To, Cc, or Bcc).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PatternLikes {
     pub address: String,
@@ -97,67 +285,42 @@ fn like_body(pattern: &str) -> String {
     out
 }
 
-/// `EXISTS` predicate on `thread_column` (for example `t.id`). Placeholders
-/// start at `first_bind` (1-based). `None` when there is nothing to filter.
+/// `EXISTS` predicate on `thread_column` (for example `t.id`). The clause
+/// calls `flectar_recipient_match` and binds nothing; install that function
+/// on the connection before preparing. `None` when there is nothing to filter.
+/// `first_bind` is unused and kept so callers can compose later predicates.
 pub fn thread_exists_clause(
     patterns: &[String],
     thread_column: &str,
     first_bind: usize,
 ) -> Option<(String, Vec<String>)> {
-    let likes = pattern_likes(patterns);
-    if likes.is_empty() {
+    let _ = first_bind;
+    if RecipientMatcher::compile(patterns).is_empty() {
         return None;
     }
-    let mut binds = Vec::with_capacity(likes.len() * 3);
-    let mut groups = Vec::with_capacity(likes.len());
-    let mut index = first_bind;
-    for like in &likes {
-        let address = index;
-        let header_to = index + 1;
-        let header_cc = index + 2;
-        index += 3;
-        groups.push(format!(
-            "(LOWER(ra.email) LIKE ?{address} ESCAPE '\\' \
-             OR LOWER(rm.to_json) LIKE ?{header_to} ESCAPE '\\' \
-             OR LOWER(rm.cc_json) LIKE ?{header_cc} ESCAPE '\\')"
-        ));
-        binds.push(like.address.clone());
-        binds.push(like.header.clone());
-        binds.push(like.header.clone());
-    }
-    let sql = format!(
-        "EXISTS (SELECT 1 FROM messages rm \
-         JOIN accounts ra ON ra.id = rm.account_id \
-         WHERE rm.thread_id = {thread_column} AND ({}))",
-        groups.join(" OR ")
-    );
-    Some((sql, binds))
+    Some((
+        format!(
+            "EXISTS (SELECT 1 FROM messages rm \
+             JOIN accounts ra ON ra.id = rm.account_id \
+             WHERE rm.thread_id = {thread_column} \
+             AND flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, ra.email))"
+        ),
+        Vec::new(),
+    ))
 }
 
-/// Same filter for a search row already aliased as `m`.
+/// Same filter for a search row already aliased as `m`. Binds nothing.
 pub fn message_clause(patterns: &[String], first_bind: usize) -> Option<(String, Vec<String>)> {
-    let likes = pattern_likes(patterns);
-    if likes.is_empty() {
+    let _ = first_bind;
+    if RecipientMatcher::compile(patterns).is_empty() {
         return None;
     }
-    let mut binds = Vec::with_capacity(likes.len() * 3);
-    let mut groups = Vec::with_capacity(likes.len());
-    let mut index = first_bind;
-    for like in &likes {
-        let address = index;
-        let header_to = index + 1;
-        let header_cc = index + 2;
-        index += 3;
-        groups.push(format!(
-            "(LOWER((SELECT email FROM accounts ra WHERE ra.id = m.account_id)) LIKE ?{address} ESCAPE '\\' \
-             OR LOWER(m.to_json) LIKE ?{header_to} ESCAPE '\\' \
-             OR LOWER(m.cc_json) LIKE ?{header_cc} ESCAPE '\\')"
-        ));
-        binds.push(like.address.clone());
-        binds.push(like.header.clone());
-        binds.push(like.header.clone());
-    }
-    Some((format!("({})", groups.join(" OR ")), binds))
+    Some((
+        "flectar_recipient_match(m.to_json, m.cc_json, m.bcc_json, \
+         (SELECT email FROM accounts ra WHERE ra.id = m.account_id))"
+            .to_owned(),
+        Vec::new(),
+    ))
 }
 
 /// How a business tab filters mail on top of the account set the caller applies.
@@ -373,13 +536,92 @@ mod tests {
     }
 
     #[test]
-    fn clause_numbers_placeholders_from_the_caller() {
+    fn clause_is_one_function_call_with_no_binds() {
         let (sql, binds) = thread_exists_clause(&["tim@*".into()], "t.id", 4).unwrap();
-        assert!(sql.contains("?4"));
-        assert!(sql.contains("?6"));
+        assert!(
+            sql.contains("flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, ra.email)")
+        );
         assert!(sql.contains("rm.thread_id = t.id"));
-        assert_eq!(binds.len(), 3);
+        assert!(!sql.contains(" OR "));
+        assert!(binds.is_empty());
         assert!(thread_exists_clause(&[], "t.id", 1).is_none());
+    }
+
+    #[test]
+    fn exact_addresses_skip_globs_and_headers_are_case_insensitive() {
+        let matcher = RecipientMatcher::compile(&[
+            "tim.mentink@mentinkizm.com".into(),
+            "tim@*".into(),
+            "ohnage?@*".into(),
+        ]);
+        assert!(matcher.matches_email("Tim.Mentink@Mentinkizm.com"));
+        assert!(matcher.matches_email("tim@elsewhere.test"));
+        assert!(matcher.matches_email("ohnage1@ug4l.com"));
+        assert!(!matcher.matches_email("ohnage10@ug4l.com"));
+        assert!(!matcher.matches_email("other@mentinkizm.com"));
+        let to_json = r#"[{"name":null,"email":"Tim.Mentink@Mentinkizm.com"}]"#;
+        assert!(matcher.matches_headers(to_json, "[]", "[]", "hub@example.org"));
+        assert!(matcher.matches_headers("[]", "[]", to_json, ""));
+        assert!(matcher.matches_headers("[]", "[]", "[]", "tim@delivered.test"));
+        assert!(!matcher.matches_headers(
+            r#"[{"name":"Tim","email":"other@mentinkizm.com"}]"#,
+            "[]",
+            "[]",
+            "hub@example.org"
+        ));
+    }
+
+    #[test]
+    fn hundreds_of_patterns_match_under_an_untrusted_schema() {
+        let conn = crate::db::testutil::conn();
+        conn.set_db_config(
+            rusqlite::config::DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA,
+            false,
+        )
+        .unwrap();
+        crate::db::testutil::seed_account(&conn);
+        let (thread_id, message_id) =
+            crate::db::testutil::seed_message(&conn, "someone@example.com", "Hello", false);
+        conn.execute(
+            "UPDATE messages SET to_json = ?1, cc_json = '[]', bcc_json = '[]' WHERE id = ?2",
+            rusqlite::params![
+                r#"[{"name":null,"email":"tim.mentink@mentinkizm.com"}]"#,
+                message_id
+            ],
+        )
+        .unwrap();
+        let mut patterns: Vec<String> = (0..866)
+            .map(|index| format!("other{index}@example.com"))
+            .collect();
+        patterns.push("tim.mentink@mentinkizm.com".into());
+        install_recipient_matcher(&conn, &patterns).unwrap();
+        let (sql, binds) = thread_exists_clause(&patterns, "t.id", 1).unwrap();
+        assert!(binds.is_empty());
+        let found: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM threads t WHERE {sql}"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(found, 1);
+        let only: i64 = conn
+            .query_row("SELECT id FROM threads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(thread_id, only);
+
+        let mut missed = patterns.clone();
+        missed.pop();
+        install_recipient_matcher(&conn, &missed).unwrap();
+        let mut statement = conn
+            .prepare_cached(&format!("SELECT COUNT(*) FROM threads t WHERE {sql}"))
+            .unwrap();
+        let found: i64 = statement.query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(found, 0);
+
+        install_recipient_matcher(&conn, &["tim.mentink@*".into()]).unwrap();
+        let found: i64 = statement.query_row([], |row| row.get(0)).unwrap();
+        assert_eq!(found, 1);
     }
 
     #[test]

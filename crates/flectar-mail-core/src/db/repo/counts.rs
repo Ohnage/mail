@@ -242,6 +242,7 @@ pub fn mailbox_badge_counts_filtered(
     conn: &Connection,
     scope: &crate::recipient_match::MailScope,
 ) -> Result<Vec<MailboxBadgeCounts>> {
+    crate::recipient_match::install_recipient_matcher(conn, &scope.recipient_patterns)?;
     let mut counts = conn
         .prepare("SELECT id FROM accounts ORDER BY sort_order, id")?
         .query_map([], |row| {

@@ -139,10 +139,14 @@ fn collapse_new_account_label_sections(
     account_ids: impl IntoIterator<Item = i64>,
     initialized: &mut HashSet<i64>,
     collapsed: &mut HashSet<String>,
+    collapse_accounts: bool,
 ) {
     for account_id in account_ids {
         if initialized.insert(account_id) {
             collapsed.insert(format!("account-labels:{account_id}"));
+            if collapse_accounts {
+                collapsed.insert(format!("account:{account_id}"));
+            }
         }
     }
 }
@@ -237,6 +241,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         .filter(|mailbox| !mailbox.is_account && mailbox.has_children && mailbox.folder_id >= 0)
         .map(|mailbox| mailbox.folder_id)
         .collect::<Vec<_>>();
+    let collapse_accounts = !state.sidebar_collapse_tab.is_empty();
     let InboxState {
         initialized_sidebar_accounts,
         initialized_sidebar_folders,
@@ -248,6 +253,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         account_ids,
         initialized_sidebar_accounts,
         collapsed_sidebar_sections,
+        collapse_accounts,
     );
     collapse_new_folder_sections(
         folder_ids,
@@ -858,14 +864,14 @@ mod tests {
     fn new_account_labels_start_collapsed_without_collapsing_accounts() {
         let mut initialized = HashSet::new();
         let mut collapsed = defaults();
-        collapse_new_account_label_sections([1, 2], &mut initialized, &mut collapsed);
+        collapse_new_account_label_sections([1, 2], &mut initialized, &mut collapsed, false);
         assert!(!collapsed.contains("account:1"));
         assert!(collapsed.contains("account-labels:1"));
         assert!(!collapsed.contains("account:2"));
         assert!(collapsed.contains("account-labels:2"));
 
         collapsed.remove("account-labels:1");
-        collapse_new_account_label_sections([1, 2, 3], &mut initialized, &mut collapsed);
+        collapse_new_account_label_sections([1, 2, 3], &mut initialized, &mut collapsed, false);
         assert!(!collapsed.contains("account:1"));
         assert!(!collapsed.contains("account-labels:1"));
         assert!(!collapsed.contains("account:3"));

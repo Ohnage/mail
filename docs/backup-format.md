@@ -67,4 +67,4 @@ the database migration does.
 | `accountColors` | Map of email address to `#RRGGBB`. Every address must be one of the accounts in the file. |
 | `mailProfiles` | Profiles. Each entry is `{ "name", "color", "accountEmails" }`. `color` is `#RRGGBB`. Every address must be in the file, and an address is in at most one profile. |
 
-A backup with no `mailProfiles` field leaves existing profiles alone. `"mailProfiles": []` clears them. Profile logos and business tabs are not part of this backup; they travel in the brand registry.
+A backup with no `mailProfiles` field leaves existing profiles alone. `"mailProfiles": []` clears them. Profile logos and business tabs are not part of this backup; they travel in the brand registry. A registry import stores the previous profiles and tabs in application settings as `brandRegistryBackup`.

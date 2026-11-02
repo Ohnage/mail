@@ -339,10 +339,7 @@ pub(super) fn apply_connected_accounts(
         .business_tabs
         .iter()
         .map(|tab| {
-            let profile = tab
-                .profile_ids
-                .iter()
-                .find_map(|id| presentation.profiles.iter().find(|profile| profile.id == *id));
+            let profile = tab.icon_profile(&presentation.profiles);
             let color = profile
                 .map(|profile| {
                     parse_marker_color(&profile.color)

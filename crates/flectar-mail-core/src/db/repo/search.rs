@@ -198,6 +198,7 @@ fn structured_thread_ids(conn: &Connection, q: &ParsedQuery, cap: i64) -> Result
         return Ok(Vec::new());
     }
     append_account_clauses(q, &mut where_clauses, &mut bind);
+    append_recipient_clauses(q, &mut where_clauses, &mut bind);
 
     let rank_expr = if q.fts.is_empty() {
         "0.0"
@@ -220,7 +221,10 @@ fn structured_thread_ids(conn: &Connection, q: &ParsedQuery, cap: i64) -> Result
     );
 
     // prepare_cached: the SQL text repeats across keystrokes (only binds
-    // change), so skip re-planning on every call.
+    // change), so skip re-planning on every call. The recipient function
+    // reads the matcher installed below, so a cached statement still sees
+    // the current tab.
+    crate::recipient_match::install_recipient_matcher(conn, &q.recipient_patterns)?;
     let mut stmt = conn.prepare_cached(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
     let mut rows = stmt.query(params_ref.as_slice())?;
@@ -265,6 +269,7 @@ fn structured_message_ids(conn: &Connection, q: &ParsedQuery, cap: i64) -> Resul
         return Ok(Vec::new());
     }
     append_account_clauses(q, &mut where_clauses, &mut bind);
+    append_recipient_clauses(q, &mut where_clauses, &mut bind);
 
     let rank_expr = if q.fts.is_empty() {
         "0.0"
@@ -286,6 +291,7 @@ fn structured_message_ids(conn: &Connection, q: &ParsedQuery, cap: i64) -> Resul
          LIMIT {cap}"
     );
 
+    crate::recipient_match::install_recipient_matcher(conn, &q.recipient_patterns)?;
     let mut stmt = conn.prepare_cached(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
     let ids = stmt
@@ -373,6 +379,7 @@ fn allowed_message_threads(
     let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     append_operator_clauses(q, &mut where_clauses, &mut bind);
     append_account_clauses(q, &mut where_clauses, &mut bind);
+    append_recipient_clauses(q, &mut where_clauses, &mut bind);
 
     let id_list = ids
         .iter()
@@ -388,6 +395,7 @@ fn allowed_message_threads(
         "SELECT m.id, m.thread_id FROM messages m
          WHERE m.thread_id IS NOT NULL AND m.id IN ({id_list}) {where_sql}"
     );
+    crate::recipient_match::install_recipient_matcher(conn, &q.recipient_patterns)?;
     let mut stmt = conn.prepare(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
     let mut map = HashMap::new();
@@ -611,6 +619,7 @@ fn chronological_page_for_query(
          WHERE {} ORDER BY m.date DESC, m.thread_id DESC",
         where_clauses.join(" AND "),
     );
+    crate::recipient_match::install_recipient_matcher(conn, &q.recipient_patterns)?;
     let mut stmt = conn.prepare_cached(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
         bind.iter().map(|value| value.as_ref()).collect();

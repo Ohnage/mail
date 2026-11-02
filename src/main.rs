@@ -567,17 +567,11 @@ impl AccountPresentationSettings {
                 Some(company_accounts),
                 recipients,
             ),
-            _ => {
-                if tab.profile_ids.is_empty() {
-                    (None, None, MailScope::default())
-                } else {
-                    (
-                        Some(company_accounts.clone()),
-                        Some(company_accounts),
-                        MailScope::default(),
-                    )
-                }
-            }
+            _ => (
+                Some(company_accounts.clone()),
+                Some(company_accounts),
+                MailScope::default(),
+            ),
         }
     }
 
@@ -719,6 +713,9 @@ struct InboxState {
     mail_work: Option<mail_work::MailWork>,
     collapsed_folder_ids: HashSet<i64>,
     collapsed_sidebar_sections: HashSet<String>,
+    /// Expand state remembered per business tab. An empty key is All accounts.
+    sidebar_collapse_by_tab: HashMap<String, HashSet<String>>,
+    sidebar_collapse_tab: String,
     initialized_sidebar_accounts: HashSet<i64>,
     initialized_sidebar_folders: HashSet<i64>,
     sidebar_rows: Rc<SidebarModel>,
@@ -1182,6 +1179,8 @@ impl InboxState {
                 "categories".into(),
                 "global-labels".into(),
             ]),
+            sidebar_collapse_by_tab: HashMap::new(),
+            sidebar_collapse_tab: String::new(),
             initialized_sidebar_accounts: HashSet::new(),
             initialized_sidebar_folders: HashSet::new(),
             sidebar_rows: Rc::new(SidebarModel::default()),
@@ -1292,6 +1291,7 @@ impl InboxState {
     /// then reloads the list and counts.
     #[must_use]
     fn sync_profile_accounts(&mut self) -> bool {
+        self.swap_sidebar_collapse_for_active_tab();
         let (sidebar, query, scope) = self.account_presentation.view_scope();
         let changed = if let Some(core) = &self.core {
             core.set_view_scope(sidebar.clone(), query, scope)
@@ -1301,6 +1301,40 @@ impl InboxState {
         let accounts_changed = self.profile_accounts != sidebar;
         self.profile_accounts = sidebar;
         changed || accounts_changed
+    }
+
+    /// Account rows on a business tab start collapsed. Expanding one is
+    /// remembered for that tab, including All accounts (the empty key).
+    fn swap_sidebar_collapse_for_active_tab(&mut self) {
+        let tab_key = self
+            .account_presentation
+            .active_business_tab
+            .clone()
+            .unwrap_or_default();
+        if self.sidebar_collapse_tab == tab_key {
+            return;
+        }
+        let previous = std::mem::replace(&mut self.sidebar_collapse_tab, tab_key.clone());
+        self.sidebar_collapse_by_tab
+            .insert(previous, self.collapsed_sidebar_sections.clone());
+        if let Some(saved) = self.sidebar_collapse_by_tab.get(&tab_key) {
+            self.collapsed_sidebar_sections = saved.clone();
+            return;
+        }
+        let mut collapsed = HashSet::from(["categories".to_owned(), "global-labels".to_owned()]);
+        if !tab_key.is_empty() {
+            let (sidebar, _, _) = self.account_presentation.view_scope();
+            let account_ids = sidebar.unwrap_or_else(|| {
+                self.connected_accounts
+                    .iter()
+                    .map(|account| account.id)
+                    .collect()
+            });
+            for id in account_ids {
+                collapsed.insert(format!("account:{id}"));
+            }
+        }
+        self.collapsed_sidebar_sections = collapsed;
     }
 
     /// Replace the account inventory. Returns whether the selection moved to
@@ -3371,16 +3405,16 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let section_toggle_state = Rc::clone(&state);
     let section_toggle_app = app.as_weak();
     app.on_toggle_sidebar_section(move |key, open| {
-        if open {
-            section_toggle_state
-                .borrow_mut()
-                .collapsed_sidebar_sections
-                .remove(key.as_str());
-        } else {
-            section_toggle_state
-                .borrow_mut()
-                .collapsed_sidebar_sections
-                .insert(key.to_string());
+        {
+            let mut state = section_toggle_state.borrow_mut();
+            if open {
+                state.collapsed_sidebar_sections.remove(key.as_str());
+            } else {
+                state.collapsed_sidebar_sections.insert(key.to_string());
+            }
+            let tab = state.sidebar_collapse_tab.clone();
+            let sections = state.collapsed_sidebar_sections.clone();
+            state.sidebar_collapse_by_tab.insert(tab, sections);
         }
         let animate = section_toggle_app
             .upgrade()
@@ -8014,6 +8048,70 @@ mod calendar_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_empty_profile_tab_matches_no_accounts() {
+        use flectar_mail_core::models::BusinessTab;
+        let presentation = AccountPresentationSettings {
+            profiles: vec![MailProfile {
+                id: "pixelated-cities".into(),
+                name: "Pixelated Cities".into(),
+                color: "#8B5CF6".into(),
+                account_ids: vec![1, 2],
+                logo: None,
+            }],
+            business_tabs: vec![BusinessTab {
+                id: "pixelated-cities".into(),
+                name: "Pixelated Cities".into(),
+                profile_ids: Vec::new(),
+                recipient_patterns: Vec::new(),
+                scope: "profiles".into(),
+                sender_addresses: Vec::new(),
+                sender_names: Vec::new(),
+                sender_domains: Vec::new(),
+            }],
+            active_business_tab: Some("pixelated-cities".into()),
+            ..AccountPresentationSettings::default()
+        };
+        let (sidebar, query, scope) = presentation.view_scope();
+        assert_eq!(sidebar, Some(Vec::new()));
+        assert_eq!(query, Some(Vec::new()));
+        assert!(scope.recipient_patterns.is_empty());
+    }
+
+    #[test]
+    fn a_recipient_tab_is_not_limited_to_its_profile() {
+        use flectar_mail_core::models::BusinessTab;
+        let presentation = AccountPresentationSettings {
+            profiles: vec![MailProfile {
+                id: "tim-personal".into(),
+                name: "Tim Mentink".into(),
+                color: "#3B82F6".into(),
+                account_ids: vec![4],
+                logo: None,
+            }],
+            business_tabs: vec![BusinessTab {
+                id: "tim".into(),
+                name: "Tim Mentink".into(),
+                profile_ids: vec!["tim-personal".into()],
+                recipient_patterns: vec!["tim.mentink@mentinkizm.com".into()],
+                scope: "recipients".into(),
+                sender_addresses: Vec::new(),
+                sender_names: Vec::new(),
+                sender_domains: Vec::new(),
+            }],
+            active_business_tab: Some("tim".into()),
+            ..AccountPresentationSettings::default()
+        };
+        let (sidebar, query, scope) = presentation.view_scope();
+        assert!(sidebar.is_none());
+        assert!(query.is_none());
+        assert_eq!(
+            scope.recipient_patterns,
+            vec!["tim.mentink@mentinkizm.com".to_owned()]
+        );
+        assert!(!scope.match_any);
+    }
 
     #[test]
     fn sender_icon_retry_delay_is_bounded() {

@@ -7,9 +7,17 @@ On launch, Flectar also applies `%APPDATA%\flectar-mail\brand-registry.json`
 (the data directory on every platform) when that file is present and its
 bytes have changed.
 
-Import is idempotent. It never deletes accounts or mail. An account that no
-rule names stays in the profile it already has. Applying the same file twice
-changes nothing.
+Import replaces mail profiles and business tabs with the file. It never
+deletes accounts or mail. Profile ids are the registry ids: a profile is not
+matched by name onto an older id. An account no rule places goes to an
+Unassigned profile. The profiles and tabs from before that import are stored
+once in application settings as `brandRegistryBackup`, and a later import
+does not overwrite that copy. Applying the same file twice changes nothing
+after the first replace.
+
+The file is hashed together with the importer version
+(`flectar-brand-importer/2`). A newer importer re-applies a file whose bytes
+have not changed.
 
 ## Accepted document
 
@@ -35,8 +43,12 @@ The file must be 8 MB or smaller.
 `id` is kept when it is a slug (`letters`, digits, `-`, `_`). `color` is
 `#RRGGBB`. `logo` is a `data:image/...;base64,...` URL, a filesystem path, or
 an object whose `file` is that path. Paths are read relative to the registry
-file. PNG, JPEG, GIF, and WebP up to 2 MB are stored under
-`profile-logos/<id>.<ext>`. A logo that cannot be read is skipped.
+file, then from `brand-registry-logos/` in the data directory (a manual
+import copies a sibling `logos/` directory there), then from the data
+directory itself. PNG, JPEG, GIF, and WebP up to 2 MB are stored under
+`profile-logos/<id>.<ext>`, replacing a logo already stored for that id.
+When the registry file cannot be read, the previous logo for that id, or
+else for that profile name, is written under the registry id.
 
 ### Which account moves
 
@@ -52,21 +64,29 @@ Rules are tried in this order. The first match wins.
 
 `gmail.com` on the Tim Mentink profile therefore claims a Gmail mailbox the
 file does not name explicitly. A mailbox on a domain the file never mentions
-stays where it is. The generator's "fallback to Tim Personal" is not applied.
+goes to Unassigned. The generator's "fallback to Tim Personal" is not applied.
 
 ### Tabs
 
-`tabs[]` with `"builtin": true` (All Accounts) is skipped. Every other tab is
-created or updated and shown, in file order, after All accounts. Tabs already
-saved but absent from the file stay at the end.
+`tabs[]` with `"builtin": true` (All Accounts) is skipped. Every other tab
+replaces the saved tabs and is shown, in file order, after All accounts.
+Tabs absent from the file are removed (they remain in `brandRegistryBackup`).
 
 | `rule` | Scope | What the mail view shows |
 |---|---|---|
-| `recipient` | `recipients` | Mail in any account whose To, Cc, or mailbox address matches `recipientPatterns` or `recipientAddresses` |
-| `profiles` | `profiles` | Mail in the accounts of `profiles` (those values are profile ids or names) |
+| `recipient` | `recipients` | Mail in any account whose To, Cc, Bcc, or mailbox address matches `recipientPatterns` or `recipientAddresses`. This is not limited to the tab's profiles. |
+| `profiles` | `profiles` | Mail in the accounts of `profiles` (those values are profile ids or names). An empty list matches nothing. |
 | `profiles+recipient+sender` | `any` | Mail in those accounts, **or** mail matching `extraRecipientAddresses`, **or** a sender rule |
 
-`timAddresses` is merged into the Tim Mentink tab. Patterns use `*` and `?`.
+`timAddresses` is merged into the Tim Mentink tab. Patterns use `*` and `?`
+and are matched without regard to case. Literal addresses are looked up in a
+set, so a list of several hundred does not build an SQL `OR` tree.
+
+The tab's logo and color come from the profile whose id equals the tab id.
+Tim Mentink, whose id is `tim`, uses the listed profile named Tim Mentink.
+Message rows keep the account's own profile color bar and logo. The sidebar
+lists only the tab's accounts. A recipient tab lists every account, collapsed
+until that account is expanded; the choice is remembered per tab.
 
 Sender rules live on `agentSenders`:
 
@@ -80,9 +100,6 @@ Sender rules live on `agentSenders`:
 An address matches `From` exactly (or as a pattern when it contains `*` or
 `?`). A display name matches only when the sender's domain is one of the
 registry's own domains, so a stranger named "Rook" does not appear in Forty7.
-
-The tab's logo and color come from its first profile. Message rows keep the
-account's own profile color bar and logo.
 
 ## Small form
 

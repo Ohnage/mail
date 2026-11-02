@@ -227,7 +227,58 @@ struct PageLoadContext<'a> {
 
 fn brand_registry_digest(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(bytes))
+    let mut hasher = Sha256::new();
+    hasher.update(flectar_mail_core::brand_registry::IMPORTER_DIGEST_PREFIX.as_bytes());
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+fn copy_brand_registry_logos(source: &std::path::Path, dest: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(source) else {
+        return;
+    };
+    if std::fs::create_dir_all(dest).is_err() {
+        return;
+    }
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.is_empty()
+            || name.contains("..")
+            || name.contains('/')
+            || name.contains('\\')
+            || !entry.path().is_file()
+        {
+            continue;
+        }
+        let _ = std::fs::copy(entry.path(), dest.join(name.as_ref()));
+    }
+}
+
+fn read_brand_logo(
+    logo: &str,
+    registry_dir: &std::path::Path,
+    data_dir: &std::path::Path,
+) -> Result<Vec<u8>, String> {
+    let relative = std::path::Path::new(logo);
+    let mut candidates = Vec::new();
+    if relative.is_absolute() {
+        candidates.push(relative.to_path_buf());
+    } else {
+        candidates.push(registry_dir.join(relative));
+        if let Some(name) = relative.file_name() {
+            candidates.push(data_dir.join("brand-registry-logos").join(name));
+        }
+        candidates.push(data_dir.join(relative));
+    }
+    let mut last = format!("missing {logo}");
+    for full in candidates {
+        match std::fs::read(&full) {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => last = format!("{}: {error}", full.display()),
+        }
+    }
+    Err(last)
 }
 
 fn normalize_account_ids(accounts: Option<Vec<i64>>) -> Option<Arc<[i64]>> {
@@ -416,6 +467,9 @@ impl CoreMailSource {
             }
             std::fs::write(&stored, &bytes).map_err(|error| error.to_string())?;
         }
+        if let Some(parent) = path.parent() {
+            copy_brand_registry_logos(&parent.join("logos"), &self.data_dir().join("brand-registry-logos"));
+        }
         self.import_brand_registry_bytes(path, &bytes, digest).await
     }
 
@@ -445,16 +499,10 @@ impl CoreMailSource {
             .await
             .map_err(|error| error.to_string())?;
         let parent = path.parent().unwrap_or(path);
-        let applied = apply_brand_registry(&settings, &registry_accounts, &registry, |logo| {
-            let relative = std::path::Path::new(logo);
-            let full = if relative.is_absolute() {
-                relative.to_path_buf()
-            } else {
-                parent.join(relative)
-            };
-            std::fs::read(&full).map_err(|error| format!("{}: {error}", full.display()))
-        })?;
         let data_dir = self.data_dir();
+        let applied = apply_brand_registry(&settings, &registry_accounts, &registry, |logo| {
+            read_brand_logo(logo, parent, &data_dir)
+        })?;
         let logo_dir = data_dir.join("profile-logos");
         std::fs::create_dir_all(&logo_dir).map_err(|error| error.to_string())?;
         for logo in &applied.logos {

@@ -433,6 +433,7 @@ pub fn list_matching(
     scope: &crate::recipient_match::MailScope,
 ) -> Result<ThreadPage> {
     let (sql, bind) = list_sql(args, scope);
+    crate::recipient_match::install_recipient_matcher(conn, &scope.recipient_patterns)?;
 
     let mut stmt = conn.prepare(&sql)?;
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = bind.iter().map(|b| b.as_ref()).collect();
@@ -493,6 +494,7 @@ pub fn count_matching(
     scope: &crate::recipient_match::MailScope,
 ) -> Result<usize> {
     let (where_sql, bind) = build_filter(args, false, scope);
+    crate::recipient_match::install_recipient_matcher(conn, &scope.recipient_patterns)?;
     let sql = format!(
         "SELECT COUNT(*)
          FROM threads t

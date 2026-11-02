@@ -34,9 +34,11 @@ for language in da de es fr it ja nl ru tr zh_Hans; do
   msgmerge --quiet --no-fuzzy-matching \
     --output-file "$work_dir/flectar-mail-$language.po" \
     "lang/$language/LC_MESSAGES/flectar-mail.po" "$work_dir/flectar-mail.pot"
-  diff -u \
-    <(sed '/^"POT-Creation-Date:/d' "lang/$language/LC_MESSAGES/flectar-mail.po") \
-    <(sed '/^"POT-Creation-Date:/d' "$work_dir/flectar-mail-$language.po")
+  sed '/^"POT-Creation-Date:/d' "lang/$language/LC_MESSAGES/flectar-mail.po" \
+    | python3 scripts/normalize-po-wrapping.py > "$work_dir/reference-$language.po"
+  sed '/^"POT-Creation-Date:/d' "$work_dir/flectar-mail-$language.po" \
+    | python3 scripts/normalize-po-wrapping.py > "$work_dir/generated-$language.po"
+  diff -u "$work_dir/reference-$language.po" "$work_dir/generated-$language.po"
 done
 
 bash scripts/check-ui-message-catalog.sh

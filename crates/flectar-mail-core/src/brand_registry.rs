@@ -18,11 +18,14 @@
 //! applied. A domain token that is not a domain (the Pixelated Cities hub
 //! placeholder) is skipped; those mailboxes are assigned from `accounts[]`.
 
-use crate::models::{BrandRegistryBackup, BusinessTab, MailProfile, Settings};
+use crate::models::{
+    AddressRule, AddressView, AddressViewSource, BrandRegistryBackup, BusinessTab, MailProfile,
+    Settings,
+};
 use crate::recipient_match::email_matches;
 use base64::Engine;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrandRegistry {
@@ -33,6 +36,8 @@ pub struct BrandRegistry {
     pub tabs: Vec<RegistryTab>,
     /// Mailbox email to profile id or name, from the top-level `accounts` list.
     pub account_assignments: Vec<(String, String)>,
+    /// Concrete receiving address to storage mailbox email; profile hints are not addresses.
+    pub address_aliases: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +91,7 @@ pub struct BrandApply {
 
 /// Prefixed to the registry bytes before hashing. Bumping it makes the next
 /// launch re-apply a file whose bytes have not changed.
-pub const IMPORTER_DIGEST_PREFIX: &str = "flectar-brand-importer/2\n";
+pub const IMPORTER_DIGEST_PREFIX: &str = "flectar-brand-importer/3\n";
 
 const MAX_PROFILES: usize = 50;
 const MAX_TABS: usize = 24;
@@ -153,11 +158,34 @@ pub fn parse_brand_registry(bytes: &[u8]) -> Result<BrandRegistry, String> {
                 .collect()
         })
         .unwrap_or_default();
+    let address_aliases = root
+        .get("accounts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|account| {
+            account
+                .get("email")
+                .and_then(Value::as_str)
+                .map(|email| (account, email))
+        })
+        .flat_map(|(account, email)| {
+            let mut aliases = string_list(account.get("timAddresses"));
+            aliases.extend(string_list(account.get("aliases")));
+            aliases.extend(string_list(account.get("otherBusinessAliases")));
+            aliases.into_iter().filter_map(move |alias| {
+                normalize_receiving_address(&alias)
+                    .ok()
+                    .map(|alias| (alias, email.to_owned()))
+            })
+        })
+        .collect();
     Ok(BrandRegistry {
         profiles,
         tim_addresses,
         tabs,
         account_assignments,
+        address_aliases,
     })
 }
 
@@ -264,6 +292,402 @@ fn string_list(value: Option<&Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Normalize a concrete receiving address without granting any sender permission.
+pub fn normalize_receiving_address(value: &str) -> Result<String, String> {
+    if value.contains(['*', '?']) {
+        return Err("a receiving inbox needs a concrete email address".into());
+    }
+    crate::sender_identities::manual_identity_fields(value.to_owned(), None, None)
+        .map(|(address, _, _)| address.to_ascii_lowercase())
+        .map_err(|error| error.to_string())
+}
+
+/// Deterministic positive catalog key; insertion separately detects collisions.
+pub fn address_view_id(address: &str) -> i64 {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(b"flectar-receiving-address/v1\0");
+    hash.update(address.trim().to_ascii_lowercase().as_bytes());
+    let digest = hash.finalize();
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    (i64::from_be_bytes(bytes) & i64::MAX).max(1)
+}
+
+type AddressViewsByAddress = BTreeMap<String, AddressView>;
+type AddressKeys = HashMap<i64, String>;
+
+fn previous_address_views(
+    settings: &Settings,
+) -> Result<(AddressViewsByAddress, AddressKeys), String> {
+    let mut views = BTreeMap::new();
+    let mut ids = HashMap::new();
+    for view in &settings.address_views {
+        let address = normalize_receiving_address(&view.address)?;
+        if view.id <= 0
+            || ids
+                .get(&view.id)
+                .is_some_and(|existing| existing != &address)
+        {
+            return Err(format!(
+                "receiving address catalog has a conflicting key {}",
+                view.id
+            ));
+        }
+        if views
+            .get(&address)
+            .is_some_and(|existing: &AddressView| existing.id != view.id)
+        {
+            return Err(format!("receiving address {address} has conflicting keys"));
+        }
+        let mut normalized = view.clone();
+        normalized.address = address.clone();
+        normalized.source_account_emails = normalized
+            .source_account_emails
+            .iter()
+            .map(|email| normalize_receiving_address(email))
+            .collect::<Result<Vec<_>, _>>()?;
+        normalized.source_account_emails.sort();
+        normalized.source_account_emails.dedup();
+        ids.insert(view.id, address.clone());
+        views.insert(address, normalized);
+    }
+    Ok((views, ids))
+}
+
+fn insert_address_candidate(
+    views: &mut BTreeMap<String, AddressView>,
+    previous: &BTreeMap<String, AddressView>,
+    ids: &mut HashMap<i64, String>,
+    address: &str,
+    source_emails: &[String],
+    source: AddressViewSource,
+) -> Result<(), String> {
+    let address = normalize_receiving_address(address)?;
+    let mut source_emails = source_emails
+        .iter()
+        .map(|email| normalize_receiving_address(email))
+        .collect::<Result<Vec<_>, _>>()?;
+    source_emails.sort();
+    source_emails.dedup();
+    if let Some(existing) = views.get_mut(&address) {
+        if existing.source != AddressViewSource::Manual {
+            existing.source_account_emails.extend(source_emails);
+            existing.source_account_emails.sort();
+            existing.source_account_emails.dedup();
+            if source == AddressViewSource::Registry {
+                existing.source = source;
+            }
+        }
+        return Ok(());
+    }
+    if views.len() >= 20_000 {
+        return Err("no more than 20000 receiving addresses can be stored".into());
+    }
+    let id = previous
+        .get(&address)
+        .map(|view| view.id)
+        .unwrap_or_else(|| address_view_id(&address));
+    if ids.get(&id).is_some_and(|existing| existing != &address) {
+        return Err(format!("receiving address key collision for {address}"));
+    }
+    ids.insert(id, address.clone());
+    views.insert(
+        address.clone(),
+        AddressView {
+            id,
+            address,
+            source_account_emails: source_emails,
+            profile_id: None,
+            source,
+        },
+    );
+    Ok(())
+}
+
+/// Classify by explicit address first, then domain. Source mailbox fallback is separate.
+pub fn classify_receiving_address(rules: &[AddressRule], address: &str) -> Option<String> {
+    let address = normalize_receiving_address(address).ok()?;
+    rules
+        .iter()
+        .find(|rule| {
+            rule.addresses
+                .iter()
+                .any(|candidate| candidate.eq_ignore_ascii_case(&address))
+        })
+        .or_else(|| {
+            let domain = address.rsplit_once('@')?.1;
+            rules.iter().find(|rule| {
+                rule.domains
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(domain))
+            })
+        })
+        .map(|rule| rule.profile_id.clone())
+}
+
+fn classify_address_views(
+    settings: &Settings,
+    accounts: &[RegistryAccount],
+    views: &mut BTreeMap<String, AddressView>,
+) {
+    let mut source_profiles = HashMap::new();
+    for account in accounts {
+        if let Some(profile) = settings
+            .mail_profiles
+            .iter()
+            .find(|profile| profile.account_ids.contains(&account.id))
+        {
+            source_profiles.insert(
+                account.email.trim().to_ascii_lowercase(),
+                profile.id.clone(),
+            );
+        }
+    }
+    for view in views.values() {
+        if let Some(profile) = classify_receiving_address(&settings.address_rules, &view.address) {
+            source_profiles.insert(view.address.clone(), profile);
+        }
+    }
+    for view in views.values_mut() {
+        if view.source == AddressViewSource::Manual && view.profile_id.is_some() {
+            continue;
+        }
+        view.profile_id = classify_receiving_address(&settings.address_rules, &view.address)
+            .or_else(|| {
+                let mut profiles = view
+                    .source_account_emails
+                    .iter()
+                    .filter_map(|source| source_profiles.get(source).cloned());
+                let first = profiles.next()?;
+                profiles.all(|profile| profile == first).then_some(first)
+            });
+    }
+}
+
+fn apply_address_catalog(
+    settings: &mut Settings,
+    accounts: &[RegistryAccount],
+    registry: &BrandRegistry,
+) -> Result<(), String> {
+    let (previous, mut ids) = previous_address_views(settings)?;
+    let mut views = previous
+        .iter()
+        .filter(|(_, view)| view.source != AddressViewSource::Registry)
+        .map(|(address, view)| (address.clone(), view.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut rules = Vec::new();
+    // Preserve the registry's priority: explicit match.addresses, explicit
+    // mailbox assignments, profile account literals, then every domain rule.
+    for (index, incoming) in registry.profiles.iter().enumerate() {
+        let profile = &settings.mail_profiles[index];
+        let mut addresses = incoming
+            .addresses
+            .iter()
+            .filter_map(|address| normalize_receiving_address(address).ok())
+            .collect::<Vec<_>>();
+        addresses.sort();
+        addresses.dedup();
+        let mut domains = incoming
+            .domains
+            .iter()
+            .map(|domain| domain.trim().trim_start_matches('@').to_ascii_lowercase())
+            .filter(|domain| is_domain(domain))
+            .collect::<Vec<_>>();
+        if profile.id == "pixelated-cities" {
+            domains.extend(
+                registry
+                    .account_assignments
+                    .iter()
+                    .filter(|(_, key)| {
+                        key.eq_ignore_ascii_case(&profile.id)
+                            || key.eq_ignore_ascii_case(&profile.name)
+                    })
+                    .filter_map(|(email, _)| normalize_receiving_address(email).ok())
+                    .filter_map(|email| {
+                        email.rsplit_once('@').map(|(_, domain)| domain.to_owned())
+                    }),
+            );
+        }
+        domains.sort();
+        domains.dedup();
+        rules.push(AddressRule {
+            profile_id: profile.id.clone(),
+            addresses,
+            domains,
+        });
+    }
+    for (email, key) in &registry.account_assignments {
+        if let Some(profile) = settings.mail_profiles.iter().find(|profile| {
+            key.eq_ignore_ascii_case(&profile.id) || key.eq_ignore_ascii_case(&profile.name)
+        }) {
+            rules.push(AddressRule {
+                profile_id: profile.id.clone(),
+                addresses: vec![normalize_receiving_address(email)?],
+                domains: Vec::new(),
+            });
+        }
+    }
+    for (index, incoming) in registry.profiles.iter().enumerate() {
+        let mut addresses = incoming
+            .accounts
+            .iter()
+            .filter_map(|address| normalize_receiving_address(address).ok())
+            .collect::<Vec<_>>();
+        addresses.sort();
+        addresses.dedup();
+        if !addresses.is_empty() {
+            rules.push(AddressRule {
+                profile_id: settings.mail_profiles[index].id.clone(),
+                addresses,
+                domains: Vec::new(),
+            });
+        }
+    }
+    settings.address_rules = rules;
+    for (email, _) in &registry.account_assignments {
+        insert_address_candidate(
+            &mut views,
+            &previous,
+            &mut ids,
+            email,
+            std::slice::from_ref(email),
+            AddressViewSource::Registry,
+        )?;
+    }
+    for account in accounts {
+        insert_address_candidate(
+            &mut views,
+            &previous,
+            &mut ids,
+            &account.email,
+            std::slice::from_ref(&account.email),
+            AddressViewSource::Registry,
+        )?;
+    }
+    for rule in &settings.address_rules {
+        for address in &rule.addresses {
+            insert_address_candidate(
+                &mut views,
+                &previous,
+                &mut ids,
+                address,
+                &[],
+                AddressViewSource::Registry,
+            )?;
+        }
+    }
+    for (address, mailbox) in &registry.address_aliases {
+        insert_address_candidate(
+            &mut views,
+            &previous,
+            &mut ids,
+            address,
+            std::slice::from_ref(mailbox),
+            AddressViewSource::Registry,
+        )?;
+    }
+    let selected = settings
+        .business_tabs
+        .iter()
+        .filter_map(|tab| tab.address_view_ids.as_ref())
+        .flatten()
+        .copied()
+        .collect::<HashSet<_>>();
+    for (address, view) in &previous {
+        if selected.contains(&view.id) && !views.contains_key(address) {
+            views.insert(address.clone(), view.clone());
+        }
+    }
+    classify_address_views(settings, accounts, &mut views);
+    settings.address_views = views.into_values().collect();
+    Ok(())
+}
+
+/// Migrate only the legacy default label, once; explicit later renames remain user-owned.
+pub fn migrate_default_project_tab(settings: &mut Settings) -> bool {
+    if settings.address_catalog_version != 0 {
+        return false;
+    }
+    for tab in &mut settings.business_tabs {
+        if tab.id == "forty7" && tab.name.eq_ignore_ascii_case("Forty7") {
+            tab.name = "Project 47".into();
+        }
+    }
+    settings.address_catalog_version = 1;
+    true
+}
+
+/// Merge cached receiving suggestions; never calls provider discovery or changes senders.
+pub fn merge_cached_address_views(
+    settings: &mut Settings,
+    accounts: &[RegistryAccount],
+    identities: &[(String, String)],
+) -> Result<bool, String> {
+    let before = settings.address_views.clone();
+    let (previous, mut ids) = previous_address_views(settings)?;
+    let mut views = previous.clone();
+    for account in accounts {
+        insert_address_candidate(
+            &mut views,
+            &previous,
+            &mut ids,
+            &account.email,
+            std::slice::from_ref(&account.email),
+            AddressViewSource::Provider,
+        )?;
+    }
+    for (mailbox, address) in identities {
+        if normalize_receiving_address(address).is_ok() {
+            insert_address_candidate(
+                &mut views,
+                &previous,
+                &mut ids,
+                address,
+                std::slice::from_ref(mailbox),
+                AddressViewSource::Provider,
+            )?;
+        }
+    }
+    classify_address_views(settings, accounts, &mut views);
+    settings.address_views = views.into_values().collect();
+    Ok(settings.address_views != before)
+}
+
+/// Add a receiving-only manual view; an empty source list intentionally searches all accounts.
+pub fn save_manual_address_view(
+    settings: &mut Settings,
+    address: &str,
+    source_emails: &[String],
+    accounts: &[RegistryAccount],
+) -> Result<(), String> {
+    let address = normalize_receiving_address(address)?;
+    let source_emails = source_emails
+        .iter()
+        .map(|email| normalize_receiving_address(email))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (previous, mut ids) = previous_address_views(settings)?;
+    let mut views = previous.clone();
+    insert_address_candidate(
+        &mut views,
+        &previous,
+        &mut ids,
+        &address,
+        &source_emails,
+        AddressViewSource::Manual,
+    )?;
+    let view = views
+        .get_mut(&address)
+        .ok_or_else(|| "receiving address was not stored".to_owned())?;
+    view.source = AddressViewSource::Manual;
+    view.source_account_emails = source_emails;
+    view.source_account_emails.sort();
+    view.source_account_emails.dedup();
+    classify_address_views(settings, accounts, &mut views);
+    settings.address_views = views.into_values().collect();
+    Ok(())
 }
 
 /// Apply `registry` onto `settings`, replacing profiles and tabs.
@@ -383,9 +807,11 @@ pub fn apply_brand_registry(
         });
     }
     settings.mail_profiles = profiles;
+    apply_address_catalog(&mut settings, accounts, registry)?;
     if !settings.business_tabs_customized {
         apply_tabs(&mut settings, registry)?;
     }
+    migrate_default_project_tab(&mut settings);
     retire_active_profile(&mut settings);
     if settings
         .active_business_tab
@@ -601,6 +1027,8 @@ fn apply_tabs(settings: &mut Settings, registry: &BrandRegistry) -> Result<(), S
                 BusinessTab {
                     id,
                     name: name.to_owned(),
+                    show_name: true,
+                    address_view_ids: None,
                     icon: None,
                     account_ids: None,
                     profile_ids: Vec::new(),
@@ -713,9 +1141,16 @@ fn build_tab(
         .and_then(safe_slug)
         .filter(|id| taken.iter().all(|tab| tab.id != *id))
         .unwrap_or_else(|| incoming_tab_id(&format!("tab-{index}"), taken, index));
+    let name = if id == "forty7" && name.eq_ignore_ascii_case("Forty7") {
+        "Project 47"
+    } else {
+        name
+    };
     Ok(BusinessTab {
         id,
         name: name.to_owned(),
+        show_name: true,
+        address_view_ids: None,
         icon: None,
         account_ids: None,
         profile_ids,
@@ -1017,7 +1452,266 @@ mod tests {
                 tab("Pixelated Cities", &["Pixelated Cities"], &[]),
             ],
             account_assignments: Vec::new(),
+            address_aliases: Vec::new(),
         }
+    }
+
+    #[test]
+    fn supplied_registry_preserves_all_859_aliases_and_memorial_source_mapping() {
+        let registry = parse_brand_registry(include_bytes!(
+            "../../../docs/fixtures/brand-registry/tim-registry.json"
+        ))
+        .unwrap();
+        assert_eq!(registry.address_aliases.len(), 859);
+        let settings = apply_brand_registry(&Settings::default(), &[], &registry, |_| {
+            Err("not needed".into())
+        })
+        .unwrap()
+        .settings;
+        let view = |address: &str| {
+            settings
+                .address_views
+                .iter()
+                .find(|view| view.address == address)
+                .unwrap()
+        };
+        assert_eq!(
+            view("tim@mentinkmemorial.org").source_account_emails,
+            vec!["contact@mentinkmemorial.org"]
+        );
+        assert_eq!(
+            view("tim@mentinkmemorial.org").profile_id.as_deref(),
+            Some("mentink-memorial")
+        );
+        assert_eq!(
+            view("47@mentinkizm.com").profile_id.as_deref(),
+            Some("forty7")
+        );
+        assert_eq!(
+            view("rook@helplearnhow.com").profile_id.as_deref(),
+            Some("rook")
+        );
+        assert_eq!(
+            classify_receiving_address(&settings.address_rules, "new-alias@abilenetexas.org")
+                .as_deref(),
+            Some("pixelated-cities")
+        );
+        assert_eq!(
+            classify_receiving_address(&settings.address_rules, "new-alias@not-provided.example"),
+            None
+        );
+        assert!(
+            view("rook@helplearnhow.com")
+                .source_account_emails
+                .is_empty()
+        );
+        assert_eq!(
+            settings
+                .business_tabs
+                .iter()
+                .find(|tab| tab.id == "forty7")
+                .unwrap()
+                .name,
+            "Project 47"
+        );
+        assert!(settings.business_tabs.iter().all(|tab| tab.show_name));
+        assert!(
+            settings
+                .business_tabs
+                .iter()
+                .all(|tab| tab.account_ids.is_none() && tab.address_view_ids.is_none())
+        );
+        let unique = settings
+            .address_views
+            .iter()
+            .map(|view| view.id)
+            .collect::<HashSet<_>>();
+        assert_eq!(unique.len(), settings.address_views.len());
+        for (address, mailbox) in &registry.address_aliases {
+            assert!(
+                view(address)
+                    .source_account_emails
+                    .contains(&mailbox.to_ascii_lowercase())
+            );
+        }
+    }
+
+    #[test]
+    fn cached_concrete_aliases_merge_sources_and_skip_wildcards_without_sender_permissions() {
+        let mut settings = Settings {
+            address_views: vec![AddressView {
+                id: 17,
+                address: "rook@help.example".into(),
+                source_account_emails: vec![],
+                profile_id: Some("rook".into()),
+                source: AddressViewSource::Registry,
+            }],
+            address_rules: vec![AddressRule {
+                profile_id: "rook".into(),
+                addresses: vec!["rook@help.example".into()],
+                domains: vec![],
+            }],
+            ..Settings::default()
+        };
+        let accounts = [account(1, "shared@help.example")];
+        let identities = vec![
+            ("shared@help.example".into(), "rook@help.example".into()),
+            ("shared@help.example".into(), "*@help.example".into()),
+            ("shared@help.example".into(), "pending@help.example".into()),
+        ];
+        assert!(merge_cached_address_views(&mut settings, &accounts, &identities).unwrap());
+        let rook = settings
+            .address_views
+            .iter()
+            .find(|view| view.address == "rook@help.example")
+            .unwrap();
+        assert_eq!(rook.id, 17);
+        assert_eq!(rook.source_account_emails, vec!["shared@help.example"]);
+        assert_eq!(rook.source, AddressViewSource::Registry);
+        assert!(
+            settings
+                .address_views
+                .iter()
+                .any(|view| view.address == "pending@help.example"
+                    && view.source == AddressViewSource::Provider)
+        );
+        assert!(
+            !settings
+                .address_views
+                .iter()
+                .any(|view| view.address.contains('*'))
+        );
+        assert!(!merge_cached_address_views(&mut settings, &accounts, &identities).unwrap());
+    }
+
+    #[test]
+    fn receiving_catalog_keeps_concrete_alias_sources_and_disconnected_primaries() {
+        let registry = parse_brand_registry(br##"{
+            "profiles":[
+                {"id":"media","name":"Media","accounts":["agent@media.example"],"match":{"domains":["media.example"]}},
+                {"id":"project","name":"Project","match":{"domains":["project.example"],"addresses":["agent@media.example"]}},
+                {"id":"memorial","name":"Memorial","match":{"domains":["memorial.example"]}}
+            ],
+            "accounts":[
+                {"email":"inbox@media.example","profile":"media","timAddresses":["Tim@media.example","agent@media.example","tim@memorial.example","unknown@else.example"],"otherBusinessAliases":["invented"]},
+                {"email":"shared@media.example","profile":"media","timAddresses":["TIM@media.example"]},
+                {"email":"staff@project.example","profile":"project"}
+            ]
+        }"##).unwrap();
+        let applied = apply_brand_registry(&Settings::default(), &[], &registry, |_| {
+            Err("unused".into())
+        })
+        .unwrap()
+        .settings;
+        let view = |address: &str| {
+            applied
+                .address_views
+                .iter()
+                .find(|view| view.address == address)
+                .unwrap()
+        };
+        assert_eq!(
+            view("tim@media.example").source_account_emails,
+            vec!["inbox@media.example", "shared@media.example"]
+        );
+        assert_eq!(
+            view("agent@media.example").profile_id.as_deref(),
+            Some("project")
+        );
+        assert_eq!(
+            view("tim@memorial.example").profile_id.as_deref(),
+            Some("memorial")
+        );
+        assert_eq!(
+            view("unknown@else.example").profile_id.as_deref(),
+            Some("media")
+        );
+        assert_eq!(
+            view("staff@project.example").source_account_emails,
+            vec!["staff@project.example"]
+        );
+        assert_eq!(applied.address_views.len(), 7);
+        assert!(applied.address_views.iter().all(|view| view.id > 0));
+        assert!(
+            applied
+                .address_views
+                .iter()
+                .all(|view| !view.address.contains("invented"))
+        );
+        let again = apply_brand_registry(&applied, &[], &registry, |_| Err("unused".into()))
+            .unwrap()
+            .settings;
+        assert_eq!(again.address_views, applied.address_views);
+        assert_eq!(again.address_rules, applied.address_rules);
+    }
+
+    #[test]
+    fn receiving_catalog_preserves_manual_ids_profiles_and_checks_id_collisions() {
+        use crate::models::{AddressView, AddressViewSource};
+        let registry = parse_brand_registry(br##"{"profiles":[{"id":"work","name":"Work","match":{"domains":["work.example"]}}],"accounts":[{"email":"inbox@work.example","profile":"work","timAddresses":["manual@work.example"]}]}"##).unwrap();
+        let settings = Settings {
+            address_views: vec![AddressView {
+                id: 42,
+                address: "manual@work.example".into(),
+                source_account_emails: Vec::new(),
+                profile_id: Some("local-profile".into()),
+                source: AddressViewSource::Manual,
+            }],
+            ..Settings::default()
+        };
+        let applied = apply_brand_registry(&settings, &[], &registry, |_| Err("unused".into()))
+            .unwrap()
+            .settings;
+        let manual = applied
+            .address_views
+            .iter()
+            .find(|view| view.id == 42)
+            .unwrap();
+        assert_eq!(manual.profile_id.as_deref(), Some("local-profile"));
+        assert!(
+            manual.source_account_emails.is_empty(),
+            "manual unrestricted scope is not narrowed by registry"
+        );
+        let collision = Settings {
+            address_views: vec![AddressView {
+                id: address_view_id("inbox@work.example"),
+                address: "other@work.example".into(),
+                source_account_emails: Vec::new(),
+                profile_id: None,
+                source: AddressViewSource::Manual,
+            }],
+            ..Settings::default()
+        };
+        assert!(
+            apply_brand_registry(&collision, &[], &registry, |_| Err("unused".into())).is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_project_label_migration_preserves_custom_tab_details_and_runs_once() {
+        let registry =
+            parse_brand_registry(br##"{"profiles":[{"id":"forty7","name":"Project"}],"tabs":[]}"##)
+                .unwrap();
+        let tab: BusinessTab = serde_json::from_value(serde_json::json!({"id":"forty7","name":"Forty7","icon":"tab-icons/custom.png","accountIds":[7],"addressViewIds":[],"showName":false,"scope":"any","senderNames":["Rook"]})).unwrap();
+        let settings = Settings {
+            business_tabs: vec![tab.clone()],
+            business_tabs_customized: true,
+            ..Settings::default()
+        };
+        let mut updated = apply_brand_registry(&settings, &[], &registry, |_| Err("unused".into()))
+            .unwrap()
+            .settings;
+        let mut expected = tab;
+        expected.name = "Project 47".into();
+        assert_eq!(updated.business_tabs[0], expected);
+        updated.business_tabs[0].name = "Forty7".into();
+        let again = apply_brand_registry(&updated, &[], &registry, |_| Err("unused".into()))
+            .unwrap()
+            .settings;
+        assert_eq!(
+            again.business_tabs[0].name, "Forty7",
+            "later explicit rename is retained"
+        );
     }
 
     #[test]
@@ -1537,6 +2231,6 @@ mod tests {
             applied.settings.brand_registry_backup,
             again.settings.brand_registry_backup
         );
-        assert!(IMPORTER_DIGEST_PREFIX.contains("flectar-brand-importer/2"));
+        assert!(IMPORTER_DIGEST_PREFIX.contains("flectar-brand-importer/3"));
     }
 }

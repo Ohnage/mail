@@ -20,6 +20,7 @@ permissions:
 
 jobs:
   pdfium:
+    if: github.repository == 'flectar/mail'
     name: PDFium arm64 source build
     runs-on: ubuntu-24.04
     timeout-minutes: 360

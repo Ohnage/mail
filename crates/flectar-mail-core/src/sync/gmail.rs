@@ -1832,6 +1832,11 @@ async fn store_resources(
                     id
                 };
 
+                repo::messages::set_delivery_recipients(
+                    &tx,
+                    local_message_id,
+                    &resource.headers.delivery_recipients,
+                )?;
                 repo::gmail::set_message_folders(&tx, local_message_id, &folder_ids)?;
                 for local_id in &provider_local_labels {
                     if !present_local_labels.contains(local_id) {

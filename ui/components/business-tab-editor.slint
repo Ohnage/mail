@@ -1,21 +1,23 @@
-import { HorizontalBox, VerticalBox, ListView } from "std-widgets.slint";
-import { BusinessTabRow, ProfileMemberRow } from "../models.slint";
+import { HorizontalBox, VerticalBox, ListView, CheckBox } from "std-widgets.slint";
+import { BusinessTabRow, InboxViewChoiceRow } from "../models.slint";
 import { AppTheme } from "../design-system.slint";
 import { TypeScale } from "../typography.slint";
 import { Button } from "button.slint";
 import { IconButton, LineEdit } from "controls.slint";
-import { ProfileMemberChoice } from "profile-controls.slint";
+import { InboxViewChoice } from "inbox-view-choice.slint";
+import { FormField } from "settings-components.slint";
 
 // Saved settings live in Rust. Every field below belongs to an isolated draft.
 export global BusinessTabEditorUi {
     in property <bool> visible: false;
     in property <string> editing-id;
     in-out property <string> name;
+    in-out property <bool> show-name: true;
     in-out property <string> query;
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <string> error;
-    in property <[ProfileMemberRow]> members;
+    in property <[InboxViewChoiceRow]> members;
     in property <int> selected-count;
     in property <bool> has-special-rules: false;
     in property <bool> recipient-only: false;
@@ -23,9 +25,17 @@ export global BusinessTabEditorUi {
     callback choose-icon();
     callback remove-icon();
     callback search(string);
-    callback toggle-member(int, bool);
+    callback toggle-member(string, bool);
     callback save() -> bool;
     callback cancel();
+}
+
+export global ReceivingInboxUi {
+    in-out property <string> address;
+    in-out property <string> source-emails;
+    in property <string> error;
+    in property <bool> created: false;
+    callback create() -> bool;
 }
 
 export component BusinessTabEditor inherits VerticalBox {
@@ -42,6 +52,11 @@ export component BusinessTabEditor inherits VerticalBox {
         text <=> BusinessTabEditorUi.name;
         input-label: @tr("Tab name");
         placeholder-text: @tr("Tab name");
+    }
+    CheckBox {
+        text: @tr("Show name in the tab strip");
+        checked <=> BusinessTabEditorUi.show-name;
+        accessible-label: @tr("Show name in the tab strip");
     }
     HorizontalBox {
         padding: 0px;
@@ -68,11 +83,11 @@ export component BusinessTabEditor inherits VerticalBox {
         Rectangle { horizontal-stretch: 1; }
     }
     Text {
-        text: @tr("Accounts can appear in several tabs. This does not move mail.");
+        text: @tr("Mailboxes and address inboxes can appear in several groups. A mailbox includes all its mail; an address inbox shows mail received at that address. This does not enable sending from an alias.");
         wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
     }
     if BusinessTabEditorUi.recipient-only : Text {
-        text: @tr("Selected accounts control the sidebar. Recipient matching still searches every account.");
+        text: @tr("Selected mailboxes control the sidebar. Existing recipient matching still searches every account. Address inboxes keep their own receiving-address and source filters.");
         wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption;
     }
     if BusinessTabEditorUi.has-special-rules && !BusinessTabEditorUi.recipient-only : Text {
@@ -81,8 +96,8 @@ export component BusinessTabEditor inherits VerticalBox {
     }
     LineEdit {
         text <=> BusinessTabEditorUi.query;
-        input-label: @tr("Search accounts for this tab");
-        placeholder-text: @tr("Search accounts");
+        input-label: @tr("Search mailboxes and address inboxes for this group");
+        placeholder-text: @tr("Search mailboxes and address inboxes");
         edited(value) => { BusinessTabEditorUi.search(value); }
     }
     Text {
@@ -91,13 +106,13 @@ export component BusinessTabEditor inherits VerticalBox {
     }
     ListView {
         height: 208px;
-        for account-choice in BusinessTabEditorUi.members : ProfileMemberChoice {
-            member: account-choice;
-            toggled => { BusinessTabEditorUi.toggle-member(account-choice.id, !account-choice.checked); }
+        for account-choice in BusinessTabEditorUi.members : InboxViewChoice {
+            choice: account-choice;
+            toggled => { BusinessTabEditorUi.toggle-member(account-choice.key, !account-choice.checked); }
         }
     }
     if BusinessTabEditorUi.members.length == 0 : Text {
-        text: @tr("No accounts match your search."); color: AppTheme.secondary;
+        text: @tr("No mailboxes or address inboxes match your search."); color: AppTheme.secondary;
         wrap: word-wrap; font-size: TypeScale.caption;
     }
     if BusinessTabEditorUi.error != "" : Text {
@@ -127,7 +142,7 @@ export component BusinessTabsCard inherits Rectangle {
         padding: 16px;
         spacing: 12px;
         Text { text: @tr("Business tabs"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
-        Text { text: @tr("Choose each tab's name, icon and accounts."); color: AppTheme.secondary; font-size: TypeScale.caption; wrap: word-wrap; }
+        Text { text: @tr("Organize your groups with a name, icon, mailboxes and address inboxes."); color: AppTheme.secondary; font-size: TypeScale.caption; wrap: word-wrap; }
         if !BusinessTabEditorUi.visible : VerticalBox {
             padding: 0px;
             spacing: 8px;
@@ -145,5 +160,25 @@ export component BusinessTabsCard inherits Rectangle {
             Button { text: @tr("Add tab"); width: max(96px, self.content-width); clicked => { BusinessTabEditorUi.open(""); } }
         }
         if BusinessTabEditorUi.visible : BusinessTabEditor { }
+    }
+}
+
+
+export component ReceivingInboxCard inherits Rectangle {
+    background: AppTheme.surface;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: AppTheme.border;
+    height: form.preferred-height;
+    form := VerticalBox {
+        padding: 16px; spacing: 10px;
+        Text { text: @tr("Add a receiving-only inbox"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
+        Text { text: @tr("Create an inbox view for an address you receive mail at. This does not authorize sending from that address."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
+        FormField { label: @tr("Receiving address"); value <=> ReceivingInboxUi.address; placeholder: "team@example.com"; label-color: AppTheme.heading; }
+        FormField { label: @tr("Source mailboxes (optional, comma-separated)"); value <=> ReceivingInboxUi.source-emails; placeholder: "mailbox@example.com"; label-color: AppTheme.heading; }
+        Text { text: @tr("Leave sources empty to search all connected accounts. A source that is not connected stays selectable and will show no mail until it is connected."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
+        if ReceivingInboxUi.error != "" : Text { text: ReceivingInboxUi.error; wrap: word-wrap; color: AppTheme.destructive; font-size: TypeScale.caption; }
+        if ReceivingInboxUi.created : Text { text: @tr("Receiving-only inbox added. You can now select it in a group."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
+        Button { text: @tr("Add inbox view"); width: max(120px, self.content-width); enabled: ReceivingInboxUi.address != ""; clicked => { ReceivingInboxUi.create(); } }
     }
 }

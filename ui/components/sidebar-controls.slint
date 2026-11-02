@@ -55,6 +55,9 @@ component SidebarCountBadge inherits Rectangle {
 export component SidebarItem inherits SidebarRowSurface {
     in property <bool> interactive: true;
     in property <string> label;
+    in property <string> detail;
+    in property <image> avatar-image;
+    in property <bool> has-avatar-image: false;
     in property <string> accessible-name: root.label;
     in property <string> count;
     in property <string> scope;
@@ -106,7 +109,12 @@ export component SidebarItem inherits SidebarRowSurface {
     border-width: mail-drop-target.has-drag ? 2px : 0px;
     border-color: root.accent-color;
 
-    SidebarIcon {
+    if root.has-avatar-image : Avatar {
+        x: root.left-padding; y: (root.row-height - self.height) / 2;
+        size: 22px; source: root.avatar-image; has-source: true;
+        background-color: root.sidebar-background; foreground-color: root.body-color;
+    }
+    if !root.has-avatar-image : SidebarIcon {
         x: root.left-padding;
         y: 0px;
         height: root.row-height;
@@ -127,11 +135,11 @@ export component SidebarItem inherits SidebarRowSurface {
         accessible-role: none;
     }
 
-    Text {
+    item-label := Text {
         x: root.left-padding + SidebarStyle.label-offset;
-        y: 0px;
+        y: root.detail == "" ? 0px : 4px;
         width: max(0px, parent.width - self.x - (root.count == "" ? 6px : count-badge.width + 12px));
-        height: root.row-height;
+        height: root.detail == "" ? root.row-height : max(19px, self.preferred-height);
         text: root.label;
         color: root.body-color;
         font-size: SidebarStyle.label-size;
@@ -139,6 +147,16 @@ export component SidebarItem inherits SidebarRowSurface {
         font-family: root.label-has-emoji ? "Noto Emoji" : "";
         vertical-alignment: center;
         overflow: elide;
+    }
+
+    if root.detail != "" : Text {
+        x: root.left-padding + SidebarStyle.label-offset;
+        y: item-label.y + item-label.height;
+        width: max(0px, parent.width - self.x - (root.count == "" ? 8px : count-badge.width + 12px));
+        height: max(16px, self.preferred-height);
+        text: root.detail; color: root.muted-color;
+        font-size: TypeScale.caption; overflow: elide;
+        accessible-role: none;
     }
 
     count-badge := SidebarCountBadge {
@@ -154,6 +172,7 @@ export component SidebarItem inherits SidebarRowSurface {
         enabled: root.interactive;
         accessible-role: button;
         accessible-label: root.accessible-name;
+        accessible-description: root.detail;
         accessible-checked: root.selected;
         accessible-action-default => { root.clicked(root.scope); }
         clicked => { root.clicked(root.scope); }

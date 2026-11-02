@@ -852,6 +852,13 @@ export component WindowTopBar inherits Rectangle {
     callback choose-business-tab(string);
     callback create-profile();
     callback manage-profiles();
+    private property <int> hovered-business: -1;
+    private property <int> focused-business: -1;
+    private property <length> hovered-business-x;
+    private property <length> focused-business-x;
+    private property <int> business-tooltip-index: root.hovered-business >= 0 ? root.hovered-business : root.focused-business;
+    private property <length> business-tooltip-x: root.hovered-business >= 0 ? root.hovered-business-x : root.focused-business-x;
+
 
     background: root.background-color;
     accessible-role: window-title-bar;
@@ -929,8 +936,8 @@ export component WindowTopBar inherits Rectangle {
         x: ((profile-pill.x + profile-pill.width) / 1px).ceil() * 1px + 8px;
         y: (parent.height - self.height) / 2;
         width: root.business-tabs.length > 0
-            ? max(0px, min(400px, (root.width - self.x - root.trailing - 200px) * 0.55)) : 0px;
-        height: 30px;
+            ? min(business-pills.preferred-width, max(0px, min(400px, (root.width - self.x - root.trailing - 200px) * 0.55))) : 0px;
+        height: 32px;
         visible: root.business-tabs.length > 0;
         private property <length> scroll-offset: 0px;
         private property <bool> overflowing: business-pills.preferred-width > self.width;
@@ -939,7 +946,7 @@ export component WindowTopBar inherits Rectangle {
         private property <length> clamped-offset: min(self.scroll-offset, self.maximum-offset);
         IconButton {
             x: 0px;
-            width: 24px; height: 28px;
+            width: 24px; height: 32px;
             visible: business-nav.overflowing;
             icon: @image-url("../icons/lucide/outline/chevron-left.svg");
             ghost: true;
@@ -955,11 +962,24 @@ export component WindowTopBar inherits Rectangle {
             business-pills := HorizontalLayout {
                 x: -business-nav.clamped-offset;
                 width: self.preferred-width;
-                height: 28px;
+                height: 32px;
                 spacing: 4px;
-                for business in root.business-tabs : business-pill := FocusVisibleScope {
-                    width: min(168px, pill-label.preferred-width + (business.has_logo ? 38px : 30px));
-                    height: 28px;
+                for business[index] in root.business-tabs : business-pill := FocusVisibleScope {
+                    width: business.show_name ? min(168px, pill-label.preferred-width + 38px) : 36px;
+                    height: 32px;
+                    private property <bool> hovered: pill-hit.has-hover;
+                    changed hovered => {
+                        if self.hovered {
+                            root.hovered-business = index;
+                            root.hovered-business-x = self.x;
+                        } else if root.hovered-business == index { root.hovered-business = -1; }
+                    }
+                    changed focus-visible => {
+                        if self.focus-visible {
+                            root.focused-business = index;
+                            root.focused-business-x = self.x;
+                        } else if root.focused-business == index { root.focused-business = -1; }
+                    }
                     focus-on-click: true;
                     focus-on-tab-navigation: true;
                     accessible-role: tab;
@@ -988,17 +1008,21 @@ export component WindowTopBar inherits Rectangle {
                         background: business.active ? ProfileColors.fill(business.color)
                             : (pill-hit.has-hover ? root.hover-background : business.color.transparentize(0.82));
                         if business.has_logo : Image {
-                            x: 6px; y: 4px; width: 20px; height: 20px;
+                            x: 8px; y: 6px; width: 20px; height: 20px;
                             source: business.logo; image-fit: contain;
                         }
-                        if !business.has_logo : Rectangle {
-                            x: 8px; y: 9px; width: 10px; height: 10px;
-                            border-radius: 5px;
-                            background: business.active ? ThemeUtilities.contrasting-foreground(ProfileColors.fill(business.color)) : business.color;
+                        if !business.has_logo : Text {
+                            x: 4px; width: 28px; height: parent.height;
+                            text: business.initials;
+                            color: business.active ? ThemeUtilities.contrasting-foreground(ProfileColors.fill(business.color)) : root.title-color;
+                            font-size: TypeScale.caption; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                            accessible-role: none;
                         }
                         pill-label := Text {
-                            x: business.has_logo ? 30px : 22px;
-                            width: parent.width - self.x - 8px;
+                            visible: business.show_name;
+                            x: 32px;
+                            width: max(0px, parent.width - self.x - 8px);
                             height: parent.height;
                             text: business.name;
                             color: business.active ? ThemeUtilities.contrasting-foreground(ProfileColors.fill(business.color)) : root.title-color;
@@ -1015,13 +1039,34 @@ export component WindowTopBar inherits Rectangle {
         }
         IconButton {
             x: parent.width - 24px;
-            width: 24px; height: 28px;
+            width: 24px; height: 32px;
             visible: business-nav.overflowing;
             icon: @image-url("../icons/lucide/outline/chevron-right.svg");
             ghost: true;
             interactive: business-nav.clamped-offset < business-nav.maximum-offset;
             tooltip-text: @tr("Scroll business tabs right");
             clicked => { business-nav.scroll-offset = min(business-nav.maximum-offset, business-nav.clamped-offset + 160px); }
+        }
+    }
+
+    // This tooltip is a sibling of the clipped viewport, so compact pills
+    // keep their full name available to pointer and keyboard users.
+    if root.business-tooltip-index >= 0 && root.business-tooltip-index < root.business-tabs.length : Rectangle {
+        x: max(8px, min(business-nav.x + (business-nav.overflowing ? 26px : 0px)
+            + root.business-tooltip-x - business-nav.clamped-offset, root.width - self.width - 8px));
+        y: root.height + 4px;
+        width: min(480px, min(root.width - 16px, business-tooltip-label.preferred-width + 16px));
+        height: 28px;
+        border-radius: 5px;
+        background: #292929;
+        z: 10000;
+        accessible-role: none;
+        business-tooltip-label := Text {
+            x: 8px; width: parent.width - 16px; height: parent.height;
+            text: root.business-tabs[root.business-tooltip-index].name;
+            color: white; font-size: TypeScale.secondary;
+            vertical-alignment: center; overflow: elide;
+            accessible-role: none;
         }
     }
 

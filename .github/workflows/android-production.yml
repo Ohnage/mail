@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   build:
+    if: github.repository == 'flectar/mail'
     name: Signed Android APK and AAB
     runs-on: ubuntu-24.04
     # Same environment, key, and version sequence as prerelease APKs.

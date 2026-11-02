@@ -81,7 +81,7 @@ export enum SidebarRowKind {
     categories-section, important, other, category,
     global-labels-section, global-label,
     accounts-heading, account, folder, account-labels-section, account-label,
-    new-folder, new-label,
+    new-folder, new-label, address-inbox,
 }
 
 export struct SidebarRow {
@@ -185,10 +185,25 @@ export struct MailProfileRow {
 export struct BusinessTabRow {
     id: string,
     name: string,
+    show_name: bool,
+    initials: string,
     color: color,
     logo: image,
     has_logo: bool,
     active: bool,
+}
+
+// Receiving inbox views are separate from physical accounts and From identities.
+export enum InboxViewKind { account, alias }
+export struct InboxViewChoiceRow {
+    key: string,
+    kind: InboxViewKind,
+    name: string,
+    detail: string,
+    initials: string,
+    avatar: image,
+    has_avatar: bool,
+    checked: bool,
 }
 
 // An account in the profile editor's checklist; checked accounts belong to

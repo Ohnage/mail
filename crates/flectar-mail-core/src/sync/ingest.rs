@@ -136,6 +136,7 @@ impl Importer {
             sender_verification: headers.sender_verification,
         };
         let message_id = repo::messages::insert(conn, &message, thread_id)?;
+        repo::messages::set_delivery_recipients(conn, message_id, &headers.delivery_recipients)?;
         if !self.thread_ids.contains(&thread_id) {
             self.thread_ids.push(thread_id);
         }
@@ -320,6 +321,7 @@ pub(crate) fn store_body(
         Some(&parsed.snippet),
     )?;
     repo::messages::set_sender_verification(conn, message_id, parsed.headers.sender_verification)?;
+    repo::messages::set_delivery_recipients(conn, message_id, &parsed.headers.delivery_recipients)?;
     let attachments: Vec<_> = parsed
         .attachments
         .iter()
@@ -397,5 +399,55 @@ mod tests {
         assert!(chime_worthy(false, "alice@example.com"));
         assert!(!chime_worthy(true, "digest@example.com"));
         assert!(!chime_worthy(false, "notifications@example.com"));
+    }
+
+    #[test]
+    fn common_ingest_and_body_hydration_persist_actual_delivery_headers() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let headers = crate::mime::parse_header_block(b"From: sender@example.test\r\nTo: visible@example.test\r\nDelivered-To: alias@example.test\r\nMessage-ID: <delivery-test@example.test>\r\n\r\n").unwrap();
+        let mut importer = super::Importer::new(&conn, 1).unwrap();
+        let imported = importer
+            .insert(
+                &conn,
+                &headers,
+                &super::Delivery {
+                    folder_id: 1,
+                    folder_role: Some("inbox"),
+                    uid: Some(71),
+                    received_ms: Some(1000),
+                    seen: false,
+                    flagged: false,
+                    draft: false,
+                    has_attachments: false,
+                    size: None,
+                },
+            )
+            .unwrap();
+        let json: String = conn
+            .query_row(
+                "SELECT delivery_recipients_json FROM messages WHERE id=?1",
+                [imported.message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let recipients: Vec<crate::models::Address> = serde_json::from_str(&json).unwrap();
+        assert_eq!(recipients[0].email, "alias@example.test");
+        let parsed = crate::mime::parse_message(b"From: sender@example.test\r\nTo: visible@example.test\r\nDelivered-To: alias@example.test\r\nX-Original-To: original@example.test\r\n\r\nHello").unwrap();
+        super::store_body(&conn, imported.message_id, "synthetic-only.eml", &parsed).unwrap();
+        let json: String = conn
+            .query_row(
+                "SELECT delivery_recipients_json FROM messages WHERE id=?1",
+                [imported.message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let recipients: Vec<crate::models::Address> = serde_json::from_str(&json).unwrap();
+        assert_eq!(recipients.len(), 2);
+        assert!(
+            recipients
+                .iter()
+                .any(|address| address.email == "original@example.test")
+        );
     }
 }

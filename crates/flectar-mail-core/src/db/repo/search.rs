@@ -74,6 +74,9 @@ fn append_recipient_clauses(
         sender_domains: q.sender_domains.clone(),
         or_account_ids: q.or_account_ids.clone(),
         match_any: q.scope_match_any,
+        address_inboxes: q.address_inboxes.clone(),
+        address_groups: q.address_groups.clone(),
+        base_account_ids: q.base_account_ids.clone(),
     };
     let Some((sql, likes)) = crate::recipient_match::message_scope_clause(&scope, bind.len() + 1)
     else {

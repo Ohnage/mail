@@ -40,6 +40,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Plain(include_str!("migrations/021_verification_codes.sql")),
     Migration::Plain(include_str!("migrations/022_search_leftovers.sql")),
     Migration::TableRebuild(include_str!("migrations/023_local_mail.sql")),
+    Migration::Plain(include_str!("migrations/024_delivery_recipients.sql")),
 ];
 pub const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -50,6 +51,7 @@ fn convert(conn: &Connection, version: i64) -> Result<()> {
         13 => super::repo::contact_entries::migrate(conn),
         19 => clean_snippets(conn),
         21 => find_verification_codes(conn),
+        24 => super::repo::messages::backfill_cached_delivery_headers(conn, 256).map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -1881,5 +1883,74 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn delivery_headers_upgrade_reads_only_a_bounded_cached_header_batch() {
+        let mut conn = staged(23);
+        seed_mail_graph(&conn);
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), b"Delivered-To: hidden@example.test\r\nX-Original-To: original@example.test\r\n\r\nbody").unwrap();
+        let path = file.path().to_string_lossy().into_owned();
+        for index in 0..260 {
+            conn.execute(
+                "INSERT INTO messages (account_id, thread_id, date, raw_path) VALUES (1,1,?1,?2)",
+                params![index, path],
+            )
+            .unwrap();
+        }
+        run(&mut conn).unwrap();
+        let known: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE delivery_recipients_json IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(known, 256);
+        let json: String = conn.query_row("SELECT delivery_recipients_json FROM messages WHERE delivery_recipients_json IS NOT NULL LIMIT 1", [], |r| r.get(0)).unwrap();
+        let addresses: Vec<crate::models::Address> = serde_json::from_str(&json).unwrap();
+        assert_eq!(addresses[0].email, "hidden@example.test");
+        assert_eq!(addresses[1].email, "original@example.test");
+        assert!(!super::super::repo::messages::delivery_recipients_known(&conn, 1).unwrap());
+        // Existing mail, flags, and bodies survive the additive step.
+        assert_eq!(
+            conn.query_row("SELECT subject FROM messages WHERE id=1", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "Schema contract"
+        );
+    }
+
+    #[test]
+    fn delivery_headers_upgrade_leaves_missing_and_oversized_cache_unknown() {
+        let mut conn = staged(23);
+        seed_mail_graph(&conn);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.eml");
+        std::fs::write(&path, vec![b'x'; 65537]).unwrap();
+        conn.execute(
+            "UPDATE messages SET raw_path=?1 WHERE id=1",
+            [path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages(account_id, thread_id, date, raw_path) VALUES(1,1,2,?1)",
+            [directory
+                .path()
+                .join("missing.eml")
+                .to_string_lossy()
+                .as_ref()],
+        )
+        .unwrap();
+        run(&mut conn).unwrap();
+        let known: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE delivery_recipients_json IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(known, 0);
     }
 }

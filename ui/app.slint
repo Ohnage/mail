@@ -1,4 +1,4 @@
-export { BusinessTabEditorUi } from "components/business-tab-editor.slint";
+export { BusinessTabEditorUi, ReceivingInboxUi } from "components/business-tab-editor.slint";
 export { AccountMailPreferences, SignatureChoice } from "components/account-mail-preferences.slint";
 import { OpenPgpReader } from "components/account-mail-preferences.slint";
 import { MailAttachments } from "models.slint";
@@ -20,7 +20,7 @@ export { AppTheme, MotionSettings, ThemeUtilities } from "design-system.slint";
 import { AppTheme, LayoutMetrics } from "design-system.slint";
 import { Button } from "components/button.slint";
 import { LoadingSkeletonBlock } from "components/loading-skeleton.slint";
-import { AccountRow, BusinessTabRow, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
+import { AccountRow, BusinessTabRow, InboxViewChoiceRow, InboxViewKind, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
 export { EmailReader, ReaderCaret, ReaderImage, ReaderItem, MailDragApi } from "models.slint";
 export { MailListNavigation, MailNavigationTarget } from "models.slint";
 export { ThreadMessageRow, StorageUsageRow } from "models.slint";
@@ -1001,6 +1001,7 @@ export component AppWindow inherits Window {
     in-out property <bool> show_account_markers: false;
     in-out property <bool> show_message_preview: false;
     in property <[BusinessTabRow]> business_tabs: [];
+    in property <[InboxViewChoiceRow]> address_inboxes: [];
     in-out property <string> workspace_layout: "default";
     in-out property <length> workspace_list_pane_width: LayoutMetrics.list-pane-width;
     in-out property <string> language_mode: "system";

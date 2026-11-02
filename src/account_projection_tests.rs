@@ -13,6 +13,8 @@ fn tab(id: &str, scope: &str, account_ids: Option<Vec<i64>>) -> BusinessTab {
         sender_domains: vec!["example.org".into()],
         icon: None,
         account_ids,
+        address_view_ids: None,
+        show_name: true,
     }
 }
 

@@ -762,8 +762,14 @@ impl CoreMailSource {
                 retain_profile_accounts(profile.as_deref(), &mut shown, &mut folders);
                 let mut labels = self.core.list_labels().await.unwrap_or_default();
                 retain_profile_labels(profile.as_deref(), &mut labels);
-                let scope =
-                    validated_startup_scope(preferred_scope, &shown, &folders, local_mail, &labels);
+                let scope = if (!self.mail_scope().address_inboxes.is_empty()
+                    || !self.mail_scope().address_groups.is_empty())
+                    && matches!(preferred_scope, Scope::Unified(_))
+                {
+                    preferred_scope
+                } else {
+                    validated_startup_scope(preferred_scope, &shown, &folders, local_mail, &labels)
+                };
                 let page = self
                     .load_page_with_context(PageLoadContext {
                         scope,
@@ -834,7 +840,7 @@ impl CoreMailSource {
         local_mail: Option<i64>,
         profile: Option<&[i64]>,
     ) -> Result<MailMetadata, String> {
-        let scope_filter = self.mail_scope();
+        let scope_filter = self.scope_filter(scope).await?;
         let mut badges = self
             .core
             .mailbox_badge_counts_filtered(scope_filter.clone())
@@ -857,7 +863,7 @@ impl CoreMailSource {
         }
         // Per-account rows follow the sidebar. Unified totals follow the scope.
         badges.retain(|counts| profile_shows(profile, counts.account_id));
-        let inbox_source = if scope_filter.match_any {
+        let inbox_source = if scope_filter.match_any || !scope_filter.address_inboxes.is_empty() {
             &unified
         } else {
             &badges
@@ -870,11 +876,13 @@ impl CoreMailSource {
                 .map(|counts| counts.inbox.max(0) as usize)
                 .sum(),
             mailboxes: mailbox_entries_with_counts(accounts, folders, local_mail, &badges),
-            unified_mailboxes: unified_mailbox_entries(if scope_filter.match_any {
-                &unified
-            } else {
-                &badges
-            }),
+            unified_mailboxes: unified_mailbox_entries(
+                if scope_filter.match_any || !scope_filter.address_inboxes.is_empty() {
+                    &unified
+                } else {
+                    &badges
+                },
+            ),
             local_mail,
         })
     }
@@ -928,9 +936,15 @@ impl CoreMailSource {
         // accounts; an account's own mailboxes need no more than its id.
         // `account_filter` is the query AND, which a sender-rule tab leaves
         // open while the sidebar still shows that tab's companies.
-        let account_filter = account_filter.filter(|_| resolved.account_id.is_none());
+        let account_filter = account_filter
+            .filter(|_| resolved.account_id.is_none() && !matches!(scope, Scope::AddressInbox(_)));
         let account_id = resolved.account_id.filter(|_| account_filter.is_none());
-        let scope_filter = self.mail_scope();
+        let scope_filter = self.scope_filter(scope).await?;
+        if matches!(scope, Scope::AddressInbox(_))
+            && let Some(address) = scope_filter.address_inboxes.first()
+        {
+            resolved.title = address.address.clone();
+        }
 
         let (threads, next_cursor) = if query.trim().is_empty() {
             let cursor = match cursor {
@@ -964,7 +978,11 @@ impl CoreMailSource {
                 Some(MailCursor::Search(cursor)) => Some(cursor),
                 Some(MailCursor::Thread(_)) => return Err("mailbox cursor used for search".into()),
             };
-            let query = query.trim().to_owned();
+            let query = if matches!(scope, Scope::AddressInbox(_)) {
+                format!("{} in:inbox", query.trim())
+            } else {
+                query.trim().to_owned()
+            };
             let page = self
                 .core
                 .search_chronological_scoped(
@@ -1299,7 +1317,7 @@ impl CoreMailSource {
     pub async fn load_settings(&self) -> Result<Settings, String> {
         let mut settings = self
             .core
-            .get_settings()
+            .refresh_address_views()
             .await
             .map_err(|error| error.to_string())?;
         if snapshot_legacy_tab_icons(&mut settings, &self.data_dir()) {
@@ -1611,16 +1629,51 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn save_address_view(
+        &self,
+        address: String,
+        source_account_emails: Vec<String>,
+    ) -> Result<Settings, String> {
+        self.core
+            .save_address_view(address, source_account_emails)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    async fn scope_filter(
+        &self,
+        scope: Scope,
+    ) -> Result<flectar_mail_core::recipient_match::MailScope, String> {
+        let Scope::AddressInbox(id) = scope else {
+            return Ok(self.mail_scope());
+        };
+        let settings = self.load_settings().await?;
+        let accounts = self.load_accounts().await?;
+        let mut presentation = crate::AccountPresentationSettings::from_settings(&settings);
+        presentation.bind_accounts(&accounts);
+        let view = presentation
+            .address_views
+            .iter()
+            .find(|view| view.id == id)
+            .ok_or_else(|| "This address inbox is no longer available".to_owned())?;
+        Ok(flectar_mail_core::recipient_match::MailScope {
+            address_inboxes: vec![presentation.address_filter(view)],
+            ..Default::default()
+        })
+    }
+
     pub async fn save_business_tab_details(
         &self,
         tab_id: Option<String>,
         name: String,
-        account_ids: Vec<i64>,
+        account_ids: Option<Vec<i64>>,
+        address_view_ids: Option<Vec<i64>>,
         icon: Option<String>,
+        show_name: bool,
     ) -> Result<Settings, String> {
         self.load_settings().await?;
         self.core
-            .save_business_tab_details(tab_id, name, account_ids, icon)
+            .save_business_tab_details(tab_id, name, account_ids, address_view_ids, icon, show_name)
             .await
             .map_err(|error| error.to_string())
     }
@@ -2754,6 +2807,7 @@ fn resolve_scope(scope: Scope, folders: &[FolderInfo], labels: &[Label]) -> Scop
         title: title.to_owned(),
     };
     match scope {
+        Scope::AddressInbox(_) => unfiltered(View::Inbox, "Address inbox"),
         Scope::Unified(mailbox) => unfiltered(standard_mailbox_view(mailbox), mailbox.label()),
         Scope::Important => ScopeResolution {
             split_id: Some(-1),
@@ -2808,6 +2862,7 @@ fn validated_startup_scope(
     labels: &[Label],
 ) -> Scope {
     let scope = match preferred {
+        Scope::AddressInbox(_) => Some(preferred),
         Scope::Unified(_) | Scope::Important | Scope::Other => Some(preferred),
         // A label can move between sections, e.g. when it becomes automatic.
         Scope::Label { id, .. } => {

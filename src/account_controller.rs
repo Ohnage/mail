@@ -100,7 +100,7 @@ pub(super) fn scope_owned_by(state: &InboxState, scope: Scope, account_id: i64) 
             .labels
             .iter()
             .any(|label| label.id == id && label.owner_account_id == Some(account_id)),
-        Scope::Unified(_) | Scope::Important | Scope::Other => false,
+        Scope::Unified(_) | Scope::Important | Scope::Other | Scope::AddressInbox(_) => false,
     }
 }
 
@@ -243,14 +243,18 @@ pub(super) fn apply_connected_accounts(
                 status: account.sync_state.clone().into(),
                 sync_error: account.sync_error.clone().unwrap_or_default().into(),
                 initials: avatar_initials(&name).into(),
-                avatar: account_icon.cloned().or_else(|| avatar
-                    .map(|images| slint_image(&images.regular)))
+                avatar: account_icon
+                    .cloned()
+                    .or_else(|| avatar.map(|images| slint_image(&images.regular)))
                     .unwrap_or_default(),
-                avatar_small: account_icon.cloned().or_else(|| avatar
-                    .map(|images| slint_image(&images.small)))
+                avatar_small: account_icon
+                    .cloned()
+                    .or_else(|| avatar.map(|images| slint_image(&images.small)))
                     .unwrap_or_default(),
                 has_avatar: account_icon.is_some() || avatar.is_some(),
-                has_custom_icon: presentation.account_icons.contains_key(&account.id.to_string()),
+                has_custom_icon: presentation
+                    .account_icons
+                    .contains_key(&account.id.to_string()),
                 profile_id: profile
                     .map(|profile| profile.id.clone())
                     .unwrap_or_default()
@@ -310,6 +314,29 @@ pub(super) fn apply_connected_accounts(
         })
         .collect::<Vec<_>>();
     apply_connected_account_rows(app, rows);
+    app.set_address_inboxes(ModelRc::new(VecModel::from(
+        presentation
+            .address_views
+            .iter()
+            .map(|view| {
+                let icon = view
+                    .profile_id
+                    .as_ref()
+                    .and_then(|id| presentation.profile_logos.get(id));
+
+                InboxViewChoiceRow {
+                    key: format!("alias:{}", view.id).into(),
+                    kind: InboxViewKind::Alias,
+                    name: view.address.clone().into(),
+                    detail: presentation.address_detail(view).into(),
+                    initials: avatar_initials(&view.address).into(),
+                    avatar: icon.cloned().unwrap_or_default(),
+                    has_avatar: icon.is_some(),
+                    checked: false,
+                }
+            })
+            .collect::<Vec<_>>(),
+    )));
     app.set_has_device_mail(
         has_local_mail
             || accounts
@@ -359,19 +386,28 @@ pub(super) fn apply_connected_accounts(
         .business_tabs
         .iter()
         .map(|tab| {
-            let profile = tab.profile_ids.iter().find_map(|id| presentation.profiles.iter().find(|profile| &profile.id == id));
+            let profile = tab.profile_ids.iter().find_map(|id| {
+                presentation
+                    .profiles
+                    .iter()
+                    .find(|profile| &profile.id == id)
+            });
             let color = profile
                 .map(|profile| {
                     parse_marker_color(&profile.color)
                         .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
                 })
                 .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128));
-            let logo = presentation.tab_icons.get(&tab.id)
+            let logo = presentation
+                .tab_icons
+                .get(&tab.id)
                 .cloned()
                 .unwrap_or_default();
             BusinessTabRow {
                 id: tab.id.clone().into(),
                 name: tab.name.clone().into(),
+                show_name: tab.show_name,
+                initials: avatar_initials(&tab.name).into(),
                 color,
                 logo,
                 has_logo: presentation.tab_icons.contains_key(&tab.id),

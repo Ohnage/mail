@@ -49,6 +49,9 @@ pub struct ParsedQuery {
     /// Account ids OR'd into a `scope_match_any` filter.
     pub or_account_ids: Vec<i64>,
     pub scope_match_any: bool,
+    pub address_inboxes: Vec<crate::recipient_match::AddressInboxScope>,
+    pub address_groups: Vec<crate::recipient_match::AddressGroupScope>,
+    pub base_account_ids: Option<Vec<i64>>,
 }
 
 /// A raw query token: a bare word or a `"quoted phrase"`. A phrase can be

@@ -643,6 +643,81 @@ pub fn mime_plan(conn: &Connection, id: i64) -> Result<Option<MimePlan>> {
         .map_err(Into::into)
 }
 
+/// Whether real header parsing has examined delivery hints for this message.
+/// NULL is unknown; an empty JSON list is a real parse with no delivery fields.
+pub fn delivery_recipients_known(conn: &Connection, id: i64) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT delivery_recipients_json IS NOT NULL FROM messages WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false))
+}
+
+/// Store actual header recipients. A later partial header fetch must not erase
+/// delivery hints already recovered from the complete cached message.
+pub fn set_delivery_recipients(conn: &Connection, id: i64, recipients: &[Address]) -> Result<()> {
+    let json = serde_json::to_string(recipients)?;
+    if recipients.is_empty() {
+        conn.execute("UPDATE messages SET delivery_recipients_json=COALESCE(delivery_recipients_json, ?2) WHERE id=?1", params![id, json])?;
+    } else {
+        conn.execute(
+            "UPDATE messages SET delivery_recipients_json=?2 WHERE id=?1",
+            params![id, json],
+        )?;
+    }
+    Ok(())
+}
+
+/// One bounded local-only upgrade batch. Missing/oversized caches stay unknown
+/// and can be recovered lazily when their message is opened. Never reads mail
+/// bodies or requests a server copy, and never invents delivery from account.email.
+pub(crate) fn backfill_cached_delivery_headers(conn: &Connection, limit: usize) -> Result<usize> {
+    let candidates = conn.prepare("SELECT id, raw_path FROM messages WHERE delivery_recipients_json IS NULL AND raw_path IS NOT NULL ORDER BY id DESC LIMIT ?1")?
+        .query_map([limit.min(256) as i64], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut examined = 0;
+    for (id, path) in candidates {
+        let Some(raw) = cached_header_block(std::path::Path::new(&path)) else {
+            continue;
+        };
+        let Ok(headers) = crate::mime::parse_header_block(&raw) else {
+            continue;
+        };
+        set_delivery_recipients(conn, id, &headers.delivery_recipients)?;
+        examined += 1;
+    }
+    Ok(examined)
+}
+
+fn cached_header_block(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::{BufRead, Read};
+    const MAX_HEADER_BYTES: usize = 64 * 1024;
+    // Cached raw paths are absolute app-managed files. In particular, skip UNC
+    // network paths rather than allowing an upgrade to initiate network I/O.
+    if !path.is_absolute() || path.to_string_lossy().starts_with("\\\\") {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut reader = std::io::BufReader::new(file.take((MAX_HEADER_BYTES + 1) as u64));
+    let mut raw = Vec::new();
+    loop {
+        let start = raw.len();
+        let read = reader.read_until(b'\n', &mut raw).ok()?;
+        if raw.len() > MAX_HEADER_BYTES {
+            return None;
+        }
+        if read == 0 || &raw[start..] == b"\n" || &raw[start..] == b"\r\n" {
+            return Some(raw);
+        }
+    }
+}
+
 pub fn store_body(
     conn: &Connection,
     id: i64,
@@ -2352,5 +2427,34 @@ mod tests {
             .unwrap();
         assert_eq!(folders, [1, 2, 3, 6]);
         assert_eq!(oldest_relink_pending(&conn, 1).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod delivery_header_storage_tests {
+    use super::*;
+
+    #[test]
+    fn absent_partial_headers_do_not_erase_previously_known_delivery() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let (_, message) =
+            crate::db::testutil::seed_message(&conn, "sender@example.test", "Headers", false);
+        assert!(!delivery_recipients_known(&conn, message).unwrap());
+        let address = Address {
+            name: None,
+            email: "alias@example.test".into(),
+        };
+        set_delivery_recipients(&conn, message, &[address]).unwrap();
+        set_delivery_recipients(&conn, message, &[]).unwrap();
+        assert!(delivery_recipients_known(&conn, message).unwrap());
+        let json: String = conn
+            .query_row(
+                "SELECT delivery_recipients_json FROM messages WHERE id=?1",
+                [message],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(json.contains("alias@example.test"));
     }
 }

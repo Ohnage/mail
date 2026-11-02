@@ -1521,6 +1521,12 @@ fn sync_rows(model: &VecModel<TabRow>, rows: impl Iterator<Item = TabRow>) {
 /// profile leaves out is not shown either.
 fn available_scope(scope: Scope, state: &InboxState) -> Option<Scope> {
     match scope {
+        Scope::AddressInbox(id) => state
+            .account_presentation
+            .visible_address_views()
+            .iter()
+            .any(|view| view.id == id)
+            .then_some(scope),
         Scope::Unified(_) | Scope::Important | Scope::Other => Some(scope),
         // A label can move between sections, e.g. when it becomes automatic.
         Scope::Label { id, .. } => state

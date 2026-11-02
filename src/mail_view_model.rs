@@ -89,7 +89,10 @@ pub(super) fn carry_selected_detail(
     else {
         return;
     };
-    let Some(summary) = refreshed.iter_mut().find(|message| message.id == selected_id) else {
+    let Some(summary) = refreshed
+        .iter_mut()
+        .find(|message| message.id == selected_id)
+    else {
         return;
     };
     summary.html = selected_detail.html.take();
@@ -281,11 +284,18 @@ pub(super) fn select_message(
 ) -> Result<(), String> {
     {
         let mut state = state.borrow_mut();
-        let Some(date_ms) = state.messages.iter().find(|row| row.id == id).map(|row| row.date_ms) else {
+        let Some(date_ms) = state
+            .messages
+            .iter()
+            .find(|row| row.id == id)
+            .map(|row| row.date_ms)
+        else {
             return Ok(());
         };
         if state.query.trim().is_empty() && app.get_group_mail_by_date() {
-            state.mail_groups.reveal(&mail_group_key(date_ms, Local::now()));
+            state
+                .mail_groups
+                .reveal(&mail_group_key(date_ms, Local::now()));
         }
         // A restored tab's open message belongs to its own conversation.
         if state
@@ -315,13 +325,11 @@ fn adjacent_message_ids<M: std::borrow::Borrow<MailMessage>>(
     messages: &[M],
     selected_id: Option<i32>,
 ) -> (i32, i32) {
-    let Some(selected_index) =
-        selected_id.and_then(|id| {
-            messages
-                .iter()
-                .position(|message| std::borrow::Borrow::borrow(message).id == id)
-        })
-    else {
+    let Some(selected_index) = selected_id.and_then(|id| {
+        messages
+            .iter()
+            .position(|message| std::borrow::Borrow::borrow(message).id == id)
+    }) else {
         return (-1, -1);
     };
     let previous_id = selected_index
@@ -505,12 +513,7 @@ pub(super) fn render_current(
             Rc::clone(&state.mail_list_entries),
         )
     };
-    reconcile_model_rows_by(
-        &email_rows,
-        projected_rows,
-        |row| row.id,
-        same_email_row,
-    );
+    reconcile_model_rows_by(&email_rows, projected_rows, |row| row.id, same_email_row);
     reconcile_model_rows_by(
         &mail_list_entries,
         list_projection,
@@ -519,7 +522,20 @@ pub(super) fn render_current(
     );
     app.set_mail_selection_count(checked_ids.len() as i32);
     refresh_sidebar(state);
-    app.set_selected_scope_title(mailbox_scope_title(scope, &mailboxes, &labels).into());
+    app.set_selected_scope_title(
+        match scope {
+            Scope::AddressInbox(id) => state
+                .borrow()
+                .account_presentation
+                .address_views
+                .iter()
+                .find(|view| view.id == id)
+                .map(|view| view.address.clone())
+                .unwrap_or_else(|| "Address inbox".into()),
+            _ => mailbox_scope_title(scope, &mailboxes, &labels),
+        }
+        .into(),
+    );
     app.set_trash_view(is_trash_scope(scope));
     app.set_selected_scope(scope.into());
     app.set_search_query(query.clone().into());
@@ -913,7 +929,7 @@ pub(super) fn scope_matches(email: &MailMessage, scope: Scope) -> bool {
         // These scopes are filtered by the core query before projection. Their
         // stable route/folder ids are intentionally not duplicated in every UI
         // row.
-        Scope::Important | Scope::Other | Scope::Folder(_) => true,
+        Scope::Important | Scope::Other | Scope::Folder(_) | Scope::AddressInbox(_) => true,
     }
 }
 
@@ -981,10 +997,13 @@ pub(super) fn make_rows<M: std::borrow::Borrow<MailMessage>>(
                     .unwrap_or_default()
                     .into(),
                 show_account_marker: account_presentation.show_markers,
-                profile_logo: account_presentation.account_icon(email.account_id)
+                profile_logo: account_presentation
+                    .account_icon(email.account_id)
                     .cloned()
                     .unwrap_or_default(),
-                has_profile_logo: account_presentation.account_icon(email.account_id).is_some(),
+                has_profile_logo: account_presentation
+                    .account_icon(email.account_id)
+                    .is_some(),
                 folder: email.folder.clone().into(),
                 sender: email.sender.clone().into(),
                 address: email.address.clone().into(),
@@ -1168,7 +1187,10 @@ pub(super) fn refresh_rows_only(
                 .filter(|id| visible.iter().any(|email| email.id == *id))
                 .or_else(|| visible.first().map(|email| email.id))
         };
-        let visible_ids = visible.iter().map(|message| message.id).collect::<HashSet<_>>();
+        let visible_ids = visible
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
         let checked_ids = state
             .checked_ids
             .intersection(&visible_ids)
@@ -1213,12 +1235,7 @@ pub(super) fn refresh_rows_only(
         state.selected_id = selected_id;
         state.checked_ids.clone_from(&checked_ids);
     }
-    reconcile_model_rows_by(
-        &email_rows,
-        projected_rows,
-        |row| row.id,
-        same_email_row,
-    );
+    reconcile_model_rows_by(&email_rows, projected_rows, |row| row.id, same_email_row);
     reconcile_model_rows_by(
         &mail_list_entries,
         list_projection,
@@ -1268,12 +1285,7 @@ pub(super) fn refresh_rows_only(
             })
     };
     if let Some((thread_rows, rows)) = conversation_projection {
-        reconcile_model_rows_by(
-            &rows,
-            thread_rows,
-            |row| row.index,
-            PartialEq::eq,
-        );
+        reconcile_model_rows_by(&rows, thread_rows, |row| row.index, PartialEq::eq);
     }
     schedule_favicon_fetches(app, state, runtime, &visible_domains);
 }
@@ -1306,15 +1318,7 @@ pub(super) fn refresh_message_dates(
 }
 
 pub(super) fn refresh_list_metadata(app: &AppWindow, state: &Rc<RefCell<InboxState>>) {
-    let (
-        can_load_more,
-        query,
-        scope,
-        mailboxes,
-        search_filter,
-        inbox_count,
-        labels,
-    ) = {
+    let (can_load_more, query, scope, mailboxes, search_filter, inbox_count, labels) = {
         let state = state.borrow();
         let can_load_more = if state.using_core {
             state.next_cursor.is_some()
@@ -1341,7 +1345,20 @@ pub(super) fn refresh_list_metadata(app: &AppWindow, state: &Rc<RefCell<InboxSta
     };
 
     refresh_sidebar(state);
-    app.set_selected_scope_title(mailbox_scope_title(scope, &mailboxes, &labels).into());
+    app.set_selected_scope_title(
+        match scope {
+            Scope::AddressInbox(id) => state
+                .borrow()
+                .account_presentation
+                .address_views
+                .iter()
+                .find(|view| view.id == id)
+                .map(|view| view.address.clone())
+                .unwrap_or_else(|| "Address inbox".into()),
+            _ => mailbox_scope_title(scope, &mailboxes, &labels),
+        }
+        .into(),
+    );
     app.set_trash_view(is_trash_scope(scope));
     app.set_selected_scope(scope.into());
     app.set_search_query(query.clone().into());
@@ -1582,7 +1599,10 @@ pub(super) fn make_mailbox_rows(
                 can_delete: mailbox.can_delete,
                 label_has_emoji: contains_emoji(&mailbox.label),
                 label: mailbox.label.clone().into(),
-                scope: mailbox.scope.map(slint::SharedString::from).unwrap_or_default(),
+                scope: mailbox
+                    .scope
+                    .map(slint::SharedString::from)
+                    .unwrap_or_default(),
                 context: mailbox.context.clone().into(),
                 detail: mailbox.detail.clone().into(),
                 avatar: mailbox.avatar.clone().into(),
@@ -1610,8 +1630,13 @@ fn mailbox_scope_title(
             .find(|mailbox| mailbox.scope == Some(scope))
     };
     match scope {
+        Scope::AddressInbox(_) => {
+            mailbox().map_or_else(|| "Address inbox".into(), |mailbox| mailbox.label.clone())
+        }
         Scope::Unified(_) | Scope::Important | Scope::Other => scope.to_string(),
-        Scope::Folder(_) => mailbox().map_or_else(|| "Folder".into(), |mailbox| mailbox.label.clone()),
+        Scope::Folder(_) => {
+            mailbox().map_or_else(|| "Folder".into(), |mailbox| mailbox.label.clone())
+        }
         Scope::Label { id, .. } => labels
             .iter()
             .find(|label| label.id == id)
@@ -1909,7 +1934,10 @@ mod tests {
         let filtered = filtered_messages(&messages, Scope::UNIFIED_INBOX, "", "All mail", None);
         assert_eq!(filtered.len(), 1);
         assert!(std::ptr::eq(filtered[0], &messages[0]));
-        assert_eq!(filtered[0].html.as_ref().unwrap().as_ptr(), messages[0].html.as_ref().unwrap().as_ptr());
+        assert_eq!(
+            filtered[0].html.as_ref().unwrap().as_ptr(),
+            messages[0].html.as_ref().unwrap().as_ptr()
+        );
     }
 
     #[test]
@@ -2097,11 +2125,20 @@ mod tests {
         let order = [10, 20, 30, 40];
         let visible = |ids: &[i32]| ids.iter().copied().collect::<HashSet<_>>();
 
-        assert_eq!(successor_selection(&order, 20, &visible(&[10, 30, 40])), Some(30));
+        assert_eq!(
+            successor_selection(&order, 20, &visible(&[10, 30, 40])),
+            Some(30)
+        );
         // Rows removed in the same batch are skipped.
-        assert_eq!(successor_selection(&order, 20, &visible(&[10, 40])), Some(40));
+        assert_eq!(
+            successor_selection(&order, 20, &visible(&[10, 40])),
+            Some(40)
+        );
         // The last row falls back to the nearest row above it.
-        assert_eq!(successor_selection(&order, 40, &visible(&[10, 20])), Some(20));
+        assert_eq!(
+            successor_selection(&order, 40, &visible(&[10, 20])),
+            Some(20)
+        );
         assert_eq!(successor_selection(&order, 20, &visible(&[])), None);
         assert_eq!(successor_selection(&order, 99, &visible(&[10])), None);
     }

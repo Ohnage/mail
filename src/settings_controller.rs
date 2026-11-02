@@ -1101,19 +1101,78 @@ struct BusinessTabDraft {
     id: Option<String>,
     icon: Option<String>,
     accounts: std::collections::BTreeSet<i64>,
+    address_views: std::collections::BTreeSet<i64>,
+    original_account_ids: Option<Vec<i64>>,
+    original_address_view_ids: Option<Vec<i64>>,
+    membership_dirty: bool,
+}
+
+#[derive(Debug, PartialEq)]
+enum InboxChoiceKey {
+    Account(i64),
+    Alias(i64),
+}
+
+fn parse_inbox_choice_key(key: &str) -> Option<InboxChoiceKey> {
+    let (kind, id) = key.split_once(':')?;
+    let id = id.parse::<i64>().ok().filter(|id| *id > 0)?;
+    match kind {
+        "account" => Some(InboxChoiceKey::Account(id)),
+        "alias" => Some(InboxChoiceKey::Alias(id)),
+        _ => None,
+    }
+}
+
+impl BusinessTabDraft {
+    fn set_choice(&mut self, key: &str, checked: bool) -> bool {
+        let (choices, id) = match parse_inbox_choice_key(key) {
+            Some(InboxChoiceKey::Account(id)) => (&mut self.accounts, id),
+            Some(InboxChoiceKey::Alias(id)) => (&mut self.address_views, id),
+            None => return false,
+        };
+        let changed = if checked {
+            choices.insert(id)
+        } else {
+            choices.remove(&id)
+        };
+        self.membership_dirty |= changed;
+        true
+    }
+
+    fn memberships_for_save(&self) -> (Option<Vec<i64>>, Option<Vec<i64>>) {
+        if self.id.is_none() || self.membership_dirty {
+            (
+                Some(self.accounts.iter().copied().collect()),
+                Some(self.address_views.iter().copied().collect()),
+            )
+        } else {
+            (
+                self.original_account_ids.clone(),
+                self.original_address_view_ids.clone(),
+            )
+        }
+    }
+}
+
+fn discard_business_tab_draft(draft: &RefCell<Option<BusinessTabDraft>>) {
+    *draft.borrow_mut() = None;
 }
 
 // The draft starts from the sidebar's current membership. Recipient-only
 // views inherit every connected account until an explicit checklist is saved.
+// Address-filtered groups never infer whole source mailboxes from profile data.
 fn initial_tab_accounts(
     explicit: Option<&[i64]>,
     scope: &str,
     inherited: &[i64],
     connected: &[i64],
+    has_address_catalog: bool,
 ) -> std::collections::BTreeSet<i64> {
     explicit
         .unwrap_or(if scope == "recipients" {
             connected
+        } else if has_address_catalog && matches!(scope, "profiles" | "accounts") {
+            &[]
         } else {
             inherited
         })
@@ -1124,25 +1183,129 @@ fn initial_tab_accounts(
 
 #[cfg(test)]
 mod branding_draft_tests {
-    use super::initial_tab_accounts;
+    use super::{
+        BusinessTabDraft, InboxChoiceKey, discard_business_tab_draft, initial_tab_accounts,
+        parse_inbox_choice_key,
+    };
+
+    fn automatic_draft() -> BusinessTabDraft {
+        BusinessTabDraft {
+            id: Some("automatic-group".into()),
+            accounts: [3].into_iter().collect(),
+            address_views: [101, 102].into_iter().collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn presentation_only_save_keeps_automatic_membership() {
+        let mut draft = automatic_draft();
+        draft.icon = Some("tab-icons/changed.png".into());
+        assert_eq!(draft.memberships_for_save(), (None, None));
+        assert!(!draft.membership_dirty);
+    }
+
+    #[test]
+    fn untouched_mixed_memberships_preserve_explicit_empty_and_automatic() {
+        let mut draft = automatic_draft();
+        draft.original_account_ids = Some(vec![]);
+        assert_eq!(draft.memberships_for_save(), (Some(vec![]), None));
+    }
+
+    #[test]
+    fn checklist_changes_make_both_memberships_explicit() {
+        let mut draft = automatic_draft();
+        assert!(draft.set_choice("alias:103", true));
+        assert_eq!(
+            draft.memberships_for_save(),
+            (Some(vec![3]), Some(vec![101, 102, 103]))
+        );
+        // Restoring the visible selection still records the user's explicit choice.
+        assert!(draft.set_choice("alias:103", false));
+        assert_eq!(
+            draft.memberships_for_save(),
+            (Some(vec![3]), Some(vec![101, 102]))
+        );
+    }
+
+    #[test]
+    fn new_empty_group_saves_explicit_empty_memberships() {
+        assert_eq!(
+            BusinessTabDraft::default().memberships_for_save(),
+            (Some(vec![]), Some(vec![]))
+        );
+    }
+
+    #[test]
+    fn cancel_discards_membership_changes_before_reopening() {
+        let editor = std::cell::RefCell::new(Some(automatic_draft()));
+        assert!(
+            editor
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .set_choice("alias:103", true)
+        );
+        discard_business_tab_draft(&editor);
+        assert!(editor.borrow().is_none());
+        *editor.borrow_mut() = Some(automatic_draft());
+        assert_eq!(
+            editor.borrow().as_ref().unwrap().memberships_for_save(),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn alias_and_account_choices_keep_independent_membership() {
+        let mut draft = BusinessTabDraft::default();
+        assert!(draft.set_choice("account:7", true));
+        assert!(draft.set_choice("alias:7", true));
+        assert!(draft.set_choice("alias:7", false));
+        assert_eq!(draft.accounts.into_iter().collect::<Vec<_>>(), vec![7]);
+        assert!(draft.address_views.is_empty());
+    }
+
+    #[test]
+    fn choice_keys_preserve_large_alias_ids_and_reject_invalid_ids() {
+        assert_eq!(
+            parse_inbox_choice_key("alias:9000000000000000000"),
+            Some(InboxChoiceKey::Alias(9_000_000_000_000_000_000))
+        );
+        for key in ["alias:0", "account:-1", "alias:bad", "other:7"] {
+            assert!(parse_inbox_choice_key(key).is_none());
+        }
+    }
 
     #[test]
     fn recipient_tab_without_explicit_members_starts_with_every_connected_account() {
-        let selected = initial_tab_accounts(None, "recipients", &[9], &[3, 1, 3, 2]);
+        let selected = initial_tab_accounts(None, "recipients", &[9], &[3, 1, 3, 2], true);
         assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
     #[test]
     fn recipient_tab_keeps_explicit_members_including_empty_selection() {
-        assert!(initial_tab_accounts(Some(&[]), "recipients", &[9], &[1, 2]).is_empty());
-        let selected = initial_tab_accounts(Some(&[2, 2]), "recipients", &[9], &[1, 2]);
+        assert!(initial_tab_accounts(Some(&[]), "recipients", &[9], &[1, 2], true).is_empty());
+        let selected = initial_tab_accounts(Some(&[2, 2]), "recipients", &[9], &[1, 2], true);
         assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn address_groups_do_not_select_whole_source_mailboxes_by_default() {
+        for scope in ["profiles", "accounts"] {
+            assert!(initial_tab_accounts(None, scope, &[4, 9], &[1, 2], true).is_empty());
+            assert_eq!(
+                initial_tab_accounts(Some(&[9]), scope, &[4, 9], &[1, 2], true)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                vec![9]
+            );
+        }
     }
 
     #[test]
     fn other_scopes_keep_inherited_profile_membership() {
         for scope in ["accounts", "any", "narrow"] {
-            let selected = initial_tab_accounts(None, scope, &[9, 4, 9], &[1, 2]);
+            let selected = initial_tab_accounts(None, scope, &[9, 4, 9], &[1, 2], false);
             assert_eq!(selected.into_iter().collect::<Vec<_>>(), vec![4, 9]);
         }
     }
@@ -1151,27 +1314,38 @@ mod branding_draft_tests {
 fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
     let editor = app.global::<BusinessTabEditorUi>();
     let query = editor.get_query().trim().to_lowercase();
-    let members = app
+    let mut choices = app
         .get_connected_accounts()
         .iter()
-        .filter(|account| {
-            query.is_empty()
-                || account.name.to_lowercase().contains(&query)
-                || account.email.to_lowercase().contains(&query)
-        })
-        .map(|account| ProfileMemberRow {
-            id: account.id,
+        .map(|account| InboxViewChoiceRow {
+            key: format!("account:{}", account.id).into(),
+            kind: InboxViewKind::Account,
             name: account.name,
-            email: account.email,
+            detail: account.email,
             initials: account.initials,
             avatar: account.avatar_small,
             has_avatar: account.has_avatar,
-            other_profile: Default::default(),
             checked: draft.accounts.contains(&i64::from(account.id)),
         })
         .collect::<Vec<_>>();
-    editor.set_members(ModelRc::new(VecModel::from(members)));
-    editor.set_selected_count(draft.accounts.len().try_into().unwrap_or(i32::MAX));
+    choices.extend(app.get_address_inboxes().iter().map(|mut view| {
+        view.checked = match parse_inbox_choice_key(view.key.as_str()) {
+            Some(InboxChoiceKey::Alias(id)) => draft.address_views.contains(&id),
+            _ => false,
+        };
+        view
+    }));
+    choices.retain(|choice| {
+        query.is_empty()
+            || choice.name.to_lowercase().contains(&query)
+            || choice.detail.to_lowercase().contains(&query)
+    });
+    editor.set_members(ModelRc::new(VecModel::from(choices)));
+    editor.set_selected_count(
+        (draft.accounts.len() + draft.address_views.len())
+            .try_into()
+            .unwrap_or(i32::MAX),
+    );
 }
 
 #[cfg(desktop)]
@@ -1215,6 +1389,48 @@ fn register_branding_callbacks(
     runtime: &Rc<tokio::runtime::Runtime>,
 ) {
     use crate::custom_icons::{IconKind, import_icon};
+    let weak = app.as_weak();
+    let catalog_state = Rc::clone(state);
+    let catalog_runtime = Rc::clone(runtime);
+    app.global::<ReceivingInboxUi>().on_create(move || {
+        let Some(app) = weak.upgrade() else {
+            return false;
+        };
+        let form = app.global::<ReceivingInboxUi>();
+        form.set_created(false);
+        let Some(core) = catalog_state.borrow().core.clone() else {
+            form.set_error("Inbox views require local mail data.".into());
+            return false;
+        };
+        let address = form.get_address().trim().to_string();
+        let sources = form
+            .get_source_emails()
+            .split([',', ';', '\n'])
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect();
+        match catalog_runtime.block_on(core.save_address_view(address, sources)) {
+            Ok(settings) => {
+                apply_account_presentation_settings(
+                    &app,
+                    &catalog_state,
+                    &catalog_runtime,
+                    &settings,
+                );
+                form.set_address(Default::default());
+                form.set_source_emails(Default::default());
+                form.set_error(Default::default());
+                form.set_created(true);
+                true
+            }
+            Err(error) => {
+                form.set_error(format!("Could not add inbox view: {error}").into());
+                false
+            }
+        }
+    });
+
     let draft = Rc::new(RefCell::new(None::<BusinessTabDraft>));
     let weak = app.as_weak();
     let open_state = Rc::clone(state);
@@ -1240,6 +1456,9 @@ fn register_branding_callbacks(
         let initial = BusinessTabDraft {
             id: tab.map(|tab| tab.id.clone()),
             icon,
+            original_account_ids: tab.and_then(|tab| tab.account_ids.clone()),
+            original_address_view_ids: tab.and_then(|tab| tab.address_view_ids.clone()),
+            membership_dirty: false,
             accounts: tab
                 .map(|tab| {
                     initial_tab_accounts(
@@ -1250,13 +1469,33 @@ fn register_branding_callbacks(
                             .iter()
                             .map(|account| i64::from(account.id))
                             .collect::<Vec<_>>(),
+                        !presentation.address_views.is_empty(),
                     )
                 })
                 .unwrap_or_default(),
+            address_views: tab
+                .map(|tab| {
+                    tab.address_view_ids.clone().unwrap_or_else(|| {
+                        presentation
+                            .address_views
+                            .iter()
+                            .filter(|view| {
+                                view.profile_id
+                                    .as_ref()
+                                    .is_some_and(|id| tab.profile_ids.contains(id))
+                            })
+                            .map(|view| view.id)
+                            .collect()
+                    })
+                })
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
         };
         let editor = app.global::<BusinessTabEditorUi>();
         editor.set_editing_id(id);
         editor.set_name(tab.map(|tab| tab.name.clone()).unwrap_or_default().into());
+        editor.set_show_name(tab.map(|tab| tab.show_name).unwrap_or(true));
         editor.set_query(Default::default());
         editor.set_error(Default::default());
         editor.set_has_icon(initial.icon.is_some());
@@ -1288,11 +1527,7 @@ fn register_branding_callbacks(
         .on_toggle_member(move |id, checked| {
             let Some(app) = weak.upgrade() else { return };
             if let Some(draft) = member_draft.borrow_mut().as_mut() {
-                if checked {
-                    draft.accounts.insert(i64::from(id));
-                } else {
-                    draft.accounts.remove(&i64::from(id));
-                }
+                draft.set_choice(id.as_str(), checked);
                 publish_tab_members(&app, draft);
             }
         });
@@ -1344,7 +1579,7 @@ fn register_branding_callbacks(
     let weak = app.as_weak();
     let cancel_draft = Rc::clone(&draft);
     app.global::<BusinessTabEditorUi>().on_cancel(move || {
-        *cancel_draft.borrow_mut() = None;
+        discard_business_tab_draft(&cancel_draft);
         if let Some(app) = weak.upgrade() {
             app.global::<BusinessTabEditorUi>().set_visible(false);
         }
@@ -1371,11 +1606,14 @@ fn register_branding_callbacks(
             editor.set_error("Enter a tab name.".into());
             return false;
         }
+        let (account_ids, address_view_ids) = draft.memberships_for_save();
         let result = save_runtime.block_on(core.save_business_tab_details(
             draft.id.clone(),
             name,
-            draft.accounts.iter().copied().collect(),
+            account_ids,
+            address_view_ids,
             draft.icon.clone(),
+            editor.get_show_name(),
         ));
         drop(borrowed);
         match result {

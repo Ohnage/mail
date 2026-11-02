@@ -24,8 +24,58 @@ env:
   CARGO_BUILD_JOBS: "1"
 
 jobs:
+  # This fork ships Windows. Keep product checks on its actual target.
+  fork-windows:
+    if: github.repository == 'Ohnage/mail' && github.event_name != 'schedule'
+    name: Windows format and lint
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: quality-fork-windows
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint Windows without warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # GNU gettext catalog tooling only: this job never builds the application.
+  # Keep the existing extractor/gettext comparison instead of adding a new
+  # Windows gettext toolchain just for catalog validation.
+  fork-translations:
+    if: github.repository == 'Ohnage/mail' && github.event_name != 'schedule'
+    name: Translation catalogs (tools only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install GNU gettext
+        run: sudo apt-get update && sudo apt-get install -y gettext
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: quality-fork-translations
+      - name: Validate translation catalogs
+        shell: bash
+        run: |
+          cargo install slint-tr-extractor --version 1.18.1 --locked
+          bash scripts/check-translations.sh
+          for language in es ru; do
+            catalog="lang/$language/LC_MESSAGES/flectar-mail.po"
+            msgfmt --check --check-header --check-format \
+              -o "/tmp/flectar-mail-$language.mo" "$catalog"
+            test -z "$(msgattrib --untranslated --no-obsolete "$catalog")"
+            test -z "$(msgattrib --only-fuzzy --no-obsolete "$catalog")"
+            test -z "$(msgattrib --only-obsolete "$catalog")"
+          done
+
   quality:
-    if: github.event_name != 'schedule'
+    if: github.repository == 'flectar/mail' && github.event_name != 'schedule'
     name: Format, lint, and test
     runs-on: ubuntu-24.04
     steps:
@@ -35,6 +85,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            dbus-daemon \
             gettext \
             gnupg \
             libdbus-1-dev \
@@ -143,7 +194,7 @@ jobs:
             cargo test -p flectar-mail --lib --locked mobile_native_pages_and_rejection -- --ignored
 
   platforms:
-    if: github.event_name != 'schedule'
+    if: github.repository == 'flectar/mail' && github.event_name != 'schedule'
     # Shared code compiles differently per target. Lint every supported
     # platform so a change cannot silently break a build nobody ran locally.
     name: Lint ${{ matrix.name }}
@@ -205,7 +256,7 @@ jobs:
         run: ${{ matrix.command }}
 
   optional-embeddings:
-    if: github.event_name != 'schedule'
+    if: github.repository == 'flectar/mail' && github.event_name != 'schedule'
     name: Optional embedding runtime
     runs-on: ubuntu-24.04
     steps:
@@ -232,7 +283,7 @@ jobs:
 
   rustsec:
     name: RustSec advisory scan
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'Ohnage/mail' && 'windows-2025' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
@@ -245,18 +296,22 @@ jobs:
       - name: Install pinned cargo-audit
         run: cargo install cargo-audit --locked --version 0.22.2
       - name: Audit the locked dependency graph
+        shell: bash
         # The first four exceptions are unmaintained notices in optional/build
         # or Slint/Blitz typography dependencies. The last three cover crates
         # folded into zbus 6: remove them when Slint, ashpd, and ksni migrate
         # from zbus 5. These are maintenance notices, not vulnerability waivers.
         # Deny every other warning and all known vulnerabilities.
         run: |
-          lockfiles="Cargo.lock platform/android/Cargo.lock"
-          # Tier 3 ports are audited daily and when their own workflow runs,
-          # not on pull requests (platform/README.md).
-          case "$GITHUB_EVENT_NAME" in
-            schedule | workflow_dispatch) lockfiles="$lockfiles platform/ohos/Cargo.lock" ;;
-          esac
+          lockfiles="Cargo.lock"
+          # The Windows fork has one product lockfile. Preserve upstream's
+          # separate port audits only outside this fork.
+          if [[ "$GITHUB_REPOSITORY" == "flectar/mail" ]]; then
+            lockfiles="$lockfiles platform/android/Cargo.lock"
+            case "$GITHUB_EVENT_NAME" in
+              schedule | workflow_dispatch) lockfiles="$lockfiles platform/ohos/Cargo.lock" ;;
+            esac
+          fi
           for lockfile in $lockfiles; do
             cargo audit --file "$lockfile" --deny warnings \
               --ignore RUSTSEC-2025-0141 \

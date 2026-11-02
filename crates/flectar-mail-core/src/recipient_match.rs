@@ -4,8 +4,9 @@
 //! character, compared without regard to case. `tim@*` matches
 //! `tim@example.com` and not `tmentink@gmail.com`. `ohnage?@*` matches
 //! `ohnage1@x.com` and not `ohnage@x.com`. A recipient filter matches To, Cc,
-//! Bcc, and the mailbox address (the address the message was delivered into,
-//! used as Delivered-To). Literal addresses are an exact set. The SQL clause
+//! Bcc, persisted receiver delivery headers, and (for legacy business rules)
+//! the connected account login as a fallback. That login is not Delivered-To.
+//! Exact address inboxes omit that fallback. Literal addresses are an exact set. The SQL clause
 //! is one scalar function, so a few hundred patterns do not build an `OR`
 //! tree SQLite will reject. Sender display names match only together with
 //! one of the scope's own domains.
@@ -105,6 +106,18 @@ impl RecipientMatcher {
         bcc_json: &str,
         mailbox: &str,
     ) -> bool {
+        self.matches_delivery_headers(to_json, cc_json, bcc_json, "[]", mailbox)
+    }
+
+    /// Legacy rule match: real recipients plus the connected account login.
+    pub fn matches_delivery_headers(
+        &self,
+        to_json: &str,
+        cc_json: &str,
+        bcc_json: &str,
+        delivery_json: &str,
+        mailbox: &str,
+    ) -> bool {
         if self.is_empty() {
             return false;
         }
@@ -112,6 +125,7 @@ impl RecipientMatcher {
             || json_has_match(to_json, self)
             || json_has_match(cc_json, self)
             || json_has_match(bcc_json, self)
+            || json_has_match(delivery_json, self)
     }
 }
 
@@ -179,6 +193,146 @@ fn skip_json_string(bytes: &[u8], index: &mut usize) -> usize {
     start
 }
 
+/// An exact delivery-address inbox. Source accounts constrain storage, not
+/// evidence of the address. None searches all sources; Some([]) matches none.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AddressInboxScope {
+    pub address: String,
+    pub account_ids: Option<Vec<i64>>,
+}
+
+struct AddressInboxMatcher {
+    sources: HashMap<String, Option<HashSet<i64>>>,
+}
+
+impl AddressInboxMatcher {
+    fn compile(inboxes: Vec<AddressInboxScope>) -> Self {
+        let mut sources: HashMap<String, Option<HashSet<i64>>> = HashMap::new();
+        for inbox in inboxes {
+            let address = inbox.address.trim().to_ascii_lowercase();
+            if address.is_empty() || address.len() > 320 {
+                continue;
+            }
+            let allowed = inbox
+                .account_ids
+                .map(|ids| ids.into_iter().filter(|id| *id > 0).collect::<HashSet<_>>());
+            if let Some(existing) = sources.get_mut(&address) {
+                if allowed.is_none() {
+                    *existing = None;
+                } else if let (Some(existing), Some(allowed)) =
+                    (existing.as_mut(), allowed.as_ref())
+                {
+                    existing.extend(allowed);
+                }
+            } else {
+                sources.insert(address, allowed);
+            }
+        }
+        Self { sources }
+    }
+
+    fn matches(&self, json: &str, account_id: Option<i64>) -> bool {
+        serde_json::from_str::<Vec<crate::models::Address>>(json).is_ok_and(|addresses| {
+            addresses.iter().any(|recipient| {
+                self.sources
+                    .get(&recipient.email.trim().to_ascii_lowercase())
+                    .is_some_and(|allowed| {
+                        allowed
+                            .as_ref()
+                            .is_none_or(|ids| account_id.is_some_and(|id| ids.contains(&id)))
+                    })
+            })
+        })
+    }
+}
+
+/// Receiving-address classification for an automatic business group. Exact
+/// registry overrides are resolved before business domains, per address.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AddressGroupScope {
+    pub profile_ids: Vec<String>,
+    pub rules: Vec<crate::models::AddressRule>,
+}
+
+struct AddressGroupMatcher {
+    groups: Vec<AddressGroupScope>,
+}
+
+impl AddressGroupMatcher {
+    fn matches(&self, json: &str) -> bool {
+        serde_json::from_str::<Vec<crate::models::Address>>(json).is_ok_and(|addresses| {
+            addresses.iter().any(|recipient| {
+                self.groups.iter().any(|group| {
+                    crate::brand_registry::classify_receiving_address(
+                        &group.rules,
+                        &recipient.email,
+                    )
+                    .is_some_and(|profile| group.profile_ids.contains(&profile))
+                })
+            })
+        })
+    }
+}
+
+fn install_address_inbox_matcher(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.create_scalar_function(
+        "flectar_address_inbox_match",
+        6,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
+            | rusqlite::functions::FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let matcher = ctx.get_or_create_aux(
+                5,
+                |value| -> std::result::Result<
+                    AddressInboxMatcher,
+                    Box<dyn std::error::Error + Send + Sync>,
+                > {
+                    Ok(AddressInboxMatcher::compile(serde_json::from_str(
+                        value.as_str()?,
+                    )?))
+                },
+            )?;
+            let account_id = ctx.get::<Option<i64>>(4)?;
+            for index in 0..4 {
+                if matcher.matches(
+                    &ctx.get::<Option<String>>(index)?.unwrap_or_default(),
+                    account_id,
+                ) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        },
+    )?;
+    conn.create_scalar_function(
+        "flectar_address_group_match",
+        5,
+        rusqlite::functions::FunctionFlags::SQLITE_UTF8
+            | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
+            | rusqlite::functions::FunctionFlags::SQLITE_INNOCUOUS,
+        |ctx| {
+            let matcher = ctx.get_or_create_aux(
+                4,
+                |value| -> std::result::Result<
+                    AddressGroupMatcher,
+                    Box<dyn std::error::Error + Send + Sync>,
+                > {
+                    Ok(AddressGroupMatcher {
+                        groups: serde_json::from_str(value.as_str()?)?,
+                    })
+                },
+            )?;
+            for index in 0..4 {
+                if matcher.matches(&ctx.get::<Option<String>>(index)?.unwrap_or_default()) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        },
+    )
+}
+
 struct MatcherSlot {
     matcher: RwLock<Arc<RecipientMatcher>>,
 }
@@ -188,7 +342,7 @@ fn matcher_slots() -> &'static Mutex<HashMap<usize, Arc<MatcherSlot>>> {
     SLOTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Register `flectar_recipient_match(to_json, cc_json, bcc_json, mailbox)` on
+/// Register `flectar_recipient_match(to_json, cc_json, bcc_json, delivery_json, mailbox)` on
 /// `conn`. The function reads a slot updated in place, so a cached statement
 /// keeps calling the patterns installed for the latest query on that
 /// connection. An empty pattern list leaves the clause unused and is a no-op.
@@ -196,6 +350,7 @@ pub fn install_recipient_matcher(
     conn: &rusqlite::Connection,
     patterns: &[String],
 ) -> rusqlite::Result<()> {
+    install_address_inbox_matcher(conn)?;
     let compiled = Arc::new(RecipientMatcher::compile(patterns));
     if compiled.is_empty() {
         return Ok(());
@@ -220,7 +375,7 @@ pub fn install_recipient_matcher(
     drop(slots);
     conn.create_scalar_function(
         "flectar_recipient_match",
-        4,
+        5,
         rusqlite::functions::FunctionFlags::SQLITE_UTF8
             | rusqlite::functions::FunctionFlags::SQLITE_DETERMINISTIC
             | rusqlite::functions::FunctionFlags::SQLITE_INNOCUOUS,
@@ -233,8 +388,15 @@ pub fn install_recipient_matcher(
             let to_json = ctx.get::<Option<String>>(0)?.unwrap_or_default();
             let cc_json = ctx.get::<Option<String>>(1)?.unwrap_or_default();
             let bcc_json = ctx.get::<Option<String>>(2)?.unwrap_or_default();
-            let mailbox = ctx.get::<Option<String>>(3)?.unwrap_or_default();
-            Ok(matcher.matches_headers(&to_json, &cc_json, &bcc_json, &mailbox))
+            let delivery_json = ctx.get::<Option<String>>(3)?.unwrap_or_default();
+            let mailbox = ctx.get::<Option<String>>(4)?.unwrap_or_default();
+            Ok(matcher.matches_delivery_headers(
+                &to_json,
+                &cc_json,
+                &bcc_json,
+                &delivery_json,
+                &mailbox,
+            ))
         },
     )
 }
@@ -303,7 +465,7 @@ pub fn thread_exists_clause(
             "EXISTS (SELECT 1 FROM messages rm \
              JOIN accounts ra ON ra.id = rm.account_id \
              WHERE rm.thread_id = {thread_column} \
-             AND flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, ra.email))"
+             AND flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, rm.delivery_recipients_json, ra.email))"
         ),
         Vec::new(),
     ))
@@ -316,7 +478,7 @@ pub fn message_clause(patterns: &[String], first_bind: usize) -> Option<(String,
         return None;
     }
     Some((
-        "flectar_recipient_match(m.to_json, m.cc_json, m.bcc_json, \
+        "flectar_recipient_match(m.to_json, m.cc_json, m.bcc_json, m.delivery_recipients_json, \
          (SELECT email FROM accounts ra WHERE ra.id = m.account_id))"
             .to_owned(),
         Vec::new(),
@@ -336,6 +498,10 @@ pub struct MailScope {
     pub sender_domains: Vec<String>,
     pub or_account_ids: Vec<i64>,
     pub match_any: bool,
+    /// Account restriction for the legacy arm only, before alias arms are ORed.
+    pub base_account_ids: Option<Vec<i64>>,
+    pub address_inboxes: Vec<AddressInboxScope>,
+    pub address_groups: Vec<AddressGroupScope>,
 }
 
 impl MailScope {
@@ -355,26 +521,104 @@ pub fn thread_scope_clause(
     account_column: &str,
     first_bind: usize,
 ) -> Option<(String, Vec<String>)> {
-    if !scope.match_any {
-        return thread_exists_clause(&scope.recipient_patterns, thread_column, first_bind);
-    }
-    any_clause(
+    let legacy = if !scope.match_any {
+        thread_exists_clause(&scope.recipient_patterns, thread_column, first_bind)
+    } else {
+        any_clause(
+            scope,
+            first_bind,
+            account_column,
+            &format!(
+                "EXISTS (SELECT 1 FROM messages sm WHERE sm.thread_id = {thread_column} AND ("
+            ),
+            "sm",
+            true,
+            thread_column,
+        )
+    };
+    compose_address_inboxes(
         scope,
-        first_bind,
+        legacy,
         account_column,
-        &format!("EXISTS (SELECT 1 FROM messages sm WHERE sm.thread_id = {thread_column} AND ("),
-        "sm",
-        true,
-        thread_column,
+        Some(thread_column),
+        first_bind,
     )
 }
 
 /// Same filter for a search row already aliased as `m`.
 pub fn message_scope_clause(scope: &MailScope, first_bind: usize) -> Option<(String, Vec<String>)> {
-    if !scope.match_any {
-        return message_clause(&scope.recipient_patterns, first_bind);
+    let legacy = if !scope.match_any {
+        message_clause(&scope.recipient_patterns, first_bind)
+    } else {
+        any_clause(scope, first_bind, "m.account_id", "", "m", false, "")
+    };
+    compose_address_inboxes(scope, legacy, "m.account_id", None, first_bind)
+}
+
+fn compose_address_inboxes(
+    scope: &MailScope,
+    legacy: Option<(String, Vec<String>)>,
+    account_column: &str,
+    thread_column: Option<&str>,
+    first_bind: usize,
+) -> Option<(String, Vec<String>)> {
+    let (mut clause, mut binds) = legacy
+        .map(|(sql, binds)| (Some(sql), binds))
+        .unwrap_or_default();
+    if let Some(ids) = &scope.base_account_ids {
+        let restriction = if ids.is_empty() {
+            "0".to_owned()
+        } else {
+            let placeholders = ids
+                .iter()
+                .map(|id| {
+                    let index = first_bind + binds.len();
+                    binds.push(id.to_string());
+                    format!("?{index}")
+                })
+                .collect::<Vec<_>>();
+            format!("{account_column} IN ({})", placeholders.join(", "))
+        };
+        clause = Some(clause.map_or_else(
+            || restriction.clone(),
+            |old| format!("({restriction} AND {old})"),
+        ));
     }
-    any_clause(scope, first_bind, "m.account_id", "", "m", false, "")
+    if !scope.address_inboxes.is_empty() {
+        let index = first_bind + binds.len();
+        binds.push(
+            serde_json::to_string(&scope.address_inboxes).expect("address inbox scopes serialize"),
+        );
+        let alias = if thread_column.is_some() { "am" } else { "m" };
+        let predicate = format!(
+            "flectar_address_inbox_match({alias}.to_json, {alias}.cc_json, {alias}.bcc_json, {alias}.delivery_recipients_json, {alias}.account_id, ?{index})"
+        );
+        let address_clause = thread_column.map_or_else(|| predicate.clone(), |thread| {
+            format!("EXISTS (SELECT 1 FROM messages am WHERE am.thread_id = {thread} AND {predicate})")
+        });
+        clause = Some(clause.map_or_else(
+            || address_clause.clone(),
+            |old| format!("({old} OR {address_clause})"),
+        ));
+    }
+    if !scope.address_groups.is_empty() {
+        let index = first_bind + binds.len();
+        binds.push(
+            serde_json::to_string(&scope.address_groups).expect("address group scopes serialize"),
+        );
+        let alias = if thread_column.is_some() { "gm" } else { "m" };
+        let predicate = format!(
+            "flectar_address_group_match({alias}.to_json, {alias}.cc_json, {alias}.bcc_json, {alias}.delivery_recipients_json, ?{index})"
+        );
+        let group_clause = thread_column.map_or_else(|| predicate.clone(), |thread| {
+            format!("EXISTS (SELECT 1 FROM messages gm WHERE gm.thread_id = {thread} AND {predicate})")
+        });
+        clause = Some(clause.map_or_else(
+            || group_clause.clone(),
+            |old| format!("({old} OR {group_clause})"),
+        ));
+    }
+    clause.map(|sql| (sql, binds))
 }
 
 fn any_clause(
@@ -539,7 +783,7 @@ mod tests {
     fn clause_is_one_function_call_with_no_binds() {
         let (sql, binds) = thread_exists_clause(&["tim@*".into()], "t.id", 4).unwrap();
         assert!(
-            sql.contains("flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, ra.email)")
+            sql.contains("flectar_recipient_match(rm.to_json, rm.cc_json, rm.bcc_json, rm.delivery_recipients_json, ra.email)")
         );
         assert!(sql.contains("rm.thread_id = t.id"));
         assert!(!sql.contains(" OR "));
@@ -640,6 +884,7 @@ mod tests {
                 sender_domains: vec!["p47.io".into()],
                 or_account_ids: vec![7, 8],
                 match_any: true,
+                ..MailScope::default()
             },
             "t.id",
             "t.account_id",
@@ -669,5 +914,192 @@ mod tests {
             .unwrap()
             .0 == "0"
         );
+    }
+
+    #[test]
+    fn delivery_recipient_is_real_evidence_and_mailbox_fallback_stays_legacy_only() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let (_, message_id) =
+            crate::db::testutil::seed_message(&conn, "sender@example.test", "Delivery", false);
+        conn.execute("UPDATE messages SET to_json='[]',cc_json='[]',bcc_json='[]',delivery_recipients_json=?1 WHERE id=?2", rusqlite::params![r#"[{"name":null,"email":"alias@example.test"}]"#, message_id]).unwrap();
+        let scope = MailScope {
+            address_inboxes: vec![AddressInboxScope {
+                address: "ALIAS@example.test".into(),
+                account_ids: Some(vec![1]),
+            }],
+            ..MailScope::default()
+        };
+        install_recipient_matcher(&conn, &[]).unwrap();
+        let (clause, bind) = message_scope_clause(&scope, 1).unwrap();
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM messages m WHERE {clause}"),
+                rusqlite::params_from_iter(bind.iter()),
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        conn.execute(
+            "UPDATE messages SET delivery_recipients_json='[]' WHERE id=?1",
+            [message_id],
+        )
+        .unwrap();
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM messages m WHERE {clause}"),
+                rusqlite::params_from_iter(bind.iter()),
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+        // Even an exact account login is not proof of that delivery recipient.
+        let login: String = conn
+            .query_row("SELECT email FROM accounts WHERE id=1", [], |r| r.get(0))
+            .unwrap();
+        let primary_scope = MailScope {
+            address_inboxes: vec![AddressInboxScope {
+                address: login,
+                account_ids: None,
+            }],
+            ..MailScope::default()
+        };
+        let (clause, bind) = message_scope_clause(&primary_scope, 1).unwrap();
+        let count: i64 = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM messages m WHERE {clause}"),
+                rusqlite::params_from_iter(bind.iter()),
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn alias_source_arms_do_not_cross_product_and_empty_sources_match_nothing() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let (thread, message) = crate::db::testutil::seed_message(
+            &conn,
+            "sender@example.test",
+            "Source constrained",
+            false,
+        );
+        conn.execute(
+            "UPDATE messages SET to_json=?1, cc_json='[]', bcc_json='[]' WHERE id=?2",
+            rusqlite::params![r#"[{"name":null,"email":"one@example.test"}]"#, message],
+        )
+        .unwrap();
+        install_recipient_matcher(&conn, &[]).unwrap();
+        let mut scope = MailScope {
+            address_inboxes: vec![
+                AddressInboxScope {
+                    address: "one@example.test".into(),
+                    account_ids: Some(vec![2]),
+                },
+                AddressInboxScope {
+                    address: "two@example.test".into(),
+                    account_ids: Some(vec![1]),
+                },
+            ],
+            ..MailScope::default()
+        };
+        let matching = |scope: &MailScope| {
+            let (clause, bind) = thread_scope_clause(scope, "t.id", "t.account_id", 1).unwrap();
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM threads t WHERE {clause}"),
+                rusqlite::params_from_iter(bind.iter()),
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(matching(&scope), 0);
+        scope.address_inboxes[0].account_ids = Some(vec![1]);
+        assert_eq!(matching(&scope), 1);
+        scope.address_inboxes[0].account_ids = Some(vec![]);
+        assert_eq!(matching(&scope), 0);
+        scope.address_inboxes[0].account_ids = None;
+        assert_eq!(matching(&scope), 1);
+        assert!(thread > 0);
+        // A legacy account restriction may not eliminate an independent alias arm.
+        scope.base_account_ids = Some(vec![]);
+        scope.recipient_patterns = vec!["not-this-recipient@example.test".into()];
+        assert_eq!(matching(&scope), 1);
+    }
+
+    #[test]
+    fn legacy_recipient_match_includes_delivery_headers_and_preserves_to_cc_bcc() {
+        let matcher = RecipientMatcher::compile(&["hidden@example.test".into()]);
+        let address = r#"[{"email":"HIDDEN@example.test","name":null}]"#;
+        assert!(matcher.matches_delivery_headers(
+            "[]",
+            "[]",
+            "[]",
+            address,
+            "mailbox@example.test"
+        ));
+        for (to, cc, bcc) in [
+            (address, "[]", "[]"),
+            ("[]", address, "[]"),
+            ("[]", "[]", address),
+        ] {
+            assert!(matcher.matches_delivery_headers(to, cc, bcc, "[]", "mailbox@example.test"));
+        }
+        assert!(!matcher.matches_delivery_headers("[]", "[]", "[]", "[]", "mailbox@example.test"));
+    }
+
+    #[test]
+    fn receiving_group_uses_exact_overrides_unknown_domains_and_each_actual_recipient() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let (_, message) =
+            crate::db::testutil::seed_message(&conn, "sender@example.test", "Groups", false);
+        let rules = vec![
+            crate::models::AddressRule {
+                profile_id: "business".into(),
+                addresses: vec![],
+                domains: vec!["business.test".into()],
+            },
+            crate::models::AddressRule {
+                profile_id: "other".into(),
+                addresses: vec!["foreign@business.test".into()],
+                domains: vec!["other.test".into()],
+            },
+        ];
+        install_recipient_matcher(&conn, &[]).unwrap();
+        let count = |profile: &str| {
+            let scope = MailScope {
+                address_groups: vec![AddressGroupScope {
+                    profile_ids: vec![profile.into()],
+                    rules: rules.clone(),
+                }],
+                ..MailScope::default()
+            };
+            let (clause, binds) = message_scope_clause(&scope, 1).unwrap();
+            conn.query_row(
+                &format!("SELECT COUNT(*) FROM messages m WHERE {clause}"),
+                rusqlite::params_from_iter(binds.iter()),
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        let recipients = |to: &str, cc: &str| {
+            conn.execute("UPDATE messages SET to_json=?1,cc_json=?2,bcc_json='[]',delivery_recipients_json='[]' WHERE id=?3", rusqlite::params![to, cc, message]).unwrap();
+        };
+        recipients(r#"[{"email":"foreign@business.test"}]"#, "[]");
+        assert_eq!(count("business"), 0);
+        assert_eq!(count("other"), 1);
+        recipients(r#"[{"email":"unknown@business.test"}]"#, "[]");
+        assert_eq!(count("business"), 1);
+        assert_eq!(count("other"), 0);
+        recipients(r#"[{"email":"unrelated@elsewhere.test"}]"#, "[]");
+        assert_eq!(count("business"), 0);
+        assert_eq!(count("other"), 0);
+        recipients(
+            r#"[{"email":"foreign@business.test"}]"#,
+            r#"[{"email":"unknown@business.test"}]"#,
+        );
+        assert_eq!(count("business"), 1);
+        assert_eq!(count("other"), 1);
     }
 }

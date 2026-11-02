@@ -275,7 +275,9 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
     );
     for row in &mut mailboxes {
         if row.is_account
-            && let Some(icon) = state.account_presentation.account_icon(i64::from(row.account_id))
+            && let Some(icon) = state
+                .account_presentation
+                .account_icon(i64::from(row.account_id))
         {
             row.avatar_image = icon.clone();
             row.has_avatar = true;
@@ -300,7 +302,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         .filter(|account| account.mail_protocol == MailProtocol::Gmail)
         .filter_map(|account| i32::try_from(account.id).ok())
         .collect::<HashSet<_>>();
-    let rows = if filtering {
+    let mut rows = if filtering {
         make_filtered_sidebar_rows(mailboxes, labels, query, &gmail_account_ids)
     } else {
         make_sidebar_rows(
@@ -320,6 +322,53 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 .and_then(|local| i32::try_from(local.account_id).ok()),
         )
     };
+    let mut address_rows = state
+        .account_presentation
+        .visible_address_views()
+        .into_iter()
+        .filter(|view| !filtering || view.address.to_lowercase().contains(&query.to_lowercase()))
+        .map(|view| {
+            let mut entry = row(
+                SidebarRowKind::AddressInbox,
+                format!("address-inbox:{}", view.id),
+            );
+            let profile = view.profile_id.as_ref().and_then(|id| {
+                state
+                    .account_presentation
+                    .profiles
+                    .iter()
+                    .find(|p| &p.id == id)
+            });
+            let image = view
+                .profile_id
+                .as_ref()
+                .and_then(|id| state.account_presentation.profile_logos.get(id));
+
+            entry.mailbox = MailboxRow {
+                account_id: -1,
+                folder_id: -1,
+                scope: Scope::AddressInbox(view.id).to_string().into(),
+                label: view.address.clone().into(),
+                detail: state.account_presentation.address_detail(view).into(),
+                avatar: avatar_initials(&view.address).into(),
+                avatar_image: image.cloned().unwrap_or_default(),
+                has_avatar: image.is_some(),
+                count: if state.scope == Scope::AddressInbox(view.id) && state.inbox_count > 0 {
+                    state.inbox_count.to_string().into()
+                } else {
+                    Default::default()
+                },
+                color: profile
+                    .and_then(|p| parse_marker_color(&p.color))
+                    .unwrap_or_default(),
+                has_custom_color: profile.is_some(),
+                ..Default::default()
+            };
+            entry
+        })
+        .collect::<Vec<_>>();
+    address_rows.append(&mut rows);
+    let rows = address_rows;
     // Model notifications can synchronously inspect application state.
     let model = Rc::clone(&state.sidebar_rows);
     let animation = Rc::clone(&state.sidebar_animation);

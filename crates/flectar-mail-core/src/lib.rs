@@ -3150,7 +3150,9 @@ impl Core {
             .db
             .read(move |conn| {
                 let detail = repo::messages::detail(conn, message_id)?;
-                let cached_raw_path = if detail.sender_verification.is_verified() {
+                let cached_raw_path = if detail.sender_verification.is_verified()
+                    && repo::messages::delivery_recipients_known(conn, message_id)?
+                {
                     None
                 } else {
                     repo::messages::get_row(conn, message_id)?.and_then(|row| row.raw_path)
@@ -3159,22 +3161,31 @@ impl Core {
             })
             .await?;
         // Previously downloaded messages may already have raw headers on disk.
-        // Recover receiver-stamped sender authentication lazily when opened
-        // instead of forcing a mailbox-wide header re-download.
+        // Recover receiver-stamped authentication and actual delivery recipients
+        // lazily when opened, without a mailbox-wide header re-download.
         if let Some(raw_path) = cached_raw_path
             && let Ok(raw) =
                 crate::file_io::read_headers(raw_path, MAX_CACHED_HEADER_BYTES, "cached headers")
                     .await
             && let Ok(headers) = crate::mime::parse_header_block(&raw)
-            && headers.sender_verification.is_verified()
         {
             let verification = headers.sender_verification;
             self.db
                 .write(move |conn| {
-                    repo::messages::set_sender_verification(conn, message_id, verification)
+                    repo::messages::set_delivery_recipients(
+                        conn,
+                        message_id,
+                        &headers.delivery_recipients,
+                    )?;
+                    if verification.is_verified() {
+                        repo::messages::set_sender_verification(conn, message_id, verification)?;
+                    }
+                    Ok(())
                 })
                 .await?;
-            detail.sender_verification = verification;
+            if verification.is_verified() {
+                detail.sender_verification = verification;
+            }
         }
         if detail.body_state == "none" {
             self.request_body(detail.account_id, message_id).await;
@@ -7081,6 +7092,9 @@ impl Core {
         parsed.sender_domains = scope.sender_domains;
         parsed.or_account_ids = scope.or_account_ids;
         parsed.scope_match_any = scope.match_any;
+        parsed.address_inboxes = scope.address_inboxes;
+        parsed.address_groups = scope.address_groups;
+        parsed.base_account_ids = scope.base_account_ids;
         self.search_chronological_parsed(parsed, cursor, limit)
             .await
     }
@@ -8435,26 +8449,108 @@ impl Core {
             .await
     }
 
-    /// Edit the visible tab identity and explicit accounts, preserving all saved rules.
+    /// Refresh receiving suggestions from cached identities without provider access or sender writes.
+    pub async fn refresh_address_views(&self) -> Result<Settings> {
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let migrated = crate::brand_registry::migrate_default_project_tab(&mut settings);
+                let accounts = repo::accounts::list(conn)?;
+                let mut identities = Vec::new();
+                for account in &accounts {
+                    for identity in repo::sender_identities::list(conn, account.id)? {
+                        identities.push((account.email.clone(), identity.email));
+                    }
+                }
+                let accounts = accounts
+                    .into_iter()
+                    .map(|account| crate::brand_registry::RegistryAccount {
+                        id: account.id,
+                        email: account.email,
+                    })
+                    .collect::<Vec<_>>();
+                let catalog_changed = crate::brand_registry::merge_cached_address_views(
+                    &mut settings,
+                    &accounts,
+                    &identities,
+                )
+                .map_err(CoreError::Other)?;
+                if migrated || catalog_changed {
+                    repo::settings::set(conn, &settings)?;
+                }
+                Ok(settings)
+            })
+            .await
+    }
+
+    /// Add a receiving-only virtual inbox. This never grants outgoing sender permission.
+    pub async fn save_address_view(
+        &self,
+        address: String,
+        source_account_emails: Vec<String>,
+    ) -> Result<Settings> {
+        if source_account_emails.len() > 4096 {
+            return Err(CoreError::Other(
+                "too many source mailboxes for one receiving address".into(),
+            ));
+        }
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                let accounts = repo::accounts::list(conn)?
+                    .into_iter()
+                    .map(|account| crate::brand_registry::RegistryAccount {
+                        id: account.id,
+                        email: account.email,
+                    })
+                    .collect::<Vec<_>>();
+                crate::brand_registry::save_manual_address_view(
+                    &mut settings,
+                    &address,
+                    &source_account_emails,
+                    &accounts,
+                )
+                .map_err(CoreError::Other)?;
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    /// Edit tab identity and optional membership, preserving automatic selections and saved rules.
     pub async fn save_business_tab_details(
         &self,
         tab_id: Option<String>,
         name: String,
-        mut account_ids: Vec<i64>,
+        mut account_ids: Option<Vec<i64>>,
+        mut address_view_ids: Option<Vec<i64>>,
         icon: Option<String>,
+        show_name: bool,
     ) -> Result<Settings> {
         let name = normalize_mail_profile_name(&name)?;
         let icon = normalize_identity_icon(icon, "tab-icons/")?;
-        account_ids.sort_unstable();
-        account_ids.dedup();
+        if let Some(ids) = &mut account_ids {
+            ids.sort_unstable();
+            ids.dedup();
+        }
+        if let Some(ids) = &mut address_view_ids {
+            ids.sort_unstable();
+            ids.dedup();
+        }
         self.db
             .write(move |conn| {
-                for id in &account_ids {
+                for id in account_ids.iter().flatten() {
                     if repo::accounts::get(conn, *id)?.is_none() {
                         return Err(CoreError::NotFound(format!("account {id}")));
                     }
                 }
                 let mut settings = repo::settings::get(conn)?;
+                crate::brand_registry::migrate_default_project_tab(&mut settings);
+                for id in address_view_ids.iter().flatten() {
+                    if !settings.address_views.iter().any(|view| view.id == *id) {
+                        return Err(CoreError::NotFound(format!("receiving address {id}")));
+                    }
+                }
                 let requested = tab_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
                 if settings.business_tabs.iter().any(|tab| {
                     Some(tab.id.as_str()) != requested && tab.name.eq_ignore_ascii_case(&name)
@@ -8471,7 +8567,9 @@ impl Core {
                         .ok_or_else(|| CoreError::NotFound(format!("business tab {id}")))?;
                     tab.name = name;
                     tab.icon = icon;
-                    tab.account_ids = Some(account_ids);
+                    tab.account_ids = account_ids;
+                    tab.address_view_ids = address_view_ids;
+                    tab.show_name = show_name;
                 } else {
                     if settings.business_tabs.len() >= 24 {
                         return Err(CoreError::Other(
@@ -8488,8 +8586,10 @@ impl Core {
                     settings.business_tabs.push(crate::models::BusinessTab {
                         id,
                         name,
+                        show_name,
+                        address_view_ids,
                         icon,
-                        account_ids: Some(account_ids),
+                        account_ids,
                         profile_ids: Vec::new(),
                         recipient_patterns: Vec::new(),
                         scope: "profiles".into(),
@@ -8517,6 +8617,7 @@ impl Core {
         self.db
             .write(move |conn| {
                 let mut settings = repo::settings::get(conn)?;
+                crate::brand_registry::migrate_default_project_tab(&mut settings);
                 let requested = tab_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
                 if settings.business_tabs.iter().any(|tab| {
                     Some(tab.id.as_str()) != requested && tab.name.eq_ignore_ascii_case(&name)
@@ -8565,6 +8666,8 @@ impl Core {
                     settings.business_tabs.push(crate::models::BusinessTab {
                         id: unique,
                         name,
+                        show_name: true,
+                        address_view_ids: None,
                         icon: None,
                         account_ids: None,
                         profile_ids,

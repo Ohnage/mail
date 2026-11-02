@@ -1582,6 +1582,41 @@ impl Default for CustomTheme {
 ///
 /// Profiles organize account provenance in Flectar Mail only. They never map
 /// to a provider object and therefore cannot mutate remote mailboxes.
+/// A receiving-only virtual inbox. This does not authorize an outgoing From.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressView {
+    pub id: i64,
+    pub address: String,
+    /// Empty searches all accounts until a source is known; manual empty is intentionally unrestricted.
+    #[serde(default)]
+    pub source_account_emails: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub source: AddressViewSource,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AddressViewSource {
+    #[default]
+    Registry,
+    Manual,
+    Provider,
+}
+
+/// Registry classification retained for newly discovered receiving addresses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddressRule {
+    pub profile_id: String,
+    #[serde(default)]
+    pub addresses: Vec<String>,
+    #[serde(default)]
+    pub domains: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MailProfile {
@@ -1610,19 +1645,25 @@ pub struct MailProfile {
 /// set, otherwise the profiles.
 ///
 /// `recipient_patterns` are address wildcards (`*` and `?`) matched against
-/// To, Cc, Bcc, and the mailbox address (Delivered-To). Sender display names
+/// To, Cc, Bcc, delivery headers, and the account mailbox fallback. Sender display names
 /// match only when the sender's domain is in `sender_domains`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BusinessTab {
     pub id: String,
     pub name: String,
+    /// Keep a readable name by default; false presents the independent icon only.
+    #[serde(default = "default_true")]
+    pub show_name: bool,
     /// Independent normalized tab icon, relative to the application data folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
     /// None inherits profile membership; Some(empty) deliberately selects no accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ids: Option<Vec<i64>>,
+    /// None inherits profile-derived addresses; Some(empty) explicitly selects none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address_view_ids: Option<Vec<i64>>,
     #[serde(default)]
     pub profile_ids: Vec<String>,
     #[serde(default)]
@@ -2010,6 +2051,14 @@ pub struct Settings {
     /// to at most one profile; provider state is never affected.
     #[serde(default)]
     pub mail_profiles: Vec<MailProfile>,
+    /// Receiving-only address inventory; independent of account and sender authorization.
+    #[serde(default)]
+    pub address_views: Vec<AddressView>,
+    #[serde(default)]
+    pub address_rules: Vec<AddressRule>,
+    /// One-time migration version for the receiving catalog and default tab labels.
+    #[serde(default)]
+    pub address_catalog_version: u32,
     /// The profile whose accounts the mail view shows. `None` shows every
     /// account. Never names a deleted or empty profile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2216,6 +2265,9 @@ impl Default for Settings {
             account_icons: std::collections::HashMap::new(),
             account_short_names: std::collections::HashMap::new(),
             mail_profiles: Vec::new(),
+            address_views: Vec::new(),
+            address_rules: Vec::new(),
+            address_catalog_version: 0,
             active_mail_profile: None,
             show_message_preview: false,
             business_tabs: Vec::new(),

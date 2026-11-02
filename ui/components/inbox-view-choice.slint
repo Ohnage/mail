@@ -1,0 +1,65 @@
+import { InboxViewChoiceRow, InboxViewKind } from "../models.slint";
+import { AppTheme } from "../design-system.slint";
+import { TypeScale } from "../typography.slint";
+import { Avatar } from "avatar.slint";
+import { FocusVisibleScope } from "focus-visible-scope.slint";
+
+export component InboxViewChoice inherits FocusVisibleScope {
+    in property <InboxViewChoiceRow> choice;
+    callback toggled();
+    height: max(58px, choice-name.preferred-height + choice-detail.preferred-height + 18px);
+    focus-on-click: true;
+    focus-on-tab-navigation: true;
+    accessible-role: checkbox;
+    accessible-label: root.choice.name;
+    accessible-description: (root.choice.kind == InboxViewKind.alias ? @tr("Address inbox") : @tr("Mailbox (all mail)")) + ", " + root.choice.detail;
+    accessible-checked: root.choice.checked;
+    accessible-action-default => { root.toggled(); }
+    key-pressed(event) => {
+        if event.text == Key.Return || event.text == Key.Space { root.toggled(); return accept; }
+        reject
+    }
+    Rectangle {
+        border-radius: 8px;
+        border-width: root.focus-visible ? 2px : 0px;
+        border-color: AppTheme.accent;
+        background: hit.has-hover ? AppTheme.control-bg : transparent;
+    }
+    Rectangle {
+        x: 12px; y: (parent.height - self.height) / 2;
+        width: 18px; height: 18px; border-radius: 4px;
+        border-width: root.choice.checked ? 0px : 1px;
+        border-color: AppTheme.secondary;
+        background: root.choice.checked ? AppTheme.accent : AppTheme.input-bg;
+        if root.choice.checked : Image {
+            width: 12px; height: 12px;
+            source: @image-url("../icons/lucide/outline/check.svg");
+            colorize: white; accessible-role: none;
+        }
+    }
+    Avatar {
+        x: 42px; y: (parent.height - self.height) / 2;
+        size: 30px; source: root.choice.avatar; has-source: root.choice.has_avatar;
+        fallback: root.choice.initials;
+        background-color: AppTheme.avatar-bg; foreground-color: AppTheme.body;
+    }
+    choice-name := Text {
+        x: 84px; y: 8px; width: max(0px, parent.width - self.x - 12px);
+        height: max(19px, self.preferred-height);
+        text: root.choice.name; color: AppTheme.heading;
+        font-size: TypeScale.body; font-weight: 600; overflow: elide;
+        accessible-role: none;
+    }
+    choice-detail := Text {
+        x: 84px; y: choice-name.y + choice-name.height;
+        width: max(0px, parent.width - self.x - 12px);
+        height: max(18px, self.preferred-height);
+        text: (root.choice.kind == InboxViewKind.alias ? @tr("Address inbox") : @tr("Mailbox (all mail)")) + " · " + root.choice.detail;
+        color: AppTheme.secondary; font-size: TypeScale.caption; overflow: elide;
+        accessible-role: none;
+    }
+    hit := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.focus(); root.pointer-activated(); root.toggled(); }
+    }
+}

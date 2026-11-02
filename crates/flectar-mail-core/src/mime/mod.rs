@@ -19,6 +19,8 @@ pub struct ParsedHeaders {
     pub to: Vec<Address>,
     pub cc: Vec<Address>,
     pub bcc: Vec<Address>,
+    /// Addresses explicitly recorded by receiver delivery headers, not the account login.
+    pub delivery_recipients: Vec<Address>,
     pub date_ms: Option<i64>,
     pub references: Vec<String>,
     pub is_automated: bool,
@@ -1862,6 +1864,38 @@ pub fn is_one_click_post(raw: &str) -> bool {
         .eq_ignore_ascii_case("List-Unsubscribe=One-Click")
 }
 
+/// Receiver-provided delivery hints, retained separately from visible recipients.
+/// These fields help classify mail; they are not authentication evidence.
+fn collect_delivery_recipients(msg: &mail_parser::Message) -> Vec<Address> {
+    let mut seen = std::collections::HashSet::new();
+    let mut recipients = Vec::new();
+    for name in [
+        "Delivered-To",
+        "X-Original-To",
+        "Envelope-To",
+        "X-Envelope-To",
+    ] {
+        for header in msg.header_as(name, mail_parser::HeaderForm::Addresses) {
+            for mut address in collect_addrs(header.as_address()) {
+                let email = address.email.trim().to_ascii_lowercase();
+                let valid = email.split_once('@').is_some_and(|(local, domain)| {
+                    !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+                }) && email.len() <= 320
+                    && !email.chars().any(|c| c.is_whitespace() || c.is_control());
+                if valid && seen.insert(email.clone()) {
+                    address.email = email;
+                    address.name = None;
+                    recipients.push(address);
+                    if recipients.len() == 64 {
+                        return recipients;
+                    }
+                }
+            }
+        }
+    }
+    recipients
+}
+
 fn parse_headers(msg: &mail_parser::Message) -> ParsedHeaders {
     let mut refs: Vec<String> = Vec::new();
     if let Some(irt) = msg.in_reply_to().as_text_list() {
@@ -1926,6 +1960,7 @@ fn parse_headers(msg: &mail_parser::Message) -> ParsedHeaders {
         to: collect_addrs(msg.to()),
         cc: collect_addrs(msg.cc()),
         bcc: collect_addrs(msg.bcc()),
+        delivery_recipients: collect_delivery_recipients(msg),
         date_ms: msg.date().map(|d| d.to_timestamp() * 1000),
         references: refs,
         is_automated,
@@ -3025,5 +3060,39 @@ mod tests {
         let (rewritten, images) = extract_data_uri_images(html);
         assert!(images.is_empty());
         assert_eq!(rewritten, html);
+    }
+}
+
+#[cfg(test)]
+mod delivery_recipient_tests {
+    use super::*;
+
+    #[test]
+    fn delivery_headers_collect_repeated_folded_addresses_without_sender_hints() {
+        let parsed = parse_header_block(b"To: visible@example.test\r\nCc: cc@example.test\r\nBcc: bcc@example.test\r\nDelivered-To: Hidden <Hidden@Example.test>\r\nDelivered-To: second@example.test\r\nx-original-to: hidden@example.test,\r\n third@example.test\r\nEnvelope-To: fourth@example.test\r\nX-Envelope-To: fifth@example.test\r\nReturn-Path: sender@example.test\r\nReply-To: reply@example.test\r\nX-Random-To: unrelated@example.test\r\n\r\n").unwrap();
+        let emails: Vec<_> = parsed
+            .delivery_recipients
+            .iter()
+            .map(|a| a.email.as_str())
+            .collect();
+        assert_eq!(
+            emails,
+            [
+                "hidden@example.test",
+                "second@example.test",
+                "third@example.test",
+                "fourth@example.test",
+                "fifth@example.test"
+            ]
+        );
+        assert_eq!(parsed.to[0].email, "visible@example.test");
+        assert_eq!(parsed.cc[0].email, "cc@example.test");
+        assert_eq!(parsed.bcc[0].email, "bcc@example.test");
+    }
+
+    #[test]
+    fn missing_delivery_headers_do_not_invent_mailbox_or_alias_recipients() {
+        let parsed = parse_header_block(b"From: sender@example.test\r\nTo: undisclosed-recipients:;\r\nReturn-Path: alias@example.test\r\n\r\n").unwrap();
+        assert!(parsed.delivery_recipients.is_empty());
     }
 }

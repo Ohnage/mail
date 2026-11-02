@@ -582,9 +582,16 @@ pub(crate) async fn load_startup_snapshot(
         settings = Some(updated);
     }
     if let Some(settings) = settings.as_ref() {
-        let presentation = AccountPresentationSettings::from_settings(settings);
+        let address_accounts = core.load_accounts().await.unwrap_or_default();
+        let mut presentation = AccountPresentationSettings::from_settings(settings);
+        presentation.bind_accounts(&address_accounts);
         let (sidebar, query, scope) = presentation.view_scope();
-        let _ = core.set_view_scope(sidebar, query, scope, presentation.active_business().is_none());
+        let _ = core.set_view_scope(
+            sidebar,
+            query,
+            scope,
+            presentation.active_business().is_none(),
+        );
     }
     let (mail, configs, local_mail) = tokio::join!(
         // Counts walk every mailbox and can dominate startup on a large local
@@ -595,8 +602,7 @@ pub(crate) async fn load_startup_snapshot(
         core.load_local_mail(),
     );
 
-    let (accounts, scope, page) =
-        mail.unwrap_or_else(|_| (Vec::new(), Scope::UNIFIED_INBOX, None));
+    let (accounts, scope, page) = mail.unwrap_or_else(|_| (Vec::new(), Scope::UNIFIED_INBOX, None));
     metrics.emit(
         "startup_queries_loaded",
         serde_json::json!({
@@ -1101,7 +1107,9 @@ mod warm_start_tests {
         }
 
         // A unified selection that would disappear moves to the survivor.
-        state.borrow_mut().set_scope(Scope::Unified(crate::StandardMailbox::Sent));
+        state
+            .borrow_mut()
+            .set_scope(Scope::Unified(crate::StandardMailbox::Sent));
         assert!(state.borrow_mut().set_connected_accounts(vec![account()]));
         assert_eq!(
             state.borrow().scope,

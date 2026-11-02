@@ -44,7 +44,9 @@ impl StandardMailbox {
     }
 
     pub(crate) fn from_label(label: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|mailbox| mailbox.label() == label)
+        Self::ALL
+            .into_iter()
+            .find(|mailbox| mailbox.label() == label)
     }
 }
 
@@ -84,13 +86,18 @@ impl LabelKind {
 /// A selectable mail view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Scope {
+    /// A recipient-address inbox over real connected mailboxes.
+    AddressInbox(i64),
     /// One standard mailbox across every account.
     Unified(StandardMailbox),
     /// Gmail-style split inbox, primary half.
     Important,
     /// Gmail-style split inbox, remaining half.
     Other,
-    Label { kind: LabelKind, id: i64 },
+    Label {
+        kind: LabelKind,
+        id: i64,
+    },
     /// A provider folder outside the standard mailboxes.
     Folder(i64),
     /// One standard mailbox of one account, whether or not the provider
@@ -130,6 +137,7 @@ impl Scope {
                 ..
             } => Self::UNIFIED_INBOX,
             Self::Unified(_) | Self::Important | Self::Other | Self::Label { .. } => self,
+            Self::AddressInbox(_) => self,
         }
     }
 
@@ -156,6 +164,7 @@ const ACCOUNT_PREFIX: &str = "Account:";
 impl fmt::Display for Scope {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AddressInbox(id) => write!(formatter, "AddressInbox:{id}"),
             Self::Unified(mailbox) => write!(formatter, "{UNIFIED_PREFIX}{}", mailbox.label()),
             Self::Important => formatter.write_str("Important"),
             Self::Other => formatter.write_str("Other"),
@@ -164,7 +173,11 @@ impl fmt::Display for Scope {
             Self::Account {
                 account_id,
                 mailbox,
-            } => write!(formatter, "{ACCOUNT_PREFIX}{account_id}:{}", mailbox.label()),
+            } => write!(
+                formatter,
+                "{ACCOUNT_PREFIX}{account_id}:{}",
+                mailbox.label()
+            ),
         }
     }
 }
@@ -186,6 +199,14 @@ impl FromStr for Scope {
     fn from_str(key: &str) -> Result<Self, Self::Err> {
         let error = || ParseScopeError(key.to_owned());
         let id = |value: &str| value.parse::<i64>().map_err(|_| error());
+        if let Some(address_id) = key.strip_prefix("AddressInbox:") {
+            let address_id = id(address_id)?;
+            return if address_id > 0 {
+                Ok(Self::AddressInbox(address_id))
+            } else {
+                Err(error())
+            };
+        }
         if let Some(label) = key.strip_prefix(UNIFIED_PREFIX) {
             return StandardMailbox::from_label(label)
                 .map(Self::Unified)

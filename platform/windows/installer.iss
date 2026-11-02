@@ -28,11 +28,15 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
 [Files]
 Source: "..\..\target\package\windows\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{userprograms}\Flectar Mail"; Filename: "{app}\flectar-mail.exe"
+Name: "{userprograms}\Flectar Mail"; Filename: "{app}\flectar-mail.exe"; IconFilename: "{app}\flectar-mail.exe"; IconIndex: 0
+Name: "{userdesktop}\Flectar Mail"; Filename: "{app}\flectar-mail.exe"; IconFilename: "{app}\flectar-mail.exe"; IconIndex: 0; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\flectar-mail.exe"; Description: "Open Flectar Mail"; Flags: nowait postinstall skipifsilent

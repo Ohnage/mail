@@ -34,10 +34,11 @@ on:
       - "Cargo.toml"
       - "build.rs"
       - "packaging/**"
+      - "platform/windows/**"
       - "resources/**"
       - "scripts/**"
-  # Pushes to main build the Windows package only. Version tags still build
-  # every release channel; the publish job stays limited to those tags.
+  # This fork builds Windows only, including PRs and manual/tag events.
+  # Upstream repositories retain their original release channels.
   push:
     branches:
       - main
@@ -63,11 +64,11 @@ jobs:
 
   metadata:
     name: Release preflight
-    runs-on: ubuntu-22.04
+    runs-on: ${{ github.repository == 'Ohnage/mail' && 'windows-2025' || 'ubuntu-22.04' }}
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      native_version: ${{ steps.version.outputs.native_version }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
+      version: ${{ steps.windows_version.outputs.version || steps.version.outputs.version }}
+      native_version: ${{ steps.windows_version.outputs.native_version || steps.version.outputs.native_version }}
+      prerelease: ${{ steps.windows_version.outputs.prerelease || steps.version.outputs.prerelease }}
       source_date_epoch: ${{ steps.source.outputs.source_date_epoch }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -75,8 +76,9 @@ jobs:
           fetch-depth: 0
       - name: Verify fork includes current upstream
         if: github.repository == 'Ohnage/mail' && github.ref == 'refs/heads/main'
-        run: python3 scripts/check-fork-upstream.py
+        run: python scripts/check-fork-upstream.py
       - name: Use the source commit timestamp
+        shell: bash
         id: source
         run: |
           epoch="$(git show -s --format=%ct HEAD)"
@@ -86,10 +88,37 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install preflight tools
+        if: github.repository != 'Ohnage/mail'
         run: |
           sudo apt-get update
           sudo apt-get install -y appstream desktop-file-utils dpkg-dev
+      - name: Check Windows release metadata
+        if: github.repository == 'Ohnage/mail'
+        id: windows_version
+        shell: bash
+        env:
+          IS_TAG_PUSH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import runpy
+          import tomllib
+
+          version = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+          packages = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))["package"]
+          if not any(item["name"] == "flectar-mail" and item["version"] == version for item in packages):
+              raise SystemExit("Cargo.lock does not match the Windows package version")
+          metadata = runpy.run_path("scripts/release-metadata.py")["metadata"]
+          tag = os.environ["GITHUB_REF_NAME"] if os.environ["IS_TAG_PUSH"] == "true" else None
+          values = metadata(version, tag)
+          output = "".join(f"{key}={value}\n" for key, value in values.items())
+          print(output, end="")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+              stream.write(output)
+          PY
       - name: Check release metadata and packaging
+        if: github.repository != 'Ohnage/mail'
         id: version
         env:
           IS_TAG_PUSH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
@@ -102,7 +131,9 @@ jobs:
 
   linux:
     needs: metadata
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
+    if: >-
+      github.repository == 'flectar/mail' &&
+      ((github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux)
     name: Linux packages (x64)
     runs-on: ubuntu-22.04
     env:
@@ -188,7 +219,9 @@ jobs:
 
   rpm:
     needs: metadata
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
+    if: >-
+      github.repository == 'flectar/mail' &&
+      ((github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux)
     name: Fedora RPM build (x64, Fedora 43 baseline)
     runs-on: ubuntu-24.04
     # Build against the oldest supported Fedora; test this exact artifact below.
@@ -249,6 +282,7 @@ jobs:
 
   rpm-test:
     needs: rpm
+    if: github.repository == 'flectar/mail'
     name: RPM runtime (Fedora ${{ matrix.fedora }}, x64)
     runs-on: ubuntu-24.04
     strategy:
@@ -283,7 +317,9 @@ jobs:
 
   flatpak:
     needs: metadata
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux
+    if: >-
+      github.repository == 'flectar/mail' &&
+      ((github.event_name == 'push' && github.ref_type == 'tag') || github.event_name == 'pull_request' || inputs.include_linux)
     name: Flatpak preview bundle (x64)
     runs-on: ubuntu-24.04
     env:
@@ -335,7 +371,7 @@ jobs:
 
   windows:
     needs: metadata
-    if: github.event_name == 'push' || inputs.include_windows
+    if: github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')
     name: Windows installer and portable executable (x64)
     runs-on: windows-2025
     steps:
@@ -419,13 +455,32 @@ jobs:
         run: |
           $destination = Join-Path $env:RUNNER_TEMP 'Flectar Mail install test'
           $installer = (Resolve-Path target/flectar-mail-windows-x64-setup.exe).Path
-          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=`"$destination`"")
+          $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=desktopicon', "/DIR=`"$destination`"")
           $process = Start-Process $installer -ArgumentList $arguments -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Installation failed: $($process.ExitCode)" }
           if (-not (Test-Path "$destination/flectar-mail.exe")) { throw 'Installed executable is missing' }
+          $expectedExe = Join-Path $destination 'flectar-mail.exe'
+          $shortcutPaths = @(
+            (Join-Path ([Environment]::GetFolderPath('Programs')) 'Flectar Mail.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'Flectar Mail.lnk')
+          )
+          $shell = New-Object -ComObject WScript.Shell
+          foreach ($shortcutPath in $shortcutPaths) {
+            if (-not (Test-Path -LiteralPath $shortcutPath)) { throw "Shortcut is missing: $shortcutPath" }
+            $shortcut = $shell.CreateShortcut($shortcutPath)
+            if ($shortcut.TargetPath -ne $expectedExe) { throw "Shortcut target is incorrect: $shortcutPath" }
+            $separator = $shortcut.IconLocation.LastIndexOf(',')
+            if ($separator -lt 0) { throw "Shortcut icon has no explicit index: $shortcutPath" }
+            $iconPath = $shortcut.IconLocation.Substring(0, $separator).Trim('"')
+            $iconIndex = $shortcut.IconLocation.Substring($separator + 1).Trim()
+            if ($iconPath -ne $expectedExe -or $iconIndex -ne '0') { throw "Shortcut does not use the application icon: $shortcutPath" }
+          }
           $process = Start-Process "$destination/unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Uninstall failed: $($process.ExitCode)" }
           if (Test-Path "$destination/flectar-mail.exe") { throw 'Uninstall left the executable behind' }
+          foreach ($shortcutPath in $shortcutPaths) {
+            if (Test-Path -LiteralPath $shortcutPath) { throw "Uninstall left a shortcut behind: $shortcutPath" }
+          }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -437,7 +492,9 @@ jobs:
 
   macos:
     needs: metadata
-    if: (github.event_name == 'push' && github.ref_type == 'tag') || inputs.include_macos
+    if: >-
+      github.repository == 'flectar/mail' &&
+      ((github.event_name == 'push' && github.ref_type == 'tag') || inputs.include_macos)
     name: macOS application (${{ matrix.name }})
     strategy:
       fail-fast: false
@@ -496,8 +553,8 @@ jobs:
   android:
     needs: metadata
     if: >-
-      (github.event_name == 'push' && github.ref_type == 'tag') ||
-      (github.event_name == 'workflow_dispatch' && inputs.include_android)
+      github.repository == 'flectar/mail' &&
+      ((github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && inputs.include_android))
     name: Android signed APK (arm64)
     runs-on: ubuntu-24.04
     environment: android-release
@@ -602,7 +659,9 @@ jobs:
 
   ios:
     needs: metadata
-    if: github.event_name == 'workflow_dispatch' && inputs.include_ios
+    if: >-
+      github.repository == 'flectar/mail' &&
+      (github.event_name == 'workflow_dispatch' && inputs.include_ios)
     name: iOS unsigned archive (arm64)
     runs-on: macos-15
     steps:
@@ -653,6 +712,7 @@ jobs:
     name: Publish GitHub Release
     # Every published channel must include an APK with the shared identity.
     if: >-
+      github.repository == 'flectar/mail' &&
       !cancelled() && github.event_name == 'push' && github.ref_type == 'tag' &&
       needs.metadata.result == 'success' && needs.quality.result == 'success' &&
       needs.linux.result == 'success' && needs.rpm.result == 'success' &&

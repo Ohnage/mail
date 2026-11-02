@@ -78,12 +78,15 @@ fn tab_membership_distinguishes_legacy_inheritance_from_explicit_empty() {
     .unwrap();
     assert_eq!(legacy.account_ids, None);
     assert_eq!(legacy.icon, None);
+    assert!(legacy.show_name);
+    assert_eq!(legacy.address_view_ids, None);
     let mut settings = Settings {
         business_tabs: vec![
             legacy.clone(),
             BusinessTab {
                 id: "empty".into(),
                 account_ids: Some(Vec::new()),
+                address_view_ids: Some(Vec::new()),
                 ..legacy
             },
         ],
@@ -96,8 +99,224 @@ fn tab_membership_distinguishes_legacy_inheritance_from_explicit_empty() {
         serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
     assert_eq!(restored.business_tabs[0].account_ids, None);
     assert_eq!(restored.business_tabs[1].account_ids, Some(Vec::new()));
+    assert_eq!(restored.business_tabs[0].address_view_ids, None);
+    assert_eq!(restored.business_tabs[1].address_view_ids, Some(Vec::new()));
     assert_eq!(restored.account_icons, settings.account_icons);
     assert!(!restored.business_tabs_customized);
+}
+
+#[tokio::test]
+async fn presentation_only_tab_save_keeps_automatic_membership_for_future_business_aliases() {
+    use flectar_mail_core::models::AddressRule;
+    let (_temp, core) = seeded_core().await;
+    let mut settings = core.get_settings().await.unwrap();
+    settings
+        .mail_profiles
+        .push(flectar_mail_core::models::MailProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            color: "#123456".into(),
+            account_ids: vec![1],
+            logo: None,
+        });
+    settings.address_rules = vec![AddressRule {
+        profile_id: "work".into(),
+        addresses: vec![],
+        domains: vec!["work.example".into()],
+    }];
+    settings.business_tabs = serde_json::from_value(
+        serde_json::json!([{"id":"work","name":"Work","scope":"profiles","profileIds":["work"]}]),
+    )
+    .unwrap();
+    core.set_settings(settings).await.unwrap();
+    let updated = core
+        .save_business_tab_details(
+            Some("work".into()),
+            "Renamed".into(),
+            None,
+            None,
+            Some("tab-icons/presentation.png".into()),
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated.business_tabs[0].account_ids, None);
+    assert_eq!(updated.business_tabs[0].address_view_ids, None);
+    assert_eq!(updated.business_tabs[0].profile_ids, vec!["work"]);
+    assert!(!updated.business_tabs[0].show_name);
+    assert_eq!(
+        flectar_mail_core::brand_registry::classify_receiving_address(
+            &updated.address_rules,
+            "not-yet-in-catalog@work.example"
+        )
+        .as_deref(),
+        Some("work")
+    );
+    assert!(
+        updated
+            .address_views
+            .iter()
+            .all(|view| view.address != "not-yet-in-catalog@work.example")
+    );
+    let later = core
+        .save_address_view("later@work.example".into(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(
+        later
+            .address_views
+            .iter()
+            .find(|view| view.address == "later@work.example")
+            .unwrap()
+            .profile_id
+            .as_deref(),
+        Some("work")
+    );
+    assert_eq!(later.business_tabs[0].account_ids, None);
+    assert_eq!(later.business_tabs[0].address_view_ids, None);
+    let explicit = core
+        .save_business_tab_details(
+            Some("work".into()),
+            "Renamed".into(),
+            Some(vec![]),
+            Some(vec![]),
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(explicit.business_tabs[0].account_ids, Some(vec![]));
+    assert_eq!(explicit.business_tabs[0].address_view_ids, Some(vec![]));
+}
+
+#[tokio::test]
+async fn receiving_catalog_refresh_reads_pending_sender_rows_without_authorizing_or_ensuring_senders()
+ {
+    let (_temp, core) = seeded_core().await;
+    core.db.write(|conn| {
+        conn.execute("INSERT INTO sender_identities(account_id,email,verification_status,last_synced_at) VALUES (1,'pending@alias.example','pending',0)", [])?;
+        Ok(())
+    }).await.unwrap();
+    let before = core
+        .db
+        .read(|conn| {
+            Ok(
+                conn.query_row("SELECT COUNT(*) FROM sender_identities", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            )
+        })
+        .await
+        .unwrap();
+    let settings = core.refresh_address_views().await.unwrap();
+    let alias = settings
+        .address_views
+        .iter()
+        .find(|view| view.address == "pending@alias.example")
+        .unwrap();
+    assert_eq!(alias.source_account_emails, vec!["alice@example.org"]);
+    assert_eq!(
+        core.db
+            .read(|conn| Ok(conn.query_row(
+                "SELECT COUNT(*) FROM sender_identities",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?))
+            .await
+            .unwrap(),
+        before
+    );
+    assert_eq!(core.db.read(|conn| Ok(conn.query_row("SELECT verification_status FROM sender_identities WHERE email='pending@alias.example'", [], |row| row.get::<_, String>(0))?)).await.unwrap(), "pending");
+    assert_eq!(
+        core.refresh_address_views().await.unwrap().address_views,
+        settings.address_views
+    );
+}
+
+#[tokio::test]
+async fn receiving_only_manual_addresses_and_tab_selection_persist_without_account_or_sender_changes()
+ {
+    let (_temp, core) = seeded_core().await;
+    let accounts = core.list_accounts().await.unwrap();
+    let sender_count = core
+        .db
+        .read(|conn| {
+            Ok(
+                conn.query_row("SELECT COUNT(*) FROM sender_identities", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            )
+        })
+        .await
+        .unwrap();
+    let settings = core
+        .save_address_view(
+            " Tim@memorial.example ".into(),
+            vec!["ALICE@example.org".into(), "alice@example.org".into()],
+        )
+        .await
+        .unwrap();
+    let view = &settings.address_views[0];
+    assert_eq!(view.address, "tim@memorial.example");
+    assert_eq!(view.source_account_emails, vec!["alice@example.org"]);
+    let id = view.id;
+    let settings = core
+        .save_business_tab_details(
+            None,
+            "Memorial".into(),
+            Some(vec![]),
+            Some(vec![id, id]),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(settings.business_tabs[0].address_view_ids, Some(vec![id]));
+    assert!(!settings.business_tabs[0].show_name);
+    assert!(
+        core.save_business_tab_details(
+            None,
+            "Bad ID".into(),
+            Some(vec![]),
+            Some(vec![i64::MAX]),
+            None,
+            true
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        core.save_address_view("*@memorial.example".into(), vec![])
+            .await
+            .is_err()
+    );
+    assert!(
+        core.save_address_view("other@memorial.example".into(), vec!["bad source".into()])
+            .await
+            .is_err()
+    );
+    let reloaded = core.get_settings().await.unwrap();
+    assert_eq!(reloaded.business_tabs, settings.business_tabs);
+    assert_eq!(core.list_accounts().await.unwrap().len(), accounts.len());
+    assert_eq!(
+        core.db
+            .read(|conn| Ok(conn.query_row(
+                "SELECT COUNT(*) FROM sender_identities",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?))
+            .await
+            .unwrap(),
+        sender_count
+    );
+    assert_eq!(
+        core.save_address_view("TIM@MEMORIAL.EXAMPLE".into(), vec![])
+            .await
+            .unwrap()
+            .address_views[0]
+            .id,
+        id
+    );
 }
 
 #[tokio::test]
@@ -116,14 +335,23 @@ async fn tab_details_are_many_to_many_and_preserve_profile_assignments() {
         .save_business_tab_details(
             None,
             "First".into(),
-            vec![2, 1, 2],
+            Some(vec![2, 1, 2]),
+            Some(Vec::new()),
             Some("tab-icons/tab-first.png".into()),
+            true,
         )
         .await
         .unwrap();
     let first = settings.business_tabs[0].id.clone();
     let settings = core
-        .save_business_tab_details(None, "Second".into(), vec![1], None)
+        .save_business_tab_details(
+            None,
+            "Second".into(),
+            Some(vec![1]),
+            Some(Vec::new()),
+            None,
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(settings.business_tabs[0].account_ids, Some(vec![1, 2]));
@@ -132,7 +360,14 @@ async fn tab_details_are_many_to_many_and_preserve_profile_assignments() {
     assert!(settings.business_tabs_customized);
     assert!(settings.business_tab_icons_initialized);
     let settings = core
-        .save_business_tab_details(Some(first), "Empty".into(), vec![], None)
+        .save_business_tab_details(
+            Some(first),
+            "Empty".into(),
+            Some(vec![]),
+            Some(Vec::new()),
+            None,
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(settings.business_tabs[0].account_ids, Some(vec![]));
@@ -156,8 +391,10 @@ async fn editing_rule_tabs_preserves_tim_and_forty7_predicates() {
             .save_business_tab_details(
                 Some(original.id.clone()),
                 format!("{} renamed", original.name),
-                vec![2],
+                Some(vec![2]),
+                Some(Vec::new()),
                 Some("tab-icons/tab-custom.png".into()),
+                true,
             )
             .await
             .unwrap();
@@ -200,9 +437,16 @@ async fn account_and_tab_icon_validation_is_atomic() {
     ] {
         assert!(core.set_account_icon(1, Some(path.into())).await.is_err());
         assert!(
-            core.save_business_tab_details(None, "Invalid".into(), vec![1], Some(path.into()))
-                .await
-                .is_err()
+            core.save_business_tab_details(
+                None,
+                "Invalid".into(),
+                Some(vec![1]),
+                Some(Vec::new()),
+                Some(path.into()),
+                true
+            )
+            .await
+            .is_err()
         );
     }
     assert!(
@@ -214,27 +458,50 @@ async fn account_and_tab_icon_validation_is_atomic() {
         core.save_business_tab_details(
             None,
             "Invalid".into(),
-            vec![1],
-            Some("account-icons/wrong.png".into())
+            Some(vec![1]),
+            Some(Vec::new()),
+            Some("account-icons/wrong.png".into()),
+            true
         )
         .await
         .is_err()
     );
     assert!(core.set_account_icon(999, None).await.is_err());
     assert!(
-        core.save_business_tab_details(None, "Invalid".into(), vec![999], None)
-            .await
-            .is_err()
+        core.save_business_tab_details(
+            None,
+            "Invalid".into(),
+            Some(vec![999]),
+            Some(Vec::new()),
+            None,
+            true
+        )
+        .await
+        .is_err()
     );
     assert!(
-        core.save_business_tab_details(None, " ".into(), vec![], None)
-            .await
-            .is_err()
+        core.save_business_tab_details(
+            None,
+            " ".into(),
+            Some(vec![]),
+            Some(Vec::new()),
+            None,
+            true
+        )
+        .await
+        .is_err()
     );
     assert!(
-        core.save_business_tab_details(Some("missing".into()), "Missing".into(), vec![], None)
-            .await
-            .is_err()
+        core.save_business_tab_details(
+            Some("missing".into()),
+            "Missing".into(),
+            Some(vec![]),
+            Some(Vec::new()),
+            None,
+            true
+        )
+        .await
+        .is_err()
     );
     assert_eq!(
         core.get_settings().await.unwrap().account_icons,

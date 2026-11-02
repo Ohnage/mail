@@ -113,6 +113,11 @@ fn drops_resolve_by_scope_not_by_mailbox_name() {
     assert!(drop(account(StandardMailbox::Sent), 1, 13).is_err());
     assert!(drop(Scope::Unified(StandardMailbox::Sent), -1, -1).is_err());
     assert!(drop(account(StandardMailbox::Inbox), 1, 10).is_err());
+    assert!(
+        drop(Scope::AddressInbox(859), -1, -1)
+            .unwrap_err()
+            .contains("filtered views")
+    );
     assert!(drop(Scope::Folder(12), 2, 12).is_err());
     assert!(
         drop(

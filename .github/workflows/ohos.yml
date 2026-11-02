@@ -39,14 +39,14 @@ concurrency:
 
 jobs:
   quality:
-    if: inputs.run_quality
+    if: github.repository == 'flectar/mail' && (inputs.run_quality)
     name: Shared quality suite
     uses: ./.github/workflows/quality.yml
 
   hap:
     name: ${{ inputs.app }} hap (${{ inputs.profile }})
     needs: quality
-    if: always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped')
+    if: github.repository == 'flectar/mail' && (always() && (needs.quality.result == 'success' || needs.quality.result == 'skipped'))
     runs-on: [self-hosted, linux, ohos]
     timeout-minutes: 180
     steps:

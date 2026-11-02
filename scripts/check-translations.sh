@@ -22,11 +22,13 @@ find ui -type f -name '*.slint' ! -name '.*' -print0 \
       --package-name flectar-mail --package-version 0.1.0 \
       -o "$work_dir/flectar-mail.pot"
 
-# Extraction timestamps are intentionally volatile; compare every semantic
-# catalog line while ignoring only that generated header field.
-diff -u \
-  <(sed '/^"POT-Creation-Date:/d' lang/flectar-mail.pot) \
-  <(sed '/^"POT-Creation-Date:/d' "$work_dir/flectar-mail.pot")
+# Extraction timestamps are intentionally volatile. Fold only PO string
+# continuations; preserve every other catalog line for strict comparison.
+sed '/^"POT-Creation-Date:/d' lang/flectar-mail.pot \
+  | python3 scripts/normalize-po-wrapping.py > "$work_dir/reference.pot"
+sed '/^"POT-Creation-Date:/d' "$work_dir/flectar-mail.pot" \
+  | python3 scripts/normalize-po-wrapping.py > "$work_dir/generated.pot"
+diff -u "$work_dir/reference.pot" "$work_dir/generated.pot"
 
 for language in da de es fr it ja nl ru tr zh_Hans; do
   msgmerge --quiet --no-fuzzy-matching \

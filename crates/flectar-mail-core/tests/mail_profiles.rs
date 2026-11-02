@@ -78,15 +78,17 @@ fn tab_membership_distinguishes_legacy_inheritance_from_explicit_empty() {
     .unwrap();
     assert_eq!(legacy.account_ids, None);
     assert_eq!(legacy.icon, None);
-    let mut settings = Settings::default();
-    settings.business_tabs = vec![
-        legacy.clone(),
-        BusinessTab {
-            id: "empty".into(),
-            account_ids: Some(Vec::new()),
-            ..legacy
-        },
-    ];
+    let mut settings = Settings {
+        business_tabs: vec![
+            legacy.clone(),
+            BusinessTab {
+                id: "empty".into(),
+                account_ids: Some(Vec::new()),
+                ..legacy
+            },
+        ],
+        ..Settings::default()
+    };
     settings
         .account_icons
         .insert("1".into(), "account-icons/account-1.png".into());

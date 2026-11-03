@@ -106,14 +106,14 @@ use flectar_mail_core::models::ThreadCursor;
 use flectar_mail_core::models::{
     Account, AccountConfig, AddPasswordAccountArgs, CalendarConnection, CardDavConnection,
     ConnectionSecurity, ContactRecord, ContactRecordCursor, ContactRecordPage, CreateEventArgs,
-    DraftAttachmentIn, Label, MailConnectionSettings, MailProfile, MailProtocol, Provider,
-    Settings, Snippet, UpdateEventArgs,
+    DraftAttachmentIn, Label, MailConnectionSettings, MailGrouping, MailProfile, MailProtocol,
+    Provider, Settings, Snippet, UpdateEventArgs,
 };
 #[cfg(test)]
 use mail::fixture_messages;
 use mail::{
-    ComposeMessage, ComposeSource, CoreMailSource, MailCursor, MailMessage, MailboxEntry,
-    display_preview,
+    ComposeMessage, ComposeSource, CoreMailSource, MailCursor, MailMessage, MailTarget,
+    MailboxEntry, display_preview,
 };
 use mail_groups::{
     MailGroupState, mail_group_key, mail_list_entry_key, project_mail_list, same_mail_list_entry,
@@ -129,7 +129,7 @@ use sidebar_model::{SidebarAnimation, SidebarModel, refresh_sidebar, refresh_sid
 use slint::{DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, VecModel};
 use startup::{
     PendingCoreUpdates, StartupCalendarSnapshot, StartupSnapshot, StartupUpdate,
-    WarmStartCacheWriter, WarmStartProjection, WarmStartSnapshot, apply_settings,
+    WarmStartCacheWriter, WarmStartCursor, WarmStartProjection, WarmStartSnapshot, apply_settings,
     apply_warm_start_snapshot, load_startup_calendar_snapshot, load_startup_mail_metadata,
     load_startup_snapshot, load_warm_start_snapshot, spawn_core_event_listener,
 };
@@ -1105,6 +1105,8 @@ struct InboxState {
     remote_images_enabled: bool,
     remote_images_override_id: Option<i32>,
     mark_read_on_open: bool,
+    /// Whether the mail list shows conversations or each message on its own.
+    grouping: MailGrouping,
     warm_start_cache: WarmStartCacheWriter,
 }
 
@@ -1182,7 +1184,7 @@ fn resolve_single_mail_drop(
     target_scope: Scope,
     target_account_id: i32,
     target_folder_id: i32,
-) -> Result<(i64, MailDropDestination), String> {
+) -> Result<(MailTarget, MailDropDestination), String> {
     if !state.using_core || state.core.is_none() {
         return Err("mail account is not ready".to_owned());
     }
@@ -1191,9 +1193,8 @@ fn resolve_single_mail_drop(
         .iter()
         .find(|message| message.id == item.message_id)
         .ok_or_else(|| "message is no longer available".to_owned())?;
-    let thread_id = message
-        .thread_id
-        .ok_or_else(|| "message thread is unavailable".to_owned())?;
+    let target =
+        MailTarget::of(message).ok_or_else(|| "message thread is unavailable".to_owned())?;
     if message.account_id != i64::from(item.account_id) {
         return Err("dragged message account is stale".to_owned());
     }
@@ -1387,7 +1388,7 @@ fn resolve_single_mail_drop(
         }
     };
 
-    Ok((thread_id, destination))
+    Ok((target, destination))
 }
 
 fn resolve_mail_drop(
@@ -1396,7 +1397,7 @@ fn resolve_mail_drop(
     target_scope: Scope,
     target_account_id: i32,
     target_folder_id: i32,
-) -> Result<Vec<(i32, i64, MailDropDestination)>, String> {
+) -> Result<Vec<(i32, MailTarget, MailDropDestination)>, String> {
     if payload.items.is_empty() {
         return Err("no messages were dragged".to_owned());
     }
@@ -1411,7 +1412,7 @@ fn resolve_mail_drop(
                 target_account_id,
                 target_folder_id,
             )
-            .map(|(thread_id, destination)| (item.message_id, thread_id, destination))
+            .map(|(target, destination)| (item.message_id, target, destination))
         })
         .collect()
 }
@@ -1448,9 +1449,54 @@ fn perform_mail_drop(
         core,
         operations
             .into_iter()
-            .map(|(id, thread, destination)| (id, thread, mail_work::Operation::Drop(destination)))
+            .map(|(id, target, destination)| (id, target, mail_work::Operation::Drop(destination)))
             .collect(),
     )
+}
+
+/// Show conversations, or each message on its own. The list starts over like
+/// a newly chosen mailbox, and tabs forget the conversations or messages they
+/// had open, whose ids belong to the other grouping. Returns whether the
+/// grouping changed.
+fn apply_mail_grouping(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    runtime: &tokio::runtime::Runtime,
+    grouping: MailGrouping,
+) -> bool {
+    app.set_conversation_view(grouping == MailGrouping::Conversations);
+    let core = state.borrow().core.clone();
+    let changed = core.is_some_and(|core| core.set_grouping(grouping));
+    if state.borrow().grouping == grouping && !changed {
+        return false;
+    }
+    {
+        let mut state = state.borrow_mut();
+        state.grouping = grouping;
+        state.pending_selection = None;
+        state.pending_selection_opens = false;
+        state.restore_thread_message = None;
+        state.mail_groups.clear();
+        state.page = 1;
+        state.next_cursor = None;
+        state.selected_id = None;
+        state.checked_ids.clear();
+        state.preview_closed = true;
+        state.conversation_owner_id = None;
+        state.conversation_messages.clear();
+        state.conversation_selected_index = 0;
+    }
+    let tabs = app.global::<TabsUi>();
+    tabs.set_list_offset(0.0);
+    tabs.set_list_restore(-1.0);
+    tabs.invoke_regroup();
+    // Single-pane layouts go back to the list, as for a tab with nothing open.
+    tabs.set_shown_conversation(false);
+    tabs.set_shown(tabs.get_shown().wrapping_add(1));
+    if changed && let Err(error) = refresh_from_source(app, state, runtime, false, &[]) {
+        app.set_render_status(UiMessage::detail("Mail refresh failed: {}", error));
+    }
+    true
 }
 
 fn perform_mail_list_action(
@@ -1485,9 +1531,8 @@ fn perform_mail_list_action(
                     return None;
                 }
                 Some(
-                    message
-                        .thread_id
-                        .map(|thread_id| (id, thread_id))
+                    MailTarget::of(message)
+                        .map(|target| (id, target))
                         .ok_or_else(|| "message thread is unavailable".to_owned()),
                 )
             })
@@ -1506,7 +1551,7 @@ fn perform_mail_list_action(
         core,
         operations
             .into_iter()
-            .map(|(id, thread)| (id, thread, mail_work::Operation::Action(action.to_owned())))
+            .map(|(id, target)| (id, target, mail_work::Operation::Action(action.to_owned())))
             .collect(),
     )
 }
@@ -1670,6 +1715,7 @@ impl InboxState {
             remote_images_enabled,
             remote_images_override_id: None,
             mark_read_on_open: true,
+            grouping: MailGrouping::Conversations,
             warm_start_cache,
         }
     }
@@ -1860,10 +1906,8 @@ impl InboxState {
             .save(WarmStartSnapshot::capture(WarmStartProjection {
                 scope: self.scope,
                 inbox_count: self.inbox_count,
-                next_cursor: self.next_cursor.and_then(|cursor| match cursor {
-                    MailCursor::Thread(cursor) => Some(cursor),
-                    MailCursor::Search(_) => None,
-                }),
+                grouping: self.grouping,
+                next_cursor: self.next_cursor.and_then(WarmStartCursor::of),
                 accounts: &self.connected_accounts,
                 profile_accounts: self.profile_accounts.as_deref(),
                 messages: &self.messages,
@@ -2024,7 +2068,11 @@ fn spawn_startup_load(
                 }
             }
         }
-        let warm = load_warm_start_snapshot(&paths.warm_start_file()).await;
+        // Rows saved in the other grouping would be replaced at once.
+        let grouping = flectar_mail_core::startup_presentation(&paths).grouping;
+        let warm = load_warm_start_snapshot(&paths.warm_start_file())
+            .await
+            .filter(|snapshot| snapshot.grouping == grouping);
         let preferred_scope = warm
             .as_ref()
             .map_or(Scope::UNIFIED_INBOX, |snapshot| snapshot.scope);
@@ -2165,11 +2213,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     // when the window is created. This is the same zero-wait lookup used for
     // the rest of the first frame's presentation state.
     let startup_presentation = flectar_mail_core::startup_presentation(&platform.paths);
-    let window_frame = window_chrome::WindowFrame::parse(
-        startup_presentation
-            .window_frame
-            .as_deref()
-            .unwrap_or_default(),
+    let window_frame = startup_presentation.window_frame.as_deref().map_or_else(
+        window_chrome::WindowFrame::default,
+        window_chrome::WindowFrame::parse,
     );
     #[cfg(desktop)]
     let (use_wgpu, cpu_renderer) = (
@@ -4808,6 +4854,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         state.mark_read_on_open = settings
                             .as_ref()
                             .is_none_or(|settings| settings.mark_read_on_open);
+                        state.grouping = core.grouping();
                         state.favicon_loader = if allow_remote_images {
                             match FaviconLoader::new(&startup_paths_for_ui.cache_dir) {
                                 Ok(loader) => Some(loader),
@@ -6171,9 +6218,19 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let operations = match (account_id, &state.profile_accounts) {
                 (None, Some(accounts)) => accounts
                     .iter()
-                    .map(|account| (-1, 0, mail_work::Operation::EmptyTrash(Some(*account))))
+                    .map(|account| {
+                        (
+                            -1,
+                            MailTarget::Thread(0),
+                            mail_work::Operation::EmptyTrash(Some(*account)),
+                        )
+                    })
                     .collect(),
-                (account_id, _) => vec![(-1, 0, mail_work::Operation::EmptyTrash(account_id))],
+                (account_id, _) => vec![(
+                    -1,
+                    MailTarget::Thread(0),
+                    mail_work::Operation::EmptyTrash(account_id),
+                )],
             };
             state.core.clone().map(|core| (core, operations))
         };
@@ -6216,7 +6273,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 messages
                     .into_iter()
                     .filter_map(|message| {
-                        let thread_id = message.thread_id?;
+                        let target = MailTarget::of(message)?;
                         let operation = if route_keyword {
                             let label = label?;
                             mail_work::Operation::Keyword {
@@ -6228,7 +6285,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         } else {
                             mail_work::Operation::Label(i64::from(label_id), applied)
                         };
-                        Some((message.id, thread_id, operation))
+                        Some((message.id, target, operation))
                     })
                     .collect::<Vec<_>>()
             });
@@ -6255,14 +6312,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let (core, thread_id, selected_account_id, company_ids, parent_path) = {
+            let (core, target, selected_account_id, company_ids, parent_path) = {
                 let state = state_for_save_label.borrow();
                 let selected = state
                     .selected_id
                     .and_then(|id| state.messages.iter().find(|message| message.id == id));
                 (
                     state.core.clone(),
-                    selected.and_then(|message| message.thread_id),
+                    selected.and_then(MailTarget::of),
                     selected.map(|message| message.account_id),
                     state.company_account_ids.clone(),
                     if parent_label_id >= 0 {
@@ -6370,9 +6427,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     },
                 ))?;
                 if existing_id.is_none() && owner_account_id < 0 {
-                    let thread_id = thread_id.ok_or_else(|| "no message is selected".to_owned())?;
+                    let target = target.ok_or_else(|| "no message is selected".to_owned())?;
                     runtime_for_save_label
-                        .block_on(core.perform_label_action(thread_id, label.id, true))?;
+                        .block_on(core.perform_label_action(target, label.id, true))?;
                 }
                 refresh_from_source(
                     &app,
@@ -6395,6 +6452,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             }
         },
     );
+
 
     let app_weak = app.as_weak();
     let state_for_delete_label = Rc::clone(&state);
@@ -8579,16 +8637,19 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
     // Automatic read marking must never wait for SQLite or a page refresh
     // inside the pointer callback. A bounded, serial worker preserves requests.
-    let (mark_read_tx, mut mark_read_rx) = tokio::sync::mpsc::channel::<(CoreMailSource, i64)>(64);
-    let (read_result_tx, read_result_rx) = bounded_ui_channel::<(i64, Result<(), String>)>();
+    // A conversation's row marks the conversation read; a single message's
+    // row marks only that message.
+    let (mark_read_tx, mut mark_read_rx) =
+        tokio::sync::mpsc::channel::<(CoreMailSource, MailTarget)>(64);
+    let (read_result_tx, read_result_rx) = bounded_ui_channel::<(MailTarget, Result<(), String>)>();
     let read_results = UiSender::new(
         read_result_tx,
         UiWake::new(app.as_weak(), |app| app.invoke_drain_read_updates()),
     );
     runtime.spawn(async move {
-        while let Some((core, thread_id)) = mark_read_rx.recv().await {
-            let result = core.perform_message_action(thread_id, "mark_read").await;
-            let _ = read_results.send((thread_id, result)).await;
+        while let Some((core, target)) = mark_read_rx.recv().await {
+            let result = core.perform_message_action(target, "mark_read").await;
+            let _ = read_results.send((target, result)).await;
         }
     });
     let pending_reads = Rc::new(RefCell::new(HashSet::new()));
@@ -8596,8 +8657,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let read_result_rx = Rc::new(RefCell::new(read_result_rx));
     let read_app = app.as_weak();
     app.on_drain_read_updates(move || {
-        while let Ok((thread_id, result)) = read_result_rx.borrow_mut().try_recv() {
-            pending_reads_for_results.borrow_mut().remove(&thread_id);
+        while let Ok((target, result)) = read_result_rx.borrow_mut().try_recv() {
+            pending_reads_for_results.borrow_mut().remove(&target);
             // Successful mutations publish CoreEvent updates, which use the
             // existing asynchronous list refresh and preserve the current selection.
             if let Err(error) = result
@@ -8629,7 +8690,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         .messages
                         .iter()
                         .find(|row| row.id == id && row.unread)
-                        .and_then(|row| row.thread_id),
+                        .and_then(MailTarget::of),
                 )
         };
         match select_message(&app, &state_for_selection, &runtime_for_selection, id) {
@@ -8639,14 +8700,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 return;
             }
         };
-        if let Some((core, thread_id)) = read_target
-            && ui_dispatch::enqueue_once(
-                &mark_read_tx,
-                &pending_reads,
-                thread_id,
-                (core, thread_id),
-            )
-            .is_err()
+        if let Some((core, target)) = read_target
+            && ui_dispatch::enqueue_once(&mark_read_tx, &pending_reads, target, (core, target))
+                .is_err()
         {
             app.set_render_status(UiMessage::detail(
                 "Could not mark message as read: {}",

@@ -132,6 +132,7 @@ mod tests {
         assert!(d.show_avatars);
         assert!(d.group_mail_by_date);
         assert!(d.show_tabs);
+        assert!(d.conversation_view);
         assert!(d.collect_outgoing_contacts);
         assert!(!d.collect_incoming_contacts);
         assert!(!d.contact_suggest_all_accounts);
@@ -159,6 +160,7 @@ mod tests {
         s.show_avatars = false;
         s.group_mail_by_date = false;
         s.show_tabs = false;
+        s.conversation_view = false;
         s.workspace_layout = "minimal".into();
         s.contact_suggest_all_accounts = true;
         s.theme_preset = "teal".into();
@@ -211,6 +213,7 @@ mod tests {
         assert!(!back.show_avatars);
         assert!(!back.group_mail_by_date);
         assert!(!back.show_tabs);
+        assert!(!back.conversation_view);
         assert!(back.contact_suggest_all_accounts);
         assert_eq!(back.workspace_layout, "minimal");
         assert_eq!(back.theme_preset, "teal");
@@ -249,6 +252,7 @@ mod tests {
         assert!(s.show_avatars);
         assert!(s.group_mail_by_date);
         assert!(s.show_tabs);
+        assert!(s.conversation_view);
         assert!(s.collect_outgoing_contacts);
         assert!(!s.collect_incoming_contacts);
         assert!(!s.contact_suggest_all_accounts);

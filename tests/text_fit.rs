@@ -1045,7 +1045,9 @@ fn states() -> Vec<State> {
         state("settings profile editor", |app| {
             app.set_settings_tab("Accounts".into());
             app.set_settings_open(true);
-            press(app, "Add profile");
+            // Business tabs replaced the profiles card's Add profile button.
+            // The same editor still opens from the app's new-profile request.
+            app.set_new_profile_requested(true);
         }),
         State {
             dismiss: Some("Keep my data"),

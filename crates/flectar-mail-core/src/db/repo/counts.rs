@@ -3,7 +3,7 @@
 //! threads.rs so the two evolve independently.
 
 use crate::error::Result;
-use crate::models::{Label, MailboxBadgeCounts, SplitRule, UnreadCounts, roles};
+use crate::models::{Label, MailGrouping, MailboxBadgeCounts, SplitRule, UnreadCounts, roles};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -24,6 +24,25 @@ const INBOX_BADGE_SQL: &str = "SELECT t.account_id, COUNT(*)
                 WHERE m.thread_id = t.id AND f.role = 'inbox'
            ))
          GROUP BY t.account_id";
+
+/// Unread messages in an inbox outside snoozed conversations, for lists that
+/// show each message on its own. Mirrors the message-level inbox filter of
+/// `threads::list_messages`.
+const INBOX_MESSAGE_BADGE_SQL: &str = "SELECT m.account_id, COUNT(*)
+         FROM messages m
+         JOIN accounts a ON a.id = m.account_id
+         LEFT JOIN snoozes s ON s.thread_id = m.thread_id
+         WHERE m.is_read = 0
+           AND m.is_draft = 0
+           AND m.thread_id IS NOT NULL
+           AND s.thread_id IS NULL
+           AND (m.folder_id IN (SELECT id FROM folders WHERE role = 'inbox')
+                OR (a.provider = 'gmail' AND EXISTS (
+                     SELECT 1 FROM message_folders mf
+                     JOIN folders f ON f.id = mf.folder_id
+                     WHERE mf.message_id = m.id AND f.role = 'inbox'
+                )))
+         GROUP BY m.account_id";
 
 /// Query-plan details for the inbox badge path used by `mailbox_badge_counts`.
 pub fn inbox_badge_query_plan(conn: &Connection) -> Result<Vec<String>> {
@@ -232,17 +251,27 @@ pub fn unread_counts(
 /// This deliberately avoids calling `unread_counts` once per account: the
 /// Slint sidebar does not render split/label badges, and repeating those
 /// scalar queries would make a live refresh proportional to account count.
-pub fn mailbox_badge_counts(conn: &Connection) -> Result<Vec<MailboxBadgeCounts>> {
-    mailbox_badge_counts_filtered(conn, &crate::recipient_match::MailScope::default())
+/// Badges count what the mail list shows: conversations, or messages.
+pub fn mailbox_badge_counts(
+    conn: &Connection,
+    grouping: MailGrouping,
+) -> Result<Vec<MailboxBadgeCounts>> {
+    mailbox_badge_counts_filtered(
+        conn,
+        grouping,
+        &crate::recipient_match::MailScope::default(),
+    )
 }
 
-/// `mailbox_badge_counts`, with inbox and starred totals limited to threads
+/// `mailbox_badge_counts`, with inbox and starred totals limited to mail
 /// matching `scope`. An empty scope is the unfiltered count.
 pub fn mailbox_badge_counts_filtered(
     conn: &Connection,
+    grouping: MailGrouping,
     scope: &crate::recipient_match::MailScope,
 ) -> Result<Vec<MailboxBadgeCounts>> {
     crate::recipient_match::install_recipient_matcher(conn, &scope.recipient_patterns)?;
+    let messages = grouping == MailGrouping::Messages;
     let mut counts = conn
         .prepare("SELECT id FROM accounts ORDER BY sort_order, id")?
         .query_map([], |row| {
@@ -262,18 +291,15 @@ pub fn mailbox_badge_counts_filtered(
 
     // The inbox predicate mirrors `Q::inbox`, but grouping by account returns
     // every native sidebar section without repeating the scan per account.
-    let (inbox_sql, inbox_binds) =
-        match crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", 1) {
-            Some((clause, likes)) => (
-                INBOX_BADGE_SQL.replacen(
-                    "GROUP BY",
-                    &format!("AND {clause}\n         GROUP BY"),
-                    1,
-                ),
-                likes,
-            ),
-            None => (INBOX_BADGE_SQL.to_owned(), Vec::new()),
-        };
+    let (inbox_sql, inbox_binds) = scoped_badge_sql(
+        if messages {
+            INBOX_MESSAGE_BADGE_SQL
+        } else {
+            INBOX_BADGE_SQL
+        },
+        scope,
+        messages,
+    );
     let mut inbox = conn.prepare(&inbox_sql)?;
     let inbox_params: Vec<&dyn rusqlite::types::ToSql> =
         inbox_binds.iter().map(|value| value as _).collect();
@@ -286,25 +312,16 @@ pub fn mailbox_badge_counts_filtered(
         }
     }
 
-    let (starred_sql, starred_binds) =
-        match crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", 1) {
-            Some((clause, likes)) => (
-                format!(
-                    "SELECT t.account_id, COUNT(*) FROM threads t
-                 WHERE t.unread_count > 0 AND t.starred_count > 0
-                   AND {clause}
-                 GROUP BY t.account_id"
-                ),
-                likes,
-            ),
-            None => (
-                "SELECT account_id, COUNT(*) FROM threads
-             WHERE unread_count > 0 AND starred_count > 0
-             GROUP BY account_id"
-                    .to_owned(),
-                Vec::new(),
-            ),
-        };
+    let starred_base = if messages {
+        "SELECT m.account_id, COUNT(*) FROM messages m
+         WHERE m.is_read = 0 AND m.is_draft = 0 AND m.is_starred = 1 AND m.thread_id IS NOT NULL
+         GROUP BY m.account_id"
+    } else {
+        "SELECT t.account_id, COUNT(*) FROM threads t
+         WHERE t.unread_count > 0 AND t.starred_count > 0
+         GROUP BY t.account_id"
+    };
+    let (starred_sql, starred_binds) = scoped_badge_sql(starred_base, scope, messages);
     let mut starred = conn.prepare(&starred_sql)?;
     let starred_params: Vec<&dyn rusqlite::types::ToSql> =
         starred_binds.iter().map(|value| value as _).collect();
@@ -319,23 +336,24 @@ pub fn mailbox_badge_counts_filtered(
 
     // Draft folders are normally tiny. Starting from those folders uses the
     // existing folder/message indexes and avoids inspecting every inbox row.
-    let mut drafts = conn.prepare(
-        "SELECT account_id, COUNT(DISTINCT thread_id)
+    let counted = if messages { "message_id" } else { "thread_id" };
+    let mut drafts = conn.prepare(&format!(
+        "SELECT account_id, COUNT(DISTINCT {counted})
          FROM (
-             SELECT m.account_id, m.thread_id
+             SELECT m.account_id, m.thread_id, m.id AS message_id
              FROM folders f
              JOIN messages m ON m.folder_id = f.id
              WHERE f.role = 'drafts' AND m.is_draft = 1 AND m.thread_id IS NOT NULL
              UNION ALL
-             SELECT m.account_id, m.thread_id
+             SELECT m.account_id, m.thread_id, m.id AS message_id
              FROM folders f
              JOIN message_folders mf ON mf.folder_id = f.id
              JOIN messages m ON m.id = mf.message_id
              JOIN accounts a ON a.id = m.account_id AND a.provider = 'gmail'
              WHERE f.role = 'drafts' AND m.is_draft = 1 AND m.thread_id IS NOT NULL
          )
-         GROUP BY account_id",
-    )?;
+         GROUP BY account_id"
+    ))?;
     for row in drafts.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))? {
         let (account_id, value) = row?;
         if let Some(index) = positions.get(&account_id) {
@@ -344,6 +362,26 @@ pub fn mailbox_badge_counts_filtered(
     }
 
     Ok(counts)
+}
+
+/// Insert a business-tab scope before the badge query's GROUP BY.
+fn scoped_badge_sql(
+    sql: &str,
+    scope: &crate::recipient_match::MailScope,
+    messages: bool,
+) -> (String, Vec<String>) {
+    let clause = if messages {
+        crate::recipient_match::message_scope_clause(scope, 1)
+    } else {
+        crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", 1)
+    };
+    match clause {
+        Some((clause, likes)) => (
+            sql.replacen("GROUP BY", &format!("AND {clause}\n         GROUP BY"), 1),
+            likes,
+        ),
+        None => (sql.to_owned(), Vec::new()),
+    }
 }
 
 /// Unread threads in each folder. A thread counts once per folder that holds
@@ -486,7 +524,7 @@ mod tests {
         )
         .unwrap();
 
-        let badges = mailbox_badge_counts(&conn).unwrap();
+        let badges = mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap();
         assert_eq!(
             badges,
             vec![
@@ -507,7 +545,7 @@ mod tests {
 
         conn.execute("UPDATE threads SET unread_count = 0 WHERE id = 1", [])
             .unwrap();
-        let badges = mailbox_badge_counts(&conn).unwrap();
+        let badges = mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap();
         assert_eq!(badges[0].inbox, 0);
         assert_eq!(badges[0].starred, 0);
         assert_eq!(badges[0].drafts, 1);
@@ -574,7 +612,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            mailbox_badge_counts(&conn).unwrap(),
+            mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap(),
             vec![
                 MailboxBadgeCounts {
                     account_id: 1,
@@ -639,5 +677,28 @@ mod tests {
         let c = unread_counts(&conn, Some(1), &[split], &[label]).unwrap();
         assert_eq!(c.splits["7"], 1);
         assert_eq!(c.labels["5"], 1);
+    }
+
+    #[test]
+    fn message_badges_count_unread_messages() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let (thread_id, _) =
+            crate::db::testutil::seed_message(&conn, "a@b.dev", "two unread", false);
+        let (own_thread, reply) =
+            crate::db::testutil::seed_message(&conn, "a@b.dev", "re: two unread", false);
+        conn.execute(
+            "UPDATE messages SET thread_id = ?1, is_starred = 1, uid = 10000 + id WHERE id = ?2",
+            params![thread_id, reply],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM threads WHERE id = ?1", [own_thread])
+            .unwrap();
+        crate::db::repo::threads::recompute(&conn, thread_id).unwrap();
+
+        let conversations = mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap();
+        assert_eq!((conversations[0].inbox, conversations[0].starred), (1, 1));
+        let messages = mailbox_badge_counts(&conn, MailGrouping::Messages).unwrap();
+        assert_eq!((messages[0].inbox, messages[0].starred), (2, 1));
     }
 }

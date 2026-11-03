@@ -212,7 +212,7 @@ export component ReceivingInboxCard inherits Rectangle {
     height: form.preferred-height;
     form := VerticalBox {
         padding: 16px; spacing: 10px;
-        Text { text: @tr("Add an address to the inbox list"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; }
+        Text { text: @tr("Add an address to the inbox list"); color: AppTheme.heading; font-size: TypeScale.subtitle; font-weight: 600; wrap: word-wrap; }
         Text { text: @tr("Create an inbox view for an address you receive mail at. This does not authorize sending from that address."); wrap: word-wrap; color: AppTheme.secondary; font-size: TypeScale.caption; }
         FormField { label: @tr("Receiving address"); value <=> ReceivingInboxUi.address; placeholder: "team@example.com"; label-color: AppTheme.heading; }
         FormField { label: @tr("Source mailboxes (optional, comma-separated)"); value <=> ReceivingInboxUi.source-emails; placeholder: "mailbox@example.com"; label-color: AppTheme.heading; }

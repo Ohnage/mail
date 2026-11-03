@@ -651,6 +651,12 @@ impl From<(Option<ThreadCursor>, i64)> for ThreadPageRequest {
 }
 
 #[derive(Clone)]
+pub struct MessagePageRequest {
+    pub cursor: Option<MessageCursor>,
+    pub limit: i64,
+}
+
+#[derive(Clone)]
 pub struct Core {
     /// Mail, contacts, folders, and mail-side durable actions.
     pub db: Db,
@@ -3081,30 +3087,8 @@ impl Core {
         scope: recipient_match::MailScope,
         page: ThreadPageRequest,
     ) -> Result<ThreadPage> {
-        use repo::threads::TabFilter;
         let ThreadPageRequest { cursor, limit } = page;
-        // A category label filters to its single resolved tab; a manual label is
-        // a cross-cutting filter. Split conventions: -1 = Important, -2 = Other,
-        // positive ids = custom split tabs.
-        let tab = if let Some(lid) = label_id {
-            let is_auto = self
-                .db
-                .read(move |conn| Ok(repo::labels::get(conn, lid)?.map(|l| l.is_auto)))
-                .await?
-                .unwrap_or(false);
-            Some(if is_auto {
-                TabFilter::AutoLabel(lid)
-            } else {
-                TabFilter::ManualLabel(lid)
-            })
-        } else {
-            match split_id {
-                Some(-1) => Some(TabFilter::Important),
-                Some(-2) => Some(TabFilter::Other),
-                Some(id) if id > 0 => Some(TabFilter::Split(id)),
-                _ => None,
-            }
-        };
+        let tab = self.tab_filter(split_id, label_id).await?;
         self.db
             .read(move |conn| {
                 repo::threads::list_matching(
@@ -3124,6 +3108,156 @@ impl Core {
                 )
             })
             .await
+    }
+
+    /// One page of the message timeline: `list_threads` for mail lists that
+    /// show each message on its own instead of grouping conversations.
+    pub async fn list_messages(
+        &self,
+        view: View,
+        split_id: Option<i64>,
+        account_id: Option<i64>,
+        label_id: Option<i64>,
+        folder_id: Option<i64>,
+        page: MessagePageRequest,
+    ) -> Result<MessagePage> {
+        self.list_messages_where(
+            view,
+            split_id,
+            account_id,
+            None,
+            label_id,
+            folder_id,
+            None,
+            None,
+            recipient_match::MailScope::default(),
+            page,
+        )
+        .await
+    }
+
+    /// `list_messages` across a set of accounts, such as a mail profile's. An
+    /// empty set lists nothing.
+    pub async fn list_messages_for_accounts(
+        &self,
+        view: View,
+        split_id: Option<i64>,
+        account_ids: Vec<i64>,
+        label_id: Option<i64>,
+        folder_id: Option<i64>,
+        page: MessagePageRequest,
+    ) -> Result<MessagePage> {
+        self.list_messages_scoped(
+            view,
+            split_id,
+            None,
+            Some(account_ids),
+            label_id,
+            folder_id,
+            None,
+            None,
+            recipient_match::MailScope::default(),
+            page,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn list_messages_scoped(
+        &self,
+        view: View,
+        split_id: Option<i64>,
+        account_id: Option<i64>,
+        account_ids: Option<Vec<i64>>,
+        label_id: Option<i64>,
+        folder_id: Option<i64>,
+        folder_ids: Option<Vec<i64>>,
+        label_ids: Option<Vec<i64>>,
+        scope: recipient_match::MailScope,
+        page: MessagePageRequest,
+    ) -> Result<MessagePage> {
+        self.list_messages_where(
+            view,
+            split_id,
+            account_id,
+            account_ids,
+            label_id,
+            folder_id,
+            folder_ids,
+            label_ids,
+            scope,
+            page,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn list_messages_where(
+        &self,
+        view: View,
+        split_id: Option<i64>,
+        account_id: Option<i64>,
+        account_ids: Option<Vec<i64>>,
+        label_id: Option<i64>,
+        folder_id: Option<i64>,
+        folder_ids: Option<Vec<i64>>,
+        label_ids: Option<Vec<i64>>,
+        scope: recipient_match::MailScope,
+        page: MessagePageRequest,
+    ) -> Result<MessagePage> {
+        let MessagePageRequest { cursor, limit } = page;
+        let tab = self.tab_filter(split_id, label_id).await?;
+        self.db
+            .read(move |conn| {
+                repo::threads::list_messages_matching(
+                    conn,
+                    &repo::threads::ListArgs {
+                        view,
+                        tab,
+                        account_id,
+                        account_ids,
+                        folder_id,
+                        folder_ids,
+                        label_ids,
+                        cursor: None,
+                        limit: limit.clamp(1, 200),
+                    },
+                    &scope,
+                    cursor,
+                )
+            })
+            .await
+    }
+
+    /// The inbox tab or label a list is narrowed to. A category label filters
+    /// to its single resolved tab; a manual label is a cross-cutting filter.
+    /// Split conventions: -1 = Important, -2 = Other, positive ids = custom
+    /// split tabs.
+    async fn tab_filter(
+        &self,
+        split_id: Option<i64>,
+        label_id: Option<i64>,
+    ) -> Result<Option<repo::threads::TabFilter>> {
+        use repo::threads::TabFilter;
+        Ok(if let Some(lid) = label_id {
+            let is_auto = self
+                .db
+                .read(move |conn| Ok(repo::labels::get(conn, lid)?.map(|l| l.is_auto)))
+                .await?
+                .unwrap_or(false);
+            Some(if is_auto {
+                TabFilter::AutoLabel(lid)
+            } else {
+                TabFilter::ManualLabel(lid)
+            })
+        } else {
+            match split_id {
+                Some(-1) => Some(TabFilter::Important),
+                Some(-2) => Some(TabFilter::Other),
+                Some(id) if id > 0 => Some(TabFilter::Split(id)),
+                _ => None,
+            }
+        })
     }
 
     /// Exact count for the standard mailbox/folder scopes used by native
@@ -4302,12 +4436,29 @@ impl Core {
         let mut action_ids: Vec<i64> = Vec::new();
         let mut touched_accounts: Vec<i64> = Vec::new();
 
-        for thread_id in args.thread_ids.clone() {
+        // Each conversation changes in its own transaction. Single messages
+        // are grouped by their conversation, which keeps its aggregates.
+        let scopes: Vec<(i64, Option<Vec<i64>>)> = match &args.target {
+            ActionTarget::Threads(thread_ids) => thread_ids.iter().map(|id| (*id, None)).collect(),
+            ActionTarget::Messages(message_ids) => {
+                let message_ids = message_ids.clone();
+                self.db
+                    .read(move |conn| messages_by_thread(conn, &message_ids))
+                    .await?
+                    .into_iter()
+                    .map(|(thread_id, messages)| (thread_id, Some(messages)))
+                    .collect()
+            }
+        };
+        let thread_ids = scopes.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        for (thread_id, messages) in scopes {
             let kind = args.kind;
             let params = args.params.clone();
             let ids = self
                 .db
-                .write(move |conn| apply_thread_action(conn, thread_id, kind, params.as_ref()))
+                .write(move |conn| {
+                    apply_thread_action(conn, thread_id, messages.as_deref(), kind, params.as_ref())
+                })
                 .await?;
             for (aid, account_id) in ids {
                 action_ids.push(aid);
@@ -4317,9 +4468,7 @@ impl Core {
             }
         }
 
-        self.bus.emit(CoreEvent::MailUpdated {
-            thread_ids: args.thread_ids.clone(),
-        });
+        self.bus.emit(CoreEvent::MailUpdated { thread_ids });
         for acc in touched_accounts {
             self.nudge(Some(acc), || SyncCmd::RunActions).await;
         }
@@ -7304,6 +7453,73 @@ impl Core {
             .await
     }
 
+    /// Cursor-paginated chronological search as single messages, for mail
+    /// lists that do not group conversations.
+    pub async fn search_messages_page(
+        &self,
+        query: String,
+        account_id: Option<i64>,
+        cursor: Option<MessageSearchCursor>,
+        limit: i64,
+    ) -> Result<MessageSearchPage> {
+        let mut parsed = search::parse(&query);
+        parsed.account_id = account_id;
+        self.search_messages_parsed(parsed, cursor, limit).await
+    }
+
+    /// `search_messages_page` across a set of accounts, such as a mail
+    /// profile's. An empty set matches nothing.
+    pub async fn search_messages_page_for_accounts(
+        &self,
+        query: String,
+        account_ids: Vec<i64>,
+        cursor: Option<MessageSearchCursor>,
+        limit: i64,
+    ) -> Result<MessageSearchPage> {
+        let mut parsed = search::parse(&query);
+        parsed.account_ids = Some(account_ids);
+        self.search_messages_parsed(parsed, cursor, limit).await
+    }
+
+    async fn search_messages_parsed(
+        &self,
+        parsed: search::ParsedQuery,
+        cursor: Option<MessageSearchCursor>,
+        limit: i64,
+    ) -> Result<MessageSearchPage> {
+        let limit = limit.clamp(1, 100);
+        self.db
+            .read(move |conn| {
+                repo::search::chronological_message_page(conn, &parsed, cursor, limit)
+            })
+            .await
+    }
+
+    /// `search_messages_page` across accounts and a business-tab filter.
+    pub async fn search_messages_scoped(
+        &self,
+        query: String,
+        account_id: Option<i64>,
+        account_ids: Option<Vec<i64>>,
+        scope: recipient_match::MailScope,
+        cursor: Option<MessageSearchCursor>,
+        limit: i64,
+    ) -> Result<MessageSearchPage> {
+        let mut parsed = search::parse(&query);
+        parsed.account_id = account_id;
+        parsed.account_ids = account_ids;
+        parsed.recipient_patterns = scope.recipient_patterns;
+        parsed.sender_addresses = scope.sender_addresses;
+        parsed.sender_names = scope.sender_names;
+        parsed.sender_domains = scope.sender_domains;
+        parsed.or_account_ids = scope.or_account_ids;
+        parsed.scope_match_any = scope.match_any;
+        parsed.address_inboxes = scope.address_inboxes;
+        parsed.address_groups = scope.address_groups;
+        parsed.base_account_ids = scope.base_account_ids;
+        self.search_messages_parsed(parsed, cursor, limit).await
+    }
+
     async fn search_chronological_parsed(
         &self,
         parsed: search::ParsedQuery,
@@ -8263,7 +8479,7 @@ impl Core {
                 if let Err(e) = self
                     .perform_action(PerformActionArgs {
                         kind,
-                        thread_ids: vec![thread_id],
+                        target: ActionTarget::Threads(vec![thread_id]),
                         params,
                     })
                     .await
@@ -8302,17 +8518,22 @@ impl Core {
     }
 
     /// Native sidebar badges for all accounts, computed in one grouped query.
-    pub async fn mailbox_badge_counts(&self) -> Result<Vec<MailboxBadgeCounts>> {
-        self.mailbox_badge_counts_filtered(recipient_match::MailScope::default())
+    /// They count conversations or messages, as the mail list shows them.
+    pub async fn mailbox_badge_counts(
+        &self,
+        grouping: MailGrouping,
+    ) -> Result<Vec<MailboxBadgeCounts>> {
+        self.mailbox_badge_counts_filtered(grouping, recipient_match::MailScope::default())
             .await
     }
 
     pub async fn mailbox_badge_counts_filtered(
         &self,
+        grouping: MailGrouping,
         scope: recipient_match::MailScope,
     ) -> Result<Vec<MailboxBadgeCounts>> {
         self.db
-            .read(move |conn| repo::counts::mailbox_badge_counts_filtered(conn, &scope))
+            .read(move |conn| repo::counts::mailbox_badge_counts_filtered(conn, grouping, &scope))
             .await
     }
 
@@ -8488,6 +8709,7 @@ impl Core {
     pub async fn apply_keyword_label(
         &self,
         thread_id: i64,
+        target: ActionTarget,
         keyword: String,
         name: String,
         color: String,
@@ -8527,7 +8749,7 @@ impl Core {
             } else {
                 ActionKind::RemoveLabel
             },
-            thread_ids: vec![thread_id],
+            target,
             params: Some(ActionParams {
                 wake_at: None,
                 target_folder_id: None,
@@ -9606,11 +9828,59 @@ fn valid_automation_route(conn: &rusqlite::Connection, target: &str) -> Result<b
     Ok(conn.query_row(&sql, rusqlite::params![id], |row| row.get::<_, i64>(0))? != 0)
 }
 
+/// The conversations of `message_ids`, each with its messages, in the order
+/// they first appear. Messages that are gone, or not yet in a conversation,
+/// are left out.
+fn messages_by_thread(
+    conn: &rusqlite::Connection,
+    message_ids: &[i64],
+) -> Result<Vec<(i64, Vec<i64>)>> {
+    let mut stmt = conn.prepare_cached("SELECT thread_id FROM messages WHERE id = ?1")?;
+    let mut scopes: Vec<(i64, Vec<i64>)> = Vec::new();
+    for message_id in message_ids {
+        let Some(thread_id) = stmt
+            .query_row(rusqlite::params![message_id], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .optional()?
+            .flatten()
+        else {
+            continue;
+        };
+        match scopes.iter_mut().find(|(id, _)| *id == thread_id) {
+            Some((_, messages)) => messages.push(*message_id),
+            None => scopes.push((thread_id, vec![*message_id])),
+        }
+    }
+    Ok(scopes)
+}
+
+/// Whether any message of the conversation is still in an inbox.
+fn thread_in_inbox(tx: &rusqlite::Transaction, thread_id: i64) -> Result<bool> {
+    Ok(tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM messages m JOIN folders f ON f.id = m.folder_id
+                        WHERE m.thread_id = ?1 AND f.role = 'inbox')
+             OR EXISTS (SELECT 1 FROM messages m
+                        JOIN message_folders mf ON mf.message_id = m.id
+                        JOIN folders f ON f.id = mf.folder_id
+                        WHERE m.thread_id = ?1 AND f.role = 'inbox')",
+        rusqlite::params![thread_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// Optimistic local mutation + enqueue, in one transaction.
 /// Returns (action_id, account_id) pairs.
+///
+/// `only` narrows the action to those messages of the conversation, as a mail
+/// list without conversations acts on the message it shows. Their queued
+/// actions are marked `messageOnly`, so providers that could change the whole
+/// conversation at once, such as Gmail, change just those messages. Snooze
+/// stays a conversation's.
 fn apply_thread_action(
     conn: &mut rusqlite::Connection,
     thread_id: i64,
+    only: Option<&[i64]>,
     kind: ActionKind,
     params: Option<&ActionParams>,
 ) -> Result<Vec<(i64, i64)>> {
@@ -9629,10 +9899,12 @@ fn apply_thread_action(
     // Most thread actions intentionally ignore drafts. Archive and Trash are
     // exceptions: users can file or discard a draft from the Drafts view, and
     // excluding it here made the optimistic removal snap back on reconciliation.
-    let include_drafts = matches!(
-        kind,
-        ActionKind::Archive | ActionKind::Trash | ActionKind::DeletePermanently
-    );
+    // A draft chosen on its own is acted on like any other message.
+    let include_drafts = only.is_some()
+        || matches!(
+            kind,
+            ActionKind::Archive | ActionKind::Trash | ActionKind::DeletePermanently
+        );
     let mut stmt = tx.prepare(
         "SELECT m.id, m.folder_id, m.uid, m.is_read, m.is_starred, COALESCE(f.role,'')
          FROM messages m LEFT JOIN folders f ON f.id = m.folder_id
@@ -9652,6 +9924,17 @@ fn apply_thread_action(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
+    let mut msgs = msgs;
+    if let Some(only) = only {
+        msgs.retain(|message| only.contains(&message.0));
+    }
+    let message_only = only.is_some();
+    let scoped = |mut payload: serde_json::Value| {
+        if message_only {
+            payload["messageOnly"] = serde_json::Value::Bool(true);
+        }
+        payload
+    };
 
     fn folder_of(tx: &rusqlite::Transaction, account_id: i64, role: &str) -> Result<Option<i64>> {
         Ok(repo::folders::by_role(tx, account_id, role)?.map(|f| f.id))
@@ -9668,12 +9951,16 @@ fn apply_thread_action(
         target: i64,
         kind_str: &str,
         multi_mailbox: bool,
+        message_only: bool,
     ) -> Result<i64> {
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "srcFolderId": src_folder,
             "srcUid": src_uid,
             "targetFolderId": target,
         });
+        if message_only {
+            payload["messageOnly"] = serde_json::Value::Bool(true);
+        }
         repo::messages::set_uid_and_folder(tx, msg_id, target, None)?;
         if multi_mailbox {
             if let Some(src_folder) = src_folder {
@@ -9730,7 +10017,7 @@ fn apply_thread_action(
                     kind.as_str(),
                     Some(*id),
                     Some(thread_id),
-                    &serde_json::json!({"folderId": f, "uid": u}),
+                    &scoped(serde_json::json!({"folderId": f, "uid": u})),
                     None,
                 )?;
                 out.push((aid, account_id));
@@ -9741,7 +10028,7 @@ fn apply_thread_action(
             for (id, _f, _u, is_read, _s, _role) in &msgs {
                 if *is_read != target_read {
                     repo::messages::set_read(&tx, *id, target_read)?;
-                    let payload = serde_json::json!({});
+                    let payload = scoped(serde_json::json!({}));
                     let aid = repo::actions::enqueue(
                         &tx,
                         account_id,
@@ -9749,6 +10036,23 @@ fn apply_thread_action(
                         Some(*id),
                         Some(thread_id),
                         &payload,
+                        None,
+                    )?;
+                    out.push((aid, account_id));
+                }
+            }
+        }
+        ActionKind::Star if message_only => {
+            for (id, _f, _u, _r, is_starred, _role) in &msgs {
+                if !*is_starred {
+                    repo::messages::set_starred(&tx, *id, true)?;
+                    let aid = repo::actions::enqueue(
+                        &tx,
+                        account_id,
+                        "star",
+                        Some(*id),
+                        Some(thread_id),
+                        &scoped(serde_json::json!({})),
                         None,
                     )?;
                     out.push((aid, account_id));
@@ -9786,7 +10090,7 @@ fn apply_thread_action(
                         "unstar",
                         Some(*id),
                         Some(thread_id),
-                        &serde_json::json!({}),
+                        &scoped(serde_json::json!({})),
                         None,
                     )?;
                     out.push((aid, account_id));
@@ -9825,12 +10129,16 @@ fn apply_thread_action(
                         target,
                         kind_str,
                         multi_mailbox,
+                        message_only,
                     )?;
                     out.push((aid, account_id));
                 }
             }
-            // Archiving also clears snooze.
-            repo::snoozes::clear(&tx, thread_id)?;
+            // Archiving also clears snooze, once the whole conversation has
+            // left the inbox.
+            if !message_only || !thread_in_inbox(&tx, thread_id)? {
+                repo::snoozes::clear(&tx, thread_id)?;
+            }
         }
         ActionKind::Unarchive | ActionKind::NotSpam => {
             let target = folder_of(&tx, account_id, roles::INBOX)?
@@ -9854,6 +10162,7 @@ fn apply_thread_action(
                         target,
                         kind.as_str(),
                         multi_mailbox,
+                        message_only,
                     )?;
                     out.push((aid, account_id));
                 }
@@ -9882,6 +10191,7 @@ fn apply_thread_action(
                         target,
                         "move",
                         multi_mailbox,
+                        message_only,
                     )?;
                     out.push((aid, account_id));
                 }
@@ -9932,7 +10242,8 @@ fn apply_thread_action(
                 )));
             }
             let add = kind == ActionKind::AddLabel;
-            let payload = serde_json::json!({ "labelId": label_id, "keyword": label.keyword });
+            let payload =
+                scoped(serde_json::json!({ "labelId": label_id, "keyword": label.keyword }));
             for (id, ..) in &msgs {
                 if add {
                     repo::labels::add_to_message(&tx, *id, label_id)?;
@@ -10129,8 +10440,14 @@ mod move_action_validation_tests {
         )
         .unwrap();
 
-        let actions =
-            apply_thread_action(&mut conn, thread_id, ActionKind::DeletePermanently, None).unwrap();
+        let actions = apply_thread_action(
+            &mut conn,
+            thread_id,
+            None,
+            ActionKind::DeletePermanently,
+            None,
+        )
+        .unwrap();
         assert_eq!(actions.len(), 1);
         let action = repo::actions::get(&conn, actions[0].0).unwrap().unwrap();
         assert_eq!(action.message_id, Some(trash_id));
@@ -10138,9 +10455,171 @@ mod move_action_validation_tests {
         assert!(repo::messages::get_row(&conn, trash_id).unwrap().is_some());
         assert!(repo::messages::get_row(&conn, inbox_id).unwrap().is_some());
         assert!(
-            apply_thread_action(&mut conn, thread_id, ActionKind::DeletePermanently, None)
+            apply_thread_action(
+                &mut conn,
+                thread_id,
+                None,
+                ActionKind::DeletePermanently,
+                None
+            )
+            .unwrap()
+            .is_empty()
+        );
+    }
+
+    /// A conversation of two inbox messages, as two rows of a mail list
+    /// without conversations. Returns (thread, first message, second message).
+    fn two_message_conversation(conn: &rusqlite::Connection) -> (i64, i64, i64) {
+        let (thread_id, first) =
+            db::testutil::seed_message(conn, "sender@test.dev", "plans", false);
+        let (own_thread, second) =
+            db::testutil::seed_message(conn, "sender@test.dev", "re: plans", false);
+        conn.execute(
+            "UPDATE messages SET thread_id = ?1, date = 2000, uid = 10000 + id WHERE id = ?2",
+            rusqlite::params![thread_id, second],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM threads WHERE id = ?1", [own_thread])
+            .unwrap();
+        repo::threads::recompute(conn, thread_id).unwrap();
+        (thread_id, first, second)
+    }
+
+    #[test]
+    fn archiving_one_message_leaves_the_rest_of_its_conversation() {
+        let mut conn = db::testutil::conn();
+        db::testutil::seed_account(&conn);
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path, role) VALUES (2, 1, 'Archive', 'archive')",
+            [],
+        )
+        .unwrap();
+        let (thread_id, first, second) = two_message_conversation(&conn);
+        repo::snoozes::set(&conn, thread_id, 1, 9_999_999, Some(1)).unwrap();
+
+        let actions = apply_thread_action(
+            &mut conn,
+            thread_id,
+            Some(&[first]),
+            ActionKind::Archive,
+            None,
+        )
+        .unwrap();
+        assert_eq!(actions.len(), 1);
+        let action = repo::actions::get(&conn, actions[0].0).unwrap().unwrap();
+        assert_eq!(action.message_id, Some(first));
+        assert_eq!(action.payload["messageOnly"], true);
+        let folder = |conn: &rusqlite::Connection, id| {
+            repo::messages::get_row(conn, id)
                 .unwrap()
-                .is_empty()
+                .unwrap()
+                .folder_id
+        };
+        assert_eq!(folder(&conn, first), Some(2));
+        assert_eq!(
+            folder(&conn, second),
+            Some(1),
+            "the reply stays in the inbox"
+        );
+        let snoozed = |conn: &rusqlite::Connection| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM snoozes WHERE thread_id = ?1",
+                [thread_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(snoozed(&conn), 1, "the conversation is still in the inbox");
+
+        apply_thread_action(
+            &mut conn,
+            thread_id,
+            Some(&[second]),
+            ActionKind::Archive,
+            None,
+        )
+        .unwrap();
+        assert_eq!(snoozed(&conn), 0, "the whole conversation left the inbox");
+
+        // Undoing an archive that already reached the server moves back only
+        // that message.
+        repo::actions::set_state(&conn, action.id, "done", None).unwrap();
+        revert_action(&mut conn, &action).unwrap();
+        let inverse = conn
+            .query_row(
+                "SELECT payload FROM pending_actions
+                 WHERE kind = 'move' AND message_id = ?1 AND state = 'pending'",
+                [first],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        let inverse: serde_json::Value = serde_json::from_str(&inverse).unwrap();
+        assert_eq!(inverse["messageOnly"], true);
+        assert_eq!(folder(&conn, first), Some(1));
+    }
+
+    #[test]
+    fn reading_and_starring_one_message_changes_only_it() {
+        let mut conn = db::testutil::conn();
+        db::testutil::seed_account(&conn);
+        let (thread_id, first, second) = two_message_conversation(&conn);
+
+        apply_thread_action(
+            &mut conn,
+            thread_id,
+            Some(&[first]),
+            ActionKind::MarkRead,
+            None,
+        )
+        .unwrap();
+        let read = |id| {
+            conn.query_row("SELECT is_read FROM messages WHERE id = ?1", [id], |row| {
+                row.get::<_, bool>(0)
+            })
+            .unwrap()
+        };
+        assert!(read(first));
+        assert!(!read(second));
+        let unread: i64 = conn
+            .query_row(
+                "SELECT unread_count FROM threads WHERE id = ?1",
+                [thread_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unread, 1);
+
+        // A conversation stars its newest message; a chosen message stars
+        // itself.
+        let actions =
+            apply_thread_action(&mut conn, thread_id, Some(&[first]), ActionKind::Star, None)
+                .unwrap();
+        assert_eq!(actions.len(), 1);
+        let starred = |id| {
+            conn.query_row(
+                "SELECT is_starred FROM messages WHERE id = ?1",
+                [id],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
+        };
+        assert!(starred(first));
+        assert!(!starred(second));
+    }
+
+    #[test]
+    fn chosen_messages_group_by_their_conversations() {
+        let conn = db::testutil::conn();
+        db::testutil::seed_account(&conn);
+        let (thread_id, first, second) = two_message_conversation(&conn);
+        let (other_thread, other) =
+            db::testutil::seed_message(&conn, "someone@test.dev", "elsewhere", false);
+        assert_eq!(
+            messages_by_thread(&conn, &[first, other, 999, second]).unwrap(),
+            [
+                (thread_id, vec![first, second]),
+                (other_thread, vec![other])
+            ]
         );
     }
 
@@ -10163,7 +10642,7 @@ mod move_action_validation_tests {
             )
             .unwrap();
 
-            let actions = apply_thread_action(&mut conn, thread_id, kind, None).unwrap();
+            let actions = apply_thread_action(&mut conn, thread_id, None, kind, None).unwrap();
 
             assert_eq!(actions.len(), 1);
             let row = repo::messages::get_row(&conn, message_id).unwrap().unwrap();
@@ -10195,6 +10674,7 @@ mod move_action_validation_tests {
         let error = apply_thread_action(
             &mut conn,
             thread_id,
+            None,
             ActionKind::Move,
             Some(&ActionParams {
                 wake_at: None,
@@ -10234,6 +10714,7 @@ mod move_action_validation_tests {
         let error = apply_thread_action(
             &mut conn,
             thread_id,
+            None,
             ActionKind::AddLabel,
             Some(&ActionParams {
                 wake_at: None,
@@ -10285,6 +10766,7 @@ mod move_action_validation_tests {
         apply_thread_action(
             &mut conn,
             thread_id,
+            None,
             ActionKind::AddLabel,
             Some(&ActionParams {
                 wake_at: None,
@@ -10306,6 +10788,7 @@ mod move_action_validation_tests {
         let error = apply_thread_action(
             &mut conn,
             thread_id,
+            None,
             ActionKind::AddLabel,
             Some(&ActionParams {
                 wake_at: None,
@@ -10328,6 +10811,7 @@ mod move_action_validation_tests {
         let actions = apply_thread_action(
             &mut conn,
             thread_id,
+            None,
             ActionKind::AddLabel,
             Some(&ActionParams {
                 wake_at: None,
@@ -10367,6 +10851,14 @@ fn revert_action(
     let was_pending = repo::actions::try_cancel(conn, action.id)?;
     let tx = conn.transaction()?;
     let thread_id = action.thread_id;
+    // The inverse of an action on one message changes only that message too.
+    let message_only = action.payload["messageOnly"].as_bool() == Some(true);
+    let scoped = |mut payload: serde_json::Value| {
+        if message_only {
+            payload["messageOnly"] = serde_json::Value::Bool(true);
+        }
+        payload
+    };
 
     match action.kind.as_str() {
         "mark_read" | "mark_unread" => {
@@ -10384,7 +10876,7 @@ fn revert_action(
                         inverse,
                         Some(mid),
                         thread_id,
-                        &serde_json::json!({}),
+                        &scoped(serde_json::json!({})),
                         None,
                     )?;
                 }
@@ -10405,7 +10897,7 @@ fn revert_action(
                         inverse,
                         Some(mid),
                         thread_id,
-                        &serde_json::json!({}),
+                        &scoped(serde_json::json!({})),
                         None,
                     )?;
                 }
@@ -10435,11 +10927,11 @@ fn revert_action(
                             .filter(|row| row.folder_id == cur_folder)
                             .and_then(|row| row.uid);
                         repo::messages::set_uid_and_folder(&tx, mid, src, None)?;
-                        let payload = serde_json::json!({
+                        let payload = scoped(serde_json::json!({
                             "srcFolderId": cur_folder,
                             "srcUid": current_uid,
                             "targetFolderId": src,
-                        });
+                        }));
                         repo::actions::enqueue(
                             &tx,
                             action.account_id,

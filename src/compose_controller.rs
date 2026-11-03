@@ -660,7 +660,9 @@ mod tests {
     #[test]
     fn replies_use_wildcard_and_subaddress_matches_and_exclude_them_from_reply_all() {
         let mut source = source();
-        source.sender_identities.push(identity("*@team.example", false, false));
+        source
+            .sender_identities
+            .push(identity("*@team.example", false, false));
         source.to = vec![
             address("Support", "support@team.example"),
             address("Alex", "alex+launch@example.com"),

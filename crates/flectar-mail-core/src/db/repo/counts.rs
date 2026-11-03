@@ -346,6 +346,31 @@ pub fn mailbox_badge_counts_filtered(
     Ok(counts)
 }
 
+/// Unread threads in each folder. A thread counts once per folder that holds
+/// one of its messages.
+pub fn folder_unread_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
+    let mut stmt = conn.prepare(
+        "SELECT folder_id, COUNT(DISTINCT thread_id) FROM (
+             SELECT m.folder_id AS folder_id, m.thread_id AS thread_id
+             FROM messages m
+             JOIN threads t ON t.id = m.thread_id
+             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL
+             UNION
+             SELECT mf.folder_id, m.thread_id
+             FROM message_folders mf
+             JOIN messages m ON m.id = mf.message_id
+             JOIN threads t ON t.id = m.thread_id
+             JOIN accounts a ON a.id = m.account_id AND a.provider = 'gmail'
+             WHERE t.unread_count > 0
+         )
+         GROUP BY folder_id",
+    )?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

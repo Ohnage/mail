@@ -214,6 +214,8 @@ pub struct MailMetadata {
     pub inbox_count: usize,
     pub mailboxes: Vec<MailboxEntry>,
     pub unified_mailboxes: Vec<MailboxEntry>,
+    /// Unread threads per folder, used to total a merged folder.
+    pub folder_unreads: std::collections::HashMap<i64, i64>,
     /// The account of local mail, which an import creates.
     pub local_mail: Option<i64>,
 }
@@ -411,6 +413,9 @@ pub struct CoreMailSource {
     query_accounts: Arc<std::sync::Mutex<Option<Arc<[i64]>>>>,
     /// Business-tab recipient and sender filter. Empty does not filter.
     mail_scope: Arc<std::sync::Mutex<flectar_mail_core::recipient_match::MailScope>>,
+    /// Accounts that feed Company Inbox, merged folders, and tab tags.
+    /// `None` when no business tab is open.
+    company_accounts: Arc<std::sync::Mutex<Option<Arc<[i64]>>>>,
     /// Ordinary profiles also show local mail; business account lists do not expand.
     include_local_mail: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -433,7 +438,7 @@ impl CoreMailSource {
     /// out of date. The business-tab recipient and sender filter is kept.
     #[cfg(test)]
     pub fn set_profile_accounts(&self, accounts: Option<Vec<i64>>) -> bool {
-        self.set_view_scope(accounts.clone(), accounts, self.mail_scope(), true)
+        self.set_view_scope(accounts.clone(), accounts, self.mail_scope(), true, None)
     }
 
     /// Sidebar accounts, the query's account AND, and the business-tab
@@ -446,9 +451,11 @@ impl CoreMailSource {
         query: Option<Vec<i64>>,
         scope: flectar_mail_core::recipient_match::MailScope,
         include_local_mail: bool,
+        company_accounts: Option<Vec<i64>>,
     ) -> bool {
         let sidebar = normalize_account_ids(sidebar);
         let query = normalize_account_ids(query);
+        let company_accounts = normalize_account_ids(company_accounts);
         let changed = {
             let mut sidebar_current = self
                 .profile_accounts
@@ -462,9 +469,14 @@ impl CoreMailSource {
                 .mail_scope
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut company_current = self
+                .company_accounts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if *sidebar_current == sidebar
                 && *query_current == query
                 && *scope_current == scope
+                && *company_current == company_accounts
                 && self
                     .include_local_mail
                     .load(std::sync::atomic::Ordering::Acquire)
@@ -475,6 +487,7 @@ impl CoreMailSource {
             *sidebar_current = sidebar;
             *query_current = query;
             *scope_current = scope;
+            *company_current = company_accounts;
             self.include_local_mail
                 .store(include_local_mail, std::sync::atomic::Ordering::Release);
             true
@@ -675,6 +688,7 @@ impl CoreMailSource {
             profile_accounts: Arc::default(),
             query_accounts: Arc::default(),
             mail_scope: Arc::default(),
+            company_accounts: Arc::default(),
             include_local_mail: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
@@ -863,26 +877,52 @@ impl CoreMailSource {
         }
         // Per-account rows follow the sidebar. Unified totals follow the scope.
         badges.retain(|counts| profile_shows(profile, counts.account_id));
-        let inbox_source = if scope_filter.match_any || !scope_filter.address_inboxes.is_empty() {
-            &unified
+        let company = self.company_account_ids();
+        let inbox_badges = if let Some(company) = company.as_deref() {
+            let included = company
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>();
+            // Company totals are the real mailbox counts. The open per-account
+            // scope must not shrink them to a recipient rule.
+            let source = if scope_filter == flectar_mail_core::recipient_match::MailScope::default()
+            {
+                unified.clone()
+            } else {
+                self.core
+                    .mailbox_badge_counts_filtered(
+                        flectar_mail_core::recipient_match::MailScope::default(),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?
+            };
+            source
+                .into_iter()
+                .filter(|counts| included.contains(&counts.account_id))
+                .collect::<Vec<_>>()
+        } else if scope_filter.match_any || !scope_filter.address_inboxes.is_empty() {
+            unified.clone()
         } else {
-            &badges
+            badges.clone()
+        };
+        let folder_unreads = if company.is_some() {
+            self.core
+                .folder_unread_counts()
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            std::collections::HashMap::new()
         };
         Ok(MailMetadata {
             account_revision: self.account_revision(),
             scope,
-            inbox_count: inbox_source
+            inbox_count: inbox_badges
                 .iter()
                 .map(|counts| counts.inbox.max(0) as usize)
                 .sum(),
             mailboxes: mailbox_entries_with_counts(accounts, folders, local_mail, &badges),
-            unified_mailboxes: unified_mailbox_entries(
-                if scope_filter.match_any || !scope_filter.address_inboxes.is_empty() {
-                    &unified
-                } else {
-                    &badges
-                },
-            ),
+            unified_mailboxes: unified_mailbox_entries(&inbox_badges),
+            folder_unreads,
             local_mail,
         })
     }
@@ -936,9 +976,20 @@ impl CoreMailSource {
         // accounts; an account's own mailboxes need no more than its id.
         // `account_filter` is the query AND, which a sender-rule tab leaves
         // open while the sidebar still shows that tab's companies.
-        let account_filter = account_filter
-            .filter(|_| resolved.account_id.is_none() && !matches!(scope, Scope::AddressInbox(_)));
-        let account_id = resolved.account_id.filter(|_| account_filter.is_none());
+        let company_ids = self.company_account_ids().map(|ids| ids.to_vec());
+        let on_company_list = matches!(
+            scope,
+            Scope::CompanyInbox | Scope::MergedFolder(_) | Scope::TabTag(_) | Scope::Unified(_)
+        );
+        let mut listed_accounts = account_filter
+            .filter(|_| resolved.account_id.is_none() && !matches!(scope, Scope::AddressInbox(_)))
+            .map(|accounts| accounts.to_vec());
+        if on_company_list && let Some(accounts) = company_ids.clone() {
+            // Company rows ignore the named-tab address scope, which would
+            // pull hub mailboxes back in. The account set is the AND.
+            listed_accounts = Some(accounts);
+        }
+        let account_id = resolved.account_id.filter(|_| listed_accounts.is_none());
         let scope_filter = self.scope_filter(scope).await?;
         if matches!(scope, Scope::AddressInbox(_))
             && let Some(address) = scope_filter.address_inboxes.first()
@@ -954,25 +1005,37 @@ impl CoreMailSource {
                     return Err("search cursor used for a mailbox".into());
                 }
             };
-            let page = self
-                .core
-                .list_threads_scoped(
-                    resolved.view,
-                    resolved.split_id,
-                    account_id,
-                    account_filter.map(|accounts| accounts.to_vec()),
-                    resolved.label_id,
-                    resolved.folder_id,
-                    scope_filter,
-                    (cursor, limit),
-                )
-                .await
-                .map_err(|error| error.to_string())?;
+            let page = if resolved.folder_ids.is_some() || resolved.label_ids.is_some() {
+                self.core
+                    .list_company_threads(
+                        resolved.view,
+                        listed_accounts.clone().unwrap_or_default(),
+                        resolved.folder_ids.clone(),
+                        resolved.label_ids.clone(),
+                        (cursor, limit),
+                    )
+                    .await
+            } else {
+                self.core
+                    .list_threads_scoped(
+                        resolved.view,
+                        resolved.split_id,
+                        account_id,
+                        listed_accounts.clone(),
+                        resolved.label_id,
+                        resolved.folder_id,
+                        scope_filter.clone(),
+                        (cursor, limit),
+                    )
+                    .await
+            }
+            .map_err(|error| error.to_string())?;
             (page.threads, page.next_cursor.map(MailCursor::Thread))
         } else {
             // The mail list is a timeline: search narrows it, then presents
             // the newest matching threads first. Relevance-ranked retrieval
-            // remains available to non-UI core consumers.
+            // remains available to non-UI core consumers. On a business tab
+            // the search covers the company mailboxes, not the open account.
             let cursor = match cursor {
                 None => None,
                 Some(MailCursor::Search(cursor)) => Some(cursor),
@@ -983,13 +1046,25 @@ impl CoreMailSource {
             } else {
                 query.trim().to_owned()
             };
+            let (search_account, search_accounts, search_scope) =
+                if !matches!(scope, Scope::AddressInbox(_))
+                    && let Some(accounts) = company_ids.clone()
+                {
+                    (
+                        None,
+                        Some(accounts),
+                        flectar_mail_core::recipient_match::MailScope::default(),
+                    )
+                } else {
+                    (account_id, listed_accounts.clone(), scope_filter)
+                };
             let page = self
                 .core
                 .search_chronological_scoped(
                     query,
-                    account_id,
-                    account_filter.map(|accounts| accounts.to_vec()),
-                    scope_filter,
+                    search_account,
+                    search_accounts,
+                    search_scope,
                     cursor,
                     limit,
                 )
@@ -1330,7 +1405,10 @@ impl CoreMailSource {
     }
 
     pub async fn refresh_inbox_catalog(&self) -> Result<Settings, String> {
-        self.core.refresh_address_views().await.map_err(|error| error.to_string())
+        self.core
+            .refresh_address_views()
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub async fn set_notification_settings(
@@ -1667,10 +1745,25 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    fn company_account_ids(&self) -> Option<Arc<[i64]>> {
+        self.company_accounts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     async fn scope_filter(
         &self,
         scope: Scope,
     ) -> Result<flectar_mail_core::recipient_match::MailScope, String> {
+        if self.company_account_ids().is_some()
+            && matches!(
+                scope,
+                Scope::CompanyInbox | Scope::MergedFolder(_) | Scope::TabTag(_) | Scope::Unified(_)
+            )
+        {
+            return Ok(flectar_mail_core::recipient_match::MailScope::default());
+        }
         let Scope::AddressInbox(id) = scope else {
             return Ok(self.mail_scope());
         };
@@ -1678,7 +1771,11 @@ impl CoreMailSource {
         let accounts = self.load_accounts().await?;
         let mut presentation = crate::AccountPresentationSettings::from_settings(&settings);
         presentation.bind_accounts(&accounts);
-        if let Some(account) = presentation.inbox_accounts.iter().find(|account| account.id == id) {
+        if let Some(account) = presentation
+            .inbox_accounts
+            .iter()
+            .find(|account| account.id == id)
+        {
             return Ok(presentation.inbox_scope(account));
         }
         let view = presentation
@@ -2074,6 +2171,52 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn ensure_mailbox_path(&self, account_id: i64, path: String) -> Result<i64, String> {
+        self.core
+            .ensure_mailbox_path(account_id, path)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn apply_keyword_label(
+        &self,
+        thread_id: i64,
+        keyword: String,
+        name: String,
+        color: String,
+        add: bool,
+    ) -> Result<(), String> {
+        self.core
+            .apply_keyword_label(thread_id, keyword, name, color, add)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn create_tab_tags(
+        &self,
+        account_ids: Vec<i64>,
+        name: String,
+        color: String,
+    ) -> Result<Vec<Label>, String> {
+        self.core
+            .create_tab_tags(account_ids, name, color)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn restyle_keyword(
+        &self,
+        account_ids: Vec<i64>,
+        keyword: String,
+        name: String,
+        color: String,
+    ) -> Result<(), String> {
+        self.core
+            .restyle_keyword(account_ids, keyword, name, color)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn sync_now(&self, account_id: Option<i64>) -> Result<(), String> {
         self.core
             .sync_now(account_id)
@@ -2451,7 +2594,11 @@ fn append_folder_tree<'a>(
                 }),
             ),
             context: account_label.to_owned(),
-            detail: String::new(),
+            detail: if standard_mailbox.is_some() {
+                String::new()
+            } else {
+                folder.display_name.clone()
+            },
             avatar: String::new(),
             is_account: false,
             count: String::new(),
@@ -2805,6 +2952,8 @@ fn mailbox_badge(mailbox: StandardMailbox, counts: &MailboxBadgeCounts) -> Strin
 struct ScopeResolution {
     account_id: Option<i64>,
     folder_id: Option<i64>,
+    folder_ids: Option<Vec<i64>>,
+    label_ids: Option<Vec<i64>>,
     split_id: Option<i64>,
     label_id: Option<i64>,
     view: View,
@@ -2815,12 +2964,51 @@ fn resolve_scope(scope: Scope, folders: &[FolderInfo], labels: &[Label]) -> Scop
     let unfiltered = |view, title: &str| ScopeResolution {
         account_id: None,
         folder_id: None,
+        folder_ids: None,
+        label_ids: None,
         split_id: None,
         label_id: None,
         view,
         title: title.to_owned(),
     };
     match scope {
+        Scope::CompanyInbox => unfiltered(View::Inbox, "Company Inbox"),
+        Scope::MergedFolder(id) => {
+            let members = folders
+                .iter()
+                .filter(|folder| {
+                    !is_standard_folder(folder)
+                        && flectar_mail_core::company_view::folder_scope_id(&folder.display_name)
+                            == id
+                })
+                .collect::<Vec<_>>();
+            let title = members
+                .first()
+                .map(|folder| folder_label(folder))
+                .unwrap_or_else(|| "Folder".to_owned());
+            ScopeResolution {
+                folder_ids: Some(members.iter().map(|folder| folder.id).collect()),
+                ..unfiltered(View::All, &title)
+            }
+        }
+        Scope::TabTag(id) => {
+            let members = labels
+                .iter()
+                .filter(|label| {
+                    !label.is_auto
+                        && label.owner_account_id.is_some()
+                        && flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id
+                })
+                .collect::<Vec<_>>();
+            let title = members
+                .first()
+                .map(|label| label.name.clone())
+                .unwrap_or_else(|| "Tag".to_owned());
+            ScopeResolution {
+                label_ids: Some(members.iter().map(|label| label.id).collect()),
+                ..unfiltered(View::All, &title)
+            }
+        }
         Scope::AddressInbox(_) => unfiltered(View::Inbox, "Address inbox"),
         Scope::Unified(mailbox) => unfiltered(standard_mailbox_view(mailbox), mailbox.label()),
         Scope::Important => ScopeResolution {
@@ -2876,7 +3064,17 @@ fn validated_startup_scope(
     labels: &[Label],
 ) -> Scope {
     let scope = match preferred {
-        Scope::AddressInbox(_) => Some(preferred),
+        Scope::AddressInbox(_) | Scope::CompanyInbox => Some(preferred),
+        Scope::MergedFolder(id) => folders
+            .iter()
+            .any(|folder| {
+                flectar_mail_core::company_view::folder_scope_id(&folder.display_name) == id
+            })
+            .then_some(preferred),
+        Scope::TabTag(id) => labels
+            .iter()
+            .any(|label| flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id)
+            .then_some(preferred),
         Scope::Unified(_) | Scope::Important | Scope::Other => Some(preferred),
         // A label can move between sections, e.g. when it becomes automatic.
         Scope::Label { id, .. } => {

@@ -106,6 +106,14 @@ pub(crate) enum Scope {
         account_id: i64,
         mailbox: StandardMailbox,
     },
+    /// Inbox of every company-view mailbox on the open business tab.
+    CompanyInbox,
+    /// Folders that share one path across the tab. The id is
+    /// [`flectar_mail_core::company_view::folder_scope_id`].
+    MergedFolder(i64),
+    /// One keyword across the tab. The id is
+    /// [`flectar_mail_core::company_view::tag_scope_id`].
+    TabTag(i64),
 }
 
 impl Default for Scope {
@@ -135,7 +143,10 @@ impl Scope {
             | Self::Label {
                 kind: LabelKind::Account,
                 ..
-            } => Self::UNIFIED_INBOX,
+            }
+            | Self::CompanyInbox
+            | Self::MergedFolder(_)
+            | Self::TabTag(_) => Self::UNIFIED_INBOX,
             Self::Unified(_) | Self::Important | Self::Other | Self::Label { .. } => self,
             Self::AddressInbox(_) => self,
         }
@@ -181,6 +192,9 @@ impl fmt::Display for Scope {
                 "{ACCOUNT_PREFIX}{account_id}:{}",
                 mailbox.label()
             ),
+            Self::CompanyInbox => formatter.write_str("Company Inbox"),
+            Self::MergedFolder(id) => write!(formatter, "MergedFolder:{id}"),
+            Self::TabTag(id) => write!(formatter, "TabTag:{id}"),
         }
     }
 }
@@ -225,6 +239,15 @@ impl FromStr for Scope {
         }
         if let Some(folder_id) = key.strip_prefix(FOLDER_PREFIX) {
             return id(folder_id).map(Self::Folder);
+        }
+        if key == "Company Inbox" {
+            return Ok(Self::CompanyInbox);
+        }
+        if let Some(merged) = key.strip_prefix("MergedFolder:") {
+            return id(merged).map(Self::MergedFolder);
+        }
+        if let Some(tag) = key.strip_prefix("TabTag:") {
+            return id(tag).map(Self::TabTag);
         }
         if let Some(rest) = key.strip_prefix(ACCOUNT_PREFIX) {
             let (account_id, label) = rest.split_once(':').ok_or_else(error)?;
@@ -317,6 +340,9 @@ mod tests {
         for kind in [LabelKind::Category, LabelKind::Global, LabelKind::Account] {
             scopes.push(Scope::Label { kind, id: 7 });
         }
+        scopes.push(Scope::CompanyInbox);
+        scopes.push(Scope::MergedFolder(1_000_000_001));
+        scopes.push(Scope::TabTag(1_000_000_002));
         scopes
     }
 
@@ -390,7 +416,10 @@ mod tests {
                 | Scope::Label {
                     kind: LabelKind::Account,
                     ..
-                } => Scope::UNIFIED_INBOX,
+                }
+                | Scope::CompanyInbox
+                | Scope::MergedFolder(_)
+                | Scope::TabTag(_) => Scope::UNIFIED_INBOX,
                 other => other,
             };
             assert_eq!(scope.unified(), expected, "{scope}");

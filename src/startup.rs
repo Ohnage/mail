@@ -592,11 +592,15 @@ pub(crate) async fn load_startup_snapshot(
         let mut presentation = AccountPresentationSettings::from_settings(settings);
         presentation.bind_accounts(&address_accounts);
         let (sidebar, query, scope) = presentation.view_scope();
+        let company = presentation
+            .active_business()
+            .map(|_| presentation.company_account_ids(&address_accounts));
         let _ = core.set_view_scope(
             sidebar,
             query,
             scope,
             presentation.active_business().is_none(),
+            company,
         );
     }
     let (mail, configs, local_mail) = tokio::join!(

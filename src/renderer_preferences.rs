@@ -36,10 +36,7 @@ struct Preference {
     renderer: RendererMode,
 }
 
-pub(crate) const GPU_SUPPORTED: bool = cfg!(all(
-    feature = "gpu-renderer",
-    desktop
-));
+pub(crate) const GPU_SUPPORTED: bool = cfg!(all(feature = "gpu-renderer", desktop));
 
 pub(crate) fn load(path: &Path) -> RendererMode {
     let result = (|| -> Result<Preference, Box<dyn std::error::Error>> {

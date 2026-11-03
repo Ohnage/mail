@@ -306,6 +306,75 @@ pub fn for_thread(conn: &Connection, thread_id: i64) -> Result<Vec<i64>> {
     Ok(rows)
 }
 
+/// The account's tag for `keyword`, creating it when the account has none.
+///
+/// The new row keeps `keyword` exactly, so a tab tag stays one keyword across
+/// accounts instead of a name-derived atom that would not match `$label:`.
+pub fn ensure_keyword_label(
+    conn: &Connection,
+    account_id: i64,
+    name: &str,
+    color: &str,
+    keyword: &str,
+) -> Result<Label> {
+    if let Some(existing) = label_by_keyword(conn, account_id, keyword)? {
+        return Ok(existing);
+    }
+    let position: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(position), 0) + 1 FROM labels WHERE owner_account_id = ?1",
+        params![account_id],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO labels (
+           name, color, keyword, position, is_auto, scope, owner_account_id, origin
+         ) VALUES (?1, ?2, ?3, ?4, 0, 'account', ?5, 'user')",
+        params![name, color, keyword, position, account_id],
+    )?;
+    let id = conn.last_insert_rowid();
+    get(conn, id)?.ok_or_else(|| CoreError::NotFound(format!("label {id}")))
+}
+
+pub fn label_by_keyword(
+    conn: &Connection,
+    account_id: i64,
+    keyword: &str,
+) -> Result<Option<Label>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, color, keyword, position, owner_account_id, is_auto
+         FROM labels WHERE owner_account_id = ?1 AND keyword = ?2",
+    )?;
+    Ok(stmt
+        .query_row(params![account_id, keyword], from_row)
+        .optional()?)
+}
+
+/// Give every account copy of `keyword` the same name and color.
+pub fn restyle_keyword(
+    conn: &Connection,
+    account_ids: &[i64],
+    keyword: &str,
+    name: &str,
+    color: &str,
+) -> Result<Vec<i64>> {
+    let mut updated = Vec::new();
+    for account_id in account_ids {
+        let Some(label) = label_by_keyword(conn, *account_id, keyword)? else {
+            continue;
+        };
+        if label.name == name && label.color == color {
+            updated.push(label.id);
+            continue;
+        }
+        conn.execute(
+            "UPDATE labels SET name = ?2, color = ?3 WHERE id = ?1",
+            params![label.id, name, color],
+        )?;
+        updated.push(label.id);
+    }
+    Ok(updated)
+}
+
 pub fn add_to_message(conn: &Connection, message_id: i64, label_id: i64) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO message_labels (message_id, label_id) VALUES (?1, ?2)",

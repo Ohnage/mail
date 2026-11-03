@@ -64,6 +64,18 @@ What this fork adds:
 - **Mail profiles, with color and a logo.** Profiles still group accounts.
   This fork stores a profile color and a logo, and uses them on the tab, in
   the sidebar, and as the company badge on a message row.
+- **Company Inbox.** A business tab opens on one Company Inbox covering
+  every mailbox on that tab, whether the tab is named accounts or profiles.
+  Sent, Drafts, Archive, Spam, Trash, and Starred are the same rows for the
+  whole tab. Folders that share a path merge into one tree; filing a message
+  uses that path on the message's own account and creates it there when it
+  is missing. Tags that share a `$label:` keyword appear once. Applying one
+  writes the keyword on each message's account, and a new tag or a color
+  chosen for it is stored on every company mailbox so it syncs. The separate
+  accounts stay under a Mailboxes section that starts collapsed. Addresses
+  starting with `hub@` never feed these views. `inbox@` starts excluded, and
+  any other address starts included; `companyViewExcluded` in settings
+  overrides that default except for `hub@`.
 - **Named accounts.** Settings → Accounts groups selected mailboxes and
   receiving addresses under a name, icon, and color. A mailbox can belong to
   more than one named account. Business tabs choose those named accounts.

@@ -1568,7 +1568,12 @@ fn sync_rows(model: &VecModel<TabRow>, rows: impl Iterator<Item = TabRow>) {
 /// profile leaves out is not shown either.
 fn available_scope(scope: Scope, state: &InboxState) -> Option<Scope> {
     match scope {
-        Scope::AddressInbox(id) if id < 0 => state.account_presentation.visible_inbox_accounts().iter().any(|account| account.id == id).then_some(scope),
+        Scope::AddressInbox(id) if id < 0 => state
+            .account_presentation
+            .visible_inbox_accounts()
+            .iter()
+            .any(|account| account.id == id)
+            .then_some(scope),
         Scope::AddressInbox(id) => state
             .account_presentation
             .visible_address_views()
@@ -1576,6 +1581,24 @@ fn available_scope(scope: Scope, state: &InboxState) -> Option<Scope> {
             .any(|view| view.id == id)
             .then_some(scope),
         Scope::Unified(_) | Scope::Important | Scope::Other => Some(scope),
+        Scope::CompanyInbox => state
+            .account_presentation
+            .active_business()
+            .is_some()
+            .then_some(scope),
+        Scope::MergedFolder(id) => state
+            .mailboxes
+            .iter()
+            .any(|mailbox| {
+                !mailbox.detail.is_empty()
+                    && flectar_mail_core::company_view::folder_scope_id(&mailbox.detail) == id
+            })
+            .then_some(scope),
+        Scope::TabTag(id) => state
+            .labels
+            .iter()
+            .any(|label| flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id)
+            .then_some(scope),
         // A label can move between sections, e.g. when it becomes automatic.
         Scope::Label { id, .. } => state
             .labels

@@ -260,7 +260,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         initialized_sidebar_folders,
         collapsed_folder_ids,
     );
-    let query = state.folder_filter.trim();
+    let query = state.folder_filter.trim().to_owned();
     let filtering = !query.is_empty();
     let no_collapsed_folders = HashSet::new();
     let mut mailboxes = make_mailbox_rows(
@@ -310,18 +310,54 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         .filter(|account| account.mail_protocol == MailProtocol::Gmail)
         .filter_map(|account| i32::try_from(account.id).ok())
         .collect::<HashSet<_>>();
-    let mut rows = if filtering {
-        make_filtered_sidebar_rows(mailboxes, labels, query, &gmail_account_ids)
+    let business_tab = state.account_presentation.active_business().is_some();
+    let unified_rows = make_mailbox_rows(
+        &state.unified_mailboxes,
+        &state.profile_avatar_images,
+        &state.labels,
+        &no_collapsed_folders,
+    );
+    let mut rows = if business_tab {
+        let company_ids = state.company_account_ids.clone().unwrap_or_default();
+        let no_sections = HashSet::new();
+        let no_folders = HashSet::new();
+        let collapsed_sections = if filtering {
+            &no_sections
+        } else {
+            &state.collapsed_sidebar_sections
+        };
+        let collapsed_folders = if filtering {
+            &no_folders
+        } else {
+            &state.collapsed_folder_ids
+        };
+        let (company_rows, company_mailboxes) = make_company_sidebar_rows(
+            mailboxes,
+            unified_rows,
+            labels,
+            &state.labels,
+            &gmail_account_ids,
+            collapsed_sections,
+            collapsed_folders,
+            &company_ids,
+            &state.folder_unreads,
+            state.inbox_count,
+        );
+        state.company_mailboxes = company_mailboxes;
+        if filtering {
+            filter_company_rows(company_rows, &query)
+        } else {
+            company_rows
+        }
+    } else if filtering {
+        state.company_mailboxes.clear();
+        make_filtered_sidebar_rows(mailboxes, labels, &query, &gmail_account_ids)
     } else {
+        state.company_mailboxes.clear();
         make_sidebar_rows(
             SidebarLayout::for_account_count(state.mail_accounts().len()),
             mailboxes,
-            make_mailbox_rows(
-                &state.unified_mailboxes,
-                &state.profile_avatar_images,
-                &state.labels,
-                &no_collapsed_folders,
-            ),
+            unified_rows,
             labels,
             &gmail_account_ids,
             &state.collapsed_sidebar_sections,
@@ -384,8 +420,12 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             ) && row.mailbox.account_id <= 0
         });
     }
-    address_rows.append(&mut rows);
-    let rows = address_rows;
+    let rows = if business_tab {
+        rows
+    } else {
+        address_rows.append(&mut rows);
+        address_rows
+    };
     // Model notifications can synchronously inspect application state.
     let model = Rc::clone(&state.sidebar_rows);
     let animation = Rc::clone(&state.sidebar_animation);
@@ -656,6 +696,251 @@ fn make_sidebar_rows(
             rows
         }
     }
+}
+
+fn company_unified_rank(scope: &str) -> u8 {
+    match scope {
+        "Unified Sent" => 0,
+        "Unified Drafts" => 1,
+        "Unified Archive" => 2,
+        "Unified Spam" => 3,
+        "Unified Trash" => 4,
+        "Unified Starred" => 5,
+        _ => 6,
+    }
+}
+
+fn label_swatch(value: &str) -> slint::Color {
+    value
+        .strip_prefix('#')
+        .filter(|hex| hex.len() == 6)
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+        .map(|rgb| {
+            slint::Color::from_rgb_u8(
+                ((rgb >> 16) & 0xff) as u8,
+                ((rgb >> 8) & 0xff) as u8,
+                (rgb & 0xff) as u8,
+            )
+        })
+        .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
+}
+
+/// Company layout: one inbox, tab-wide special mailboxes, one folder tree,
+/// one tag list, then the per-account rows under a collapsed Mailboxes section.
+#[allow(clippy::too_many_arguments)]
+fn make_company_sidebar_rows(
+    mailboxes: Vec<MailboxRow>,
+    mut unified: Vec<MailboxRow>,
+    labels: Vec<MailLabelRow>,
+    source_labels: &[flectar_mail_core::models::Label],
+    gmail_account_ids: &HashSet<i32>,
+    collapsed: &HashSet<String>,
+    collapsed_folders: &HashSet<i64>,
+    company_ids: &[i64],
+    folder_unreads: &HashMap<i64, i64>,
+    inbox_count: usize,
+) -> (Vec<SidebarRow>, Vec<MailboxEntry>) {
+    use SidebarRowKind as Kind;
+    use flectar_mail_core::company_view::{FolderLeaf, TagCopy, merge_folders, merge_tags};
+
+    let company = company_ids.iter().copied().collect::<HashSet<_>>();
+    let mut heading = row(Kind::UnifiedHeading, "company-heading");
+    heading.mailbox.label = "COMPANY".into();
+    let mut inbox = row(Kind::UnifiedInbox, "company-inbox");
+    inbox.mailbox = MailboxRow {
+        folder_id: -1,
+        is_selectable: true,
+        label: "Company Inbox".into(),
+        scope: Scope::CompanyInbox.to_string().into(),
+        count: if inbox_count > 0 {
+            inbox_count.to_string().into()
+        } else {
+            Default::default()
+        },
+        ..Default::default()
+    };
+    unified.sort_by_key(|mailbox| company_unified_rank(mailbox.scope.as_str()));
+    let mut rows = vec![heading, inbox];
+    rows.extend(unified.into_iter().map(|mailbox| SidebarRow {
+        key: format!("unified:{}", mailbox.scope).into(),
+        mailbox,
+        ..row(Kind::UnifiedMailbox, "")
+    }));
+    rows.extend(shared_navigation_rows(&labels, collapsed));
+
+    let leaves = mailboxes
+        .iter()
+        .filter(|mailbox| {
+            !mailbox.is_account
+                && !mailbox.is_standard
+                && company.contains(&i64::from(mailbox.account_id))
+                && !mailbox.detail.is_empty()
+        })
+        .map(|mailbox| FolderLeaf {
+            account_id: i64::from(mailbox.account_id),
+            folder_id: i64::from(mailbox.folder_id),
+            path: mailbox.detail.to_string(),
+            unread: folder_unreads
+                .get(&i64::from(mailbox.folder_id))
+                .copied()
+                .unwrap_or(0),
+        })
+        .collect::<Vec<_>>();
+    let merged = merge_folders(&leaves);
+    let mut company_mailboxes = Vec::with_capacity(merged.len());
+    let mut hidden_depth = None;
+    for node in &merged {
+        if let Some(depth) = hidden_depth {
+            if node.depth > depth {
+                continue;
+            }
+            hidden_depth = None;
+        }
+        let expanded = !collapsed_folders.contains(&node.id);
+        if node.has_children && !expanded {
+            hidden_depth = Some(node.depth);
+        }
+        let scope = Scope::MergedFolder(node.id);
+        company_mailboxes.push(MailboxEntry {
+            account_id: 0,
+            folder_id: node.id,
+            parent_folder_id: node.parent_id,
+            depth: usize::try_from(node.depth).unwrap_or(0),
+            has_children: node.has_children,
+            is_standard: false,
+            is_selectable: true,
+            can_create_children: false,
+            can_rename: false,
+            can_delete: false,
+            label: node.label.clone(),
+            scope: Some(scope),
+            context: "Company".to_owned(),
+            detail: node.path.clone(),
+            avatar: String::new(),
+            is_account: false,
+            count: if node.unread > 0 {
+                node.unread.to_string()
+            } else {
+                String::new()
+            },
+        });
+        let folder_id = i32::try_from(node.id).unwrap_or(-1);
+        rows.push(SidebarRow {
+            key: format!("merged-folder:{folder_id}").into(),
+            mailbox: MailboxRow {
+                account_id: 0,
+                folder_id,
+                parent_folder_id: i32::try_from(node.parent_id).unwrap_or(-1),
+                depth: node.depth,
+                has_children: node.has_children,
+                expanded,
+                is_selectable: true,
+                label: node.label.clone().into(),
+                scope: scope.to_string().into(),
+                detail: node.path.clone().into(),
+                count: if node.unread > 0 {
+                    node.unread.to_string().into()
+                } else {
+                    Default::default()
+                },
+                ..Default::default()
+            },
+            ..row(Kind::Folder, "")
+        });
+    }
+    let copies = source_labels
+        .iter()
+        .filter(|label| {
+            !label.is_auto
+                && label
+                    .owner_account_id
+                    .is_some_and(|account_id| company.contains(&account_id))
+                && !label.keyword.is_empty()
+        })
+        .map(|label| TagCopy {
+            account_id: label.owner_account_id.unwrap_or_default(),
+            label_id: label.id,
+            keyword: label.keyword.clone(),
+            name: label.name.clone(),
+            color: label.color.clone(),
+        })
+        .collect::<Vec<_>>();
+    rows.push(section(
+        Kind::GlobalLabelsSection,
+        "company-tags",
+        collapsed,
+    ));
+    if !collapsed.contains("company-tags") {
+        for tag in merge_tags(&copies) {
+            let Some(member) = tag.members.first() else {
+                continue;
+            };
+            let Some(id) = i32::try_from(member.label_id).ok() else {
+                continue;
+            };
+            rows.push(SidebarRow {
+                key: format!("tab-tag:{}", tag.id).into(),
+                mailbox: MailboxRow {
+                    account_id: -2,
+                    scope: Scope::TabTag(tag.id).to_string().into(),
+                    context: "Company".into(),
+                    ..Default::default()
+                },
+                label: MailLabelRow {
+                    id,
+                    account_id: -2,
+                    account_name: "Company".into(),
+                    name: tag.name.clone().into(),
+                    display_name: tag.name.clone().into(),
+                    color: label_swatch(&tag.color),
+                    ..Default::default()
+                },
+                ..row(Kind::AccountLabel, "")
+            });
+        }
+        rows.push(SidebarRow {
+            mailbox: MailboxRow {
+                account_id: -2,
+                context: "Company".into(),
+                ..Default::default()
+            },
+            ..row(Kind::NewLabel, "new-label:company")
+        });
+    }
+
+    rows.push(section(Kind::AccountsHeading, "mailboxes", collapsed));
+    if !collapsed.contains("mailboxes") {
+        rows.extend(account_rows(
+            mailboxes,
+            &labels,
+            gmail_account_ids,
+            collapsed,
+        ));
+    }
+    (rows, company_mailboxes)
+}
+
+fn filter_company_rows(rows: Vec<SidebarRow>, query: &str) -> Vec<SidebarRow> {
+    use SidebarRowKind as Kind;
+    let query = query.to_lowercase();
+    rows.into_iter()
+        .filter(|row| {
+            matches!(
+                row.kind,
+                Kind::Folder
+                    | Kind::AccountLabel
+                    | Kind::UnifiedMailbox
+                    | Kind::UnifiedInbox
+                    | Kind::Account
+                    | Kind::Important
+                    | Kind::Other
+                    | Kind::Category
+                    | Kind::GlobalLabel
+            ) && (row.mailbox.label.to_lowercase().contains(&query)
+                || row.mailbox.detail.to_lowercase().contains(&query)
+                || row.label.name.to_lowercase().contains(&query))
+        })
+        .collect()
 }
 
 fn unified_rows(unified: Vec<MailboxRow>) -> Vec<SidebarRow> {
@@ -1614,25 +1899,27 @@ mod tests {
     fn a_named_account_spanning_mailboxes_keeps_inbox_sent_and_its_folders() {
         use flectar_mail_core::models::InboxAccount;
 
-        let mut presentation = super::super::AccountPresentationSettings::default();
-        presentation.inbox_accounts = vec![InboxAccount {
-            id: -7,
-            name: "Mentink Media".into(),
-            icon: None,
-            color: None,
-            account_ids: vec![9, 4, 9, 2],
-            address_view_ids: vec![],
-            automatic_profile: None,
-            profile_id: None,
-        }];
-        presentation.business_tabs = serde_json::from_value(serde_json::json!([
-            {"id":"tm","name":"TM","profileIds":[]}
-        ]))
-        .unwrap();
+        let mut presentation = super::super::AccountPresentationSettings {
+            inbox_accounts: vec![InboxAccount {
+                id: -7,
+                name: "Example Media".into(),
+                icon: None,
+                color: None,
+                account_ids: vec![9, 4, 9, 2],
+                address_view_ids: vec![],
+                automatic_profile: None,
+                profile_id: None,
+            }],
+            business_tabs: serde_json::from_value(serde_json::json!([
+                {"id":"tm","name":"TM","profileIds":[]}
+            ]))
+            .unwrap(),
+            active_business_tab: Some("tm".into()),
+            ..Default::default()
+        };
         presentation
             .business_tab_accounts
             .insert("tm".into(), vec![-7]);
-        presentation.active_business_tab = Some("tm".into());
 
         let (sidebar, query, scope) = presentation.view_scope();
         assert_eq!(sidebar, Some(vec![2, 4, 9]));

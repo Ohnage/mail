@@ -44,6 +44,12 @@ pub(super) enum Operation {
     EmptyTrash(Option<i64>),
     Drop(MailDropDestination),
     Label(i64, bool),
+    Keyword {
+        keyword: String,
+        name: String,
+        color: String,
+        add: bool,
+    },
 }
 impl Operation {
     fn queues_permanent_deletion(&self) -> bool {
@@ -61,7 +67,8 @@ impl Operation {
                 "archive" | "spam" | "trash" | "not_spam" | "unarchive"
             ),
             Self::EmptyTrash(_) => false,
-            Self::Drop(MailDropDestination::Folder(_)) => true,
+            Self::Drop(MailDropDestination::Folder(_))
+            | Self::Drop(MailDropDestination::EnsureFolder { .. }) => true,
             Self::Drop(MailDropDestination::Action(a)) => Self::Action((*a).into()).moves(),
             _ => false,
         }
@@ -71,14 +78,36 @@ impl Operation {
             Self::Action(a) => core.perform_message_action(thread, a).await,
             Self::EmptyTrash(account_id) => core.empty_trash(*account_id).await,
             Self::Label(id, add) => core.perform_label_action(thread, *id, *add).await,
+            Self::Keyword {
+                keyword,
+                name,
+                color,
+                add,
+            } => {
+                core.apply_keyword_label(thread, keyword.clone(), name.clone(), color.clone(), *add)
+                    .await
+            }
             Self::Drop(MailDropDestination::Action(a)) => {
                 core.perform_message_action(thread, a).await
             }
             Self::Drop(MailDropDestination::Folder(id)) => {
                 core.move_thread_to_folder(thread, *id).await
             }
+            Self::Drop(MailDropDestination::EnsureFolder { account_id, path }) => {
+                let folder_id = core.ensure_mailbox_path(*account_id, path.clone()).await?;
+                core.move_thread_to_folder(thread, folder_id).await
+            }
             Self::Drop(MailDropDestination::Label(id)) => {
                 core.perform_label_action(thread, *id, true).await
+            }
+            Self::Drop(MailDropDestination::Keyword {
+                keyword,
+                name,
+                color,
+                add,
+            }) => {
+                core.apply_keyword_label(thread, keyword.clone(), name.clone(), color.clone(), *add)
+                    .await
             }
             Self::Drop(MailDropDestination::Route(tab)) => {
                 core.route_thread_to_tab(thread, tab.clone()).await

@@ -36,9 +36,9 @@ use windows_sys::Win32::UI::Shell::{
     APPBARDATA, DefSubclassProc, RemoveWindowSubclass, SHAppBarMessage, SetWindowSubclass,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, GWL_STYLE, GetClassNameW, GetClientRect, GetWindowLongW, HCBT_CREATEWND,
-    HHOOK, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-    IsZoomed, NCCALCSIZE_PARAMS, PostMessageW, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+    CallNextHookEx, GWL_STYLE, GetClassNameW, GetClientRect, GetWindowLongW, HCBT_CREATEWND, HHOOK,
+    HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT, HTTOPRIGHT, IsZoomed,
+    NCCALCSIZE_PARAMS, PostMessageW, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
     SM_CXPADDEDBORDER, SM_CYSIZEFRAME, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, SetWindowsHookExW,
     UnhookWindowsHookEx, WH_CBT, WM_MOUSEMOVE, WM_NCCALCSIZE, WM_NCDESTROY, WM_NCHITTEST,
@@ -126,7 +126,12 @@ pub(super) fn prepare(startup: WindowFrame) {
             // SAFETY: a thread-local CBT hook on the UI thread, removed once
             // the main window has been subclassed.
             let hook = unsafe {
-                SetWindowsHookExW(WH_CBT, Some(creation_hook), null_mut(), GetCurrentThreadId())
+                SetWindowsHookExW(
+                    WH_CBT,
+                    Some(creation_hook),
+                    null_mut(),
+                    GetCurrentThreadId(),
+                )
             };
             state.hook.set(hook);
         }
@@ -144,7 +149,12 @@ pub(super) fn rearm() {
         // SAFETY: a thread-local CBT hook on the UI thread, removed once the
         // recreated window has been subclassed.
         let hook = unsafe {
-            SetWindowsHookExW(WH_CBT, Some(creation_hook), null_mut(), GetCurrentThreadId())
+            SetWindowsHookExW(
+                WH_CBT,
+                Some(creation_hook),
+                null_mut(),
+                GetCurrentThreadId(),
+            )
         };
         state.hook.set(hook);
     });
@@ -246,8 +256,7 @@ fn is_main_window_class(hwnd: HWND) -> bool {
         return false;
     }
     let name = String::from_utf16_lossy(&name[..length as usize]);
-    name == CLASS_NAME
-        || (name == WINIT_CLASS_NAME && STATE.with(|state| state.recreating.get()))
+    name == CLASS_NAME || (name == WINIT_CLASS_NAME && STATE.with(|state| state.recreating.get()))
 }
 
 unsafe extern "system" fn subclass_proc(
@@ -429,7 +438,11 @@ fn leave_autohide_taskbars_reachable(hwnd: HWND, client: &mut RECT) {
         }
         let mut monitor: MONITORINFO = std::mem::zeroed();
         monitor.cbSize = size_of::<MONITORINFO>() as u32;
-        if GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut monitor) == 0 {
+        if GetMonitorInfoW(
+            MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
+            &mut monitor,
+        ) == 0
+        {
             return;
         }
         for edge in [ABE_LEFT, ABE_TOP, ABE_RIGHT, ABE_BOTTOM] {

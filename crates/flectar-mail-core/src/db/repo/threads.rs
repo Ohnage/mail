@@ -284,6 +284,12 @@ pub struct ListArgs {
     pub account_ids: Option<Vec<i64>>,
     /// Restrict to threads with a message in this folder (user-folder view).
     pub folder_id: Option<i64>,
+    /// Threads with a message in any of these folders. Empty matches nothing.
+    /// When set, `folder_id` is ignored.
+    pub folder_ids: Option<Vec<i64>>,
+    /// Threads carrying any of these labels. Empty matches nothing.
+    /// When set, `tab` is not also a label filter.
+    pub label_ids: Option<Vec<i64>>,
     pub cursor: Option<ThreadCursor>,
     pub limit: i64,
 }
@@ -298,6 +304,42 @@ const HUMAN_BUCKET: &str = "(SELECT m.is_automated FROM messages m
 const AUTO_BUCKET: &str = "(SELECT m.is_automated FROM messages m
         WHERE m.thread_id = t.id AND m.is_draft = 0 AND m.is_outgoing = 0
         ORDER BY m.date DESC, m.id DESC LIMIT 1) = 1";
+
+fn id_list(ids: &[i64], bind: &mut Vec<Box<dyn rusqlite::types::ToSql>>) -> String {
+    if ids.is_empty() {
+        return "NULL".to_owned();
+    }
+    let mut placeholders = Vec::with_capacity(ids.len());
+    for id in ids {
+        bind.push(Box::new(*id));
+        placeholders.push(format!("?{}", bind.len()));
+    }
+    placeholders.join(", ")
+}
+
+fn folder_id_set_clause(ids: &[i64], bind: &mut Vec<Box<dyn rusqlite::types::ToSql>>) -> String {
+    let list = id_list(ids, bind);
+    format!(
+        "EXISTS (SELECT 1 FROM messages m
+                 WHERE m.thread_id = t.id AND (
+                   m.folder_id IN ({list})
+                   OR (
+                     EXISTS (SELECT 1 FROM accounts ma
+                             WHERE ma.id = m.account_id AND ma.provider = 'gmail')
+                     AND EXISTS (SELECT 1 FROM message_folders mf
+                                 WHERE mf.message_id = m.id AND mf.folder_id IN ({list}))
+                   )
+                 ))"
+    )
+}
+
+fn label_id_set_clause(ids: &[i64], bind: &mut Vec<Box<dyn rusqlite::types::ToSql>>) -> String {
+    let list = id_list(ids, bind);
+    format!(
+        "EXISTS (SELECT 1 FROM message_labels ml JOIN messages m ON m.id = ml.message_id
+                 WHERE m.thread_id = t.id AND ml.label_id IN ({list}))"
+    )
+}
 
 fn build_filter(
     args: &ListArgs,
@@ -405,7 +447,9 @@ fn build_filter(
         }
         None => {}
     }
-    if let Some(folder_id) = args.folder_id {
+    if let Some(folder_ids) = &args.folder_ids {
+        where_clauses.push(folder_id_set_clause(folder_ids, &mut bind));
+    } else if let Some(folder_id) = args.folder_id {
         bind.push(Box::new(folder_id));
         where_clauses.push(format!(
             "EXISTS (SELECT 1 FROM messages m
@@ -420,6 +464,9 @@ fn build_filter(
                      ))",
             bind.len()
         ));
+    }
+    if let Some(label_ids) = &args.label_ids {
+        where_clauses.push(label_id_set_clause(label_ids, &mut bind));
     }
     if let Some((sql, likes)) =
         crate::recipient_match::thread_scope_clause(scope, "t.id", "t.account_id", bind.len() + 1)
@@ -696,6 +743,8 @@ mod tests {
             account_id: Some(1),
             account_ids: None,
             folder_id: Some(1),
+            folder_ids: None,
+            label_ids: None,
             cursor: None,
             limit: 2,
         };
@@ -744,6 +793,8 @@ mod tests {
                 account_id: None,
                 account_ids,
                 folder_id: None,
+                folder_ids: None,
+                label_ids: None,
                 cursor: None,
                 limit: 50,
             };
@@ -779,6 +830,8 @@ mod tests {
                 account_id: None,
                 account_ids: None,
                 folder_id: None,
+                folder_ids: None,
+                label_ids: None,
                 cursor: None,
                 limit: 2,
             },
@@ -792,6 +845,8 @@ mod tests {
                 account_id: None,
                 account_ids: None,
                 folder_id: None,
+                folder_ids: None,
+                label_ids: None,
                 cursor: first.next_cursor,
                 limit: 2,
             },
@@ -821,6 +876,8 @@ mod tests {
             account_id: Some(1),
             account_ids: None,
             folder_id: None,
+            folder_ids: None,
+            label_ids: None,
             cursor: Some(ThreadCursor {
                 last_message_at: i64::MAX,
                 thread_id: i64::MAX,

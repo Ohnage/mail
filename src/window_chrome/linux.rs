@@ -172,9 +172,7 @@ pub(super) fn refresh(app: &AppWindow) {
                 .or(portal)
                 .or(gtk)
                 .or(desktop.default_preferences()),
-            Desktop::Gnome | Desktop::Other => {
-                portal.or(gtk).or(desktop.default_preferences())
-            }
+            Desktop::Gnome | Desktop::Other => portal.or(gtk).or(desktop.default_preferences()),
         };
         state.effective.clone()
     });
@@ -360,7 +358,10 @@ fn ini_group<'a>(contents: &'a str, group: &str) -> impl Iterator<Item = (&'a st
     let mut in_group = false;
     contents.lines().filter_map(move |line| {
         let line = line.trim();
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             in_group = name == group;
             return None;
         }
@@ -454,13 +455,7 @@ mod x11 {
             32,
             window,
             message,
-            [
-                device,
-                pointer.root_x as u32,
-                pointer.root_y as u32,
-                0,
-                0,
-            ],
+            [device, pointer.root_x as u32, pointer.root_y as u32, 0, 0],
         );
         connection.send_event(
             false,

@@ -523,7 +523,8 @@ mod registry {
 
         #[test]
         fn command_line_round_trips_the_executable() {
-            let executable = Path::new(r"C:\Users\A B\AppData\Local\Programs\Flectar Mail\flectar-mail.exe");
+            let executable =
+                Path::new(r"C:\Users\A B\AppData\Local\Programs\Flectar Mail\flectar-mail.exe");
             let command = command_line(executable);
             assert_eq!(
                 command.to_str().unwrap(),
@@ -660,9 +661,8 @@ mod portal {
             .auto_start(auto_start)
             .command(["flectar-mail", BACKGROUND_ARGUMENT])
             .dbus_activatable(false);
-        let response = tokio::runtime::Handle::current().block_on(async {
-            request.send().await?.response()
-        });
+        let response =
+            tokio::runtime::Handle::current().block_on(async { request.send().await?.response() });
         response
             .map(|background| background.auto_start())
             .map_err(|error| io::Error::other(error.to_string()))

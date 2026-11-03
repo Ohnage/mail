@@ -1664,10 +1664,9 @@ fn create_email_font_ctx_with_system_fonts(system_fonts: bool) -> parley::FontCo
         // the other scripts as well; the platform directory is the only source
         // of these faces on OHOS.
         const FALLBACK_SCRIPTS: [&[u8; 4]; 25] = [
-            b"Arab", b"Hebr", b"Thai", b"Laoo", b"Khmr", b"Mymr", b"Tibt", b"Deva",
-            b"Beng", b"Guru", b"Gujr", b"Orya", b"Taml", b"Telu", b"Knda", b"Mlym",
-            b"Sinh", b"Ethi", b"Armn", b"Geor", b"Cyrl", b"Grek", b"Hang", b"Hira",
-            b"Kana",
+            b"Arab", b"Hebr", b"Thai", b"Laoo", b"Khmr", b"Mymr", b"Tibt", b"Deva", b"Beng",
+            b"Guru", b"Gujr", b"Orya", b"Taml", b"Telu", b"Knda", b"Mlym", b"Sinh", b"Ethi",
+            b"Armn", b"Geor", b"Cyrl", b"Grek", b"Hang", b"Hira", b"Kana",
         ];
         let all_families: Vec<_> = names
             .iter()

@@ -4,8 +4,7 @@ use flectar_mail_core::{
     Core,
     mail_security::{MailSecurity, OpenedMessage},
     models::{
-        AccountConfig, SenderIdentity, SenderIdentitySource, Settings, Signature,
-        SignatureDefaults,
+        AccountConfig, SenderIdentity, SenderIdentitySource, Settings, Signature, SignatureDefaults,
     },
     sender_identities::{ManualIdentityPolicy, manual_identity_policy},
 };

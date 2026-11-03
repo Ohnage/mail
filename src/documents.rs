@@ -550,7 +550,10 @@ mod tests {
             imports: AtomicUsize::new(0),
             cancel_after: usize::MAX,
         });
-        let documents = provider.import_many(20, DocumentDialog::default()).await.unwrap();
+        let documents = provider
+            .import_many(20, DocumentDialog::default())
+            .await
+            .unwrap();
         assert_eq!(documents.len(), 1);
         assert_eq!(provider.imports.load(Ordering::SeqCst), 1);
         drop(documents);
@@ -565,7 +568,10 @@ mod tests {
             imports: AtomicUsize::new(0),
             cancel_after: 0,
         });
-        let documents = provider.import_many(20, DocumentDialog::default()).await.unwrap();
+        let documents = provider
+            .import_many(20, DocumentDialog::default())
+            .await
+            .unwrap();
         assert!(documents.is_empty());
         assert_eq!(provider.imports.load(Ordering::SeqCst), 1);
     }

@@ -2083,6 +2083,11 @@ pub struct Settings {
     /// Missing = display name, else the address local part.
     #[serde(default)]
     pub account_short_names: std::collections::HashMap<String, String>,
+    /// Whether a mailbox is left out of Company Inbox, merged folders, and tab
+    /// tags. Missing keys use the address default: `inbox@` and `hub@` are
+    /// excluded. `hub@` stays excluded even when this is false.
+    #[serde(default)]
+    pub company_view_excluded: std::collections::HashMap<String, bool>,
     /// Optional local groups such as Personal and Work. An account may belong
     /// to at most one profile; provider state is never affected.
     #[serde(default)]
@@ -2308,6 +2313,7 @@ impl Default for Settings {
             account_colors: std::collections::HashMap::new(),
             account_icons: std::collections::HashMap::new(),
             account_short_names: std::collections::HashMap::new(),
+            company_view_excluded: std::collections::HashMap::new(),
             mail_profiles: Vec::new(),
             address_views: Vec::new(),
             inbox_accounts: Vec::new(),

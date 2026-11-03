@@ -42,7 +42,8 @@ impl MailGroupState {
     pub fn reveal(&mut self, key: &str) {
         if self.collapsed.remove(key) {
             self.next_generation = self.next_generation.wrapping_add(1);
-            self.generations.insert(key.to_owned(), self.next_generation);
+            self.generations
+                .insert(key.to_owned(), self.next_generation);
             self.closing.remove(key);
             self.opening.remove(key);
         }
@@ -92,11 +93,20 @@ fn date_group(timestamp_ms: i64, now: DateTime<Local>) -> DateGroup {
     } else if day >= last_week {
         (format!("week:{last_week}"), "last-week")
     } else if date.year() == now.year() && date.month() == now.month() {
-        (format!("month:{}-{:02}", date.year(), date.month()), "this-month")
+        (
+            format!("month:{}-{:02}", date.year(), date.month()),
+            "this-month",
+        )
     } else if date.year() == previous_year && date.month() == previous_month {
-        (format!("month:{}-{:02}", date.year(), date.month()), "last-month")
+        (
+            format!("month:{}-{:02}", date.year(), date.month()),
+            "last-month",
+        )
     } else {
-        (format!("month:{}-{:02}", date.year(), date.month()), "month")
+        (
+            format!("month:{}-{:02}", date.year(), date.month()),
+            "month",
+        )
     };
     DateGroup { key, kind }
 }
@@ -244,10 +254,22 @@ mod tests {
     #[test]
     fn calendar_boundaries_keep_yesterday_and_last_week_distinct() {
         let now = local_day(2026, 1, 5); // Monday, after a year boundary.
-        assert_eq!(date_group(local_day(2026, 1, 5).timestamp_millis(), now).kind, "today");
-        assert_eq!(date_group(local_day(2026, 1, 4).timestamp_millis(), now).kind, "yesterday");
-        assert_eq!(date_group(local_day(2025, 12, 30).timestamp_millis(), now).kind, "last-week");
-        assert_eq!(date_group(local_day(2025, 12, 20).timestamp_millis(), now).kind, "last-month");
+        assert_eq!(
+            date_group(local_day(2026, 1, 5).timestamp_millis(), now).kind,
+            "today"
+        );
+        assert_eq!(
+            date_group(local_day(2026, 1, 4).timestamp_millis(), now).kind,
+            "yesterday"
+        );
+        assert_eq!(
+            date_group(local_day(2025, 12, 30).timestamp_millis(), now).kind,
+            "last-week"
+        );
+        assert_eq!(
+            date_group(local_day(2025, 12, 20).timestamp_millis(), now).kind,
+            "last-month"
+        );
         assert_eq!(
             date_group(local_day(2025, 11, 20).timestamp_millis(), now).key,
             "month:2025-11"
@@ -283,7 +305,10 @@ mod tests {
         messages[2].date_ms = local_day(2025, 12, 30).timestamp_millis();
         let rows = messages
             .iter()
-            .map(|message| EmailRow { id: message.id, ..Default::default() })
+            .map(|message| EmailRow {
+                id: message.id,
+                ..Default::default()
+            })
             .collect::<Vec<_>>();
         let today_key = mail_group_key(messages[0].date_ms, now);
         let mut groups = MailGroupState::default();
@@ -314,7 +339,11 @@ mod tests {
         assert!(revealed[0].expanded);
         assert!(!revealed[1].reveal_row);
 
-        let reordered_messages = vec![messages[2].clone(), messages[0].clone(), messages[1].clone()];
+        let reordered_messages = vec![
+            messages[2].clone(),
+            messages[0].clone(),
+            messages[1].clone(),
+        ];
         let reordered_rows = vec![rows[2].clone(), rows[0].clone(), rows[1].clone()];
         let reordered = project_mail_list(&reordered_messages, &reordered_rows, &groups, true, now);
         assert_eq!(reordered[1].email.id, messages[0].id);
@@ -332,11 +361,18 @@ mod tests {
         groups.toggle(&mail_group_key(messages[0].date_ms, now));
         let rows = messages
             .iter()
-            .map(|message| EmailRow { id: message.id, ..Default::default() })
+            .map(|message| EmailRow {
+                id: message.id,
+                ..Default::default()
+            })
             .collect::<Vec<_>>();
         let entries = project_mail_list(&messages, &rows, &groups, false, now);
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().all(|entry| !entry.is_header && entry.show_row));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry.is_header && entry.show_row)
+        );
     }
 
     #[test]

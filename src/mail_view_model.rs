@@ -922,7 +922,13 @@ pub(super) fn scope_matches(email: &MailMessage, scope: Scope) -> bool {
         // These scopes are filtered by the core query before projection. Their
         // stable route/folder ids are intentionally not duplicated in every UI
         // row.
-        Scope::Important | Scope::Other | Scope::Folder(_) | Scope::AddressInbox(_) => true,
+        Scope::Important
+        | Scope::Other
+        | Scope::Folder(_)
+        | Scope::AddressInbox(_)
+        | Scope::CompanyInbox
+        | Scope::MergedFolder(_)
+        | Scope::TabTag(_) => true,
     }
 }
 
@@ -1619,6 +1625,17 @@ fn mailbox_scope_title(
         Scope::AddressInbox(_) => {
             mailbox().map_or_else(|| "Address inbox".into(), |mailbox| mailbox.label.clone())
         }
+        Scope::CompanyInbox => "Company Inbox".to_owned(),
+        Scope::MergedFolder(id) => mailboxes
+            .iter()
+            .find(|mailbox| flectar_mail_core::company_view::folder_scope_id(&mailbox.detail) == id)
+            .map(|mailbox| flectar_mail_core::company_view::folder_leaf(&mailbox.detail).to_owned())
+            .unwrap_or_else(|| "Folder".to_owned()),
+        Scope::TabTag(id) => labels
+            .iter()
+            .find(|label| flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id)
+            .map(|label| label.name.clone())
+            .unwrap_or_else(|| "Tag".to_owned()),
         Scope::Unified(_) | Scope::Important | Scope::Other => scope.to_string(),
         Scope::Folder(_) => {
             mailbox().map_or_else(|| "Folder".into(), |mailbox| mailbox.label.clone())

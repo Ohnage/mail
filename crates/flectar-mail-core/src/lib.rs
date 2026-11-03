@@ -9,6 +9,7 @@ pub mod brand_registry;
 pub mod caldav;
 pub mod calendar;
 pub mod carddav;
+pub mod company_view;
 pub mod config;
 pub mod db;
 pub mod embed;
@@ -3035,6 +3036,39 @@ impl Core {
         .await
     }
 
+    /// Threads in a company view: every listed account, and any of the folders
+    /// or labels when those sets are present. An empty account or id set
+    /// matches nothing.
+    pub async fn list_company_threads(
+        &self,
+        view: View,
+        account_ids: Vec<i64>,
+        folder_ids: Option<Vec<i64>>,
+        label_ids: Option<Vec<i64>>,
+        page: impl Into<ThreadPageRequest>,
+    ) -> Result<ThreadPage> {
+        let ThreadPageRequest { cursor, limit } = page.into();
+        self.db
+            .read(move |conn| {
+                repo::threads::list_matching(
+                    conn,
+                    &repo::threads::ListArgs {
+                        view,
+                        tab: None,
+                        account_id: None,
+                        account_ids: Some(account_ids),
+                        folder_id: None,
+                        folder_ids,
+                        label_ids,
+                        cursor,
+                        limit: limit.clamp(1, 200),
+                    },
+                    &recipient_match::MailScope::default(),
+                )
+            })
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_where(
         &self,
@@ -3081,6 +3115,8 @@ impl Core {
                         account_id,
                         account_ids,
                         folder_id,
+                        folder_ids: None,
+                        label_ids: None,
                         cursor,
                         limit: limit.clamp(1, 200),
                     },
@@ -3143,6 +3179,8 @@ impl Core {
                         account_id,
                         account_ids: None,
                         folder_id,
+                        folder_ids: None,
+                        label_ids: None,
                         cursor: None,
                         limit: 1,
                     },
@@ -3755,6 +3793,63 @@ impl Core {
         self.create_folder_in(account_id, parent_folder_id, name)
             .await
             .map(|_| ())
+    }
+
+    /// The account's folder at `path`, creating any missing segment on that account.
+    pub async fn ensure_mailbox_path(&self, account_id: i64, path: String) -> Result<i64> {
+        let path = path.trim().to_owned();
+        if path.is_empty() {
+            return Err(CoreError::Other("folder path is empty".into()));
+        }
+        let folders = self.list_folders(Some(account_id)).await?;
+        let wanted = company_view::folder_match_key(&path);
+        if let Some(folder) = folders.iter().find(|folder| {
+            company_view::folder_match_key(&folder.display_name) == wanted
+                || company_view::folder_match_key(&folder.path) == wanted
+        }) {
+            return Ok(folder.id);
+        }
+        let delimiter = folders
+            .iter()
+            .find_map(|folder| folder.delimiter.clone())
+            .filter(|delimiter| !delimiter.is_empty())
+            .unwrap_or_else(|| "/".to_owned());
+        let segments = path
+            .split(delimiter.as_str())
+            .filter(|segment| !segment.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if segments.is_empty() {
+            return Err(CoreError::Other("folder path is empty".into()));
+        }
+        let mut known = folders
+            .iter()
+            .map(|folder| {
+                (
+                    company_view::folder_match_key(&folder.display_name),
+                    folder.id,
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut parent = None;
+        let mut built = String::new();
+        for (index, segment) in segments.iter().enumerate() {
+            if index > 0 {
+                built.push_str(&delimiter);
+            }
+            built.push_str(segment);
+            let built_key = company_view::folder_match_key(&built);
+            if let Some((_, id)) = known.iter().find(|(key, _)| key == &built_key) {
+                parent = Some(*id);
+                continue;
+            }
+            let id = self
+                .create_folder_in(account_id, parent, segment.clone())
+                .await?;
+            known.push((built_key, id));
+            parent = Some(id);
+        }
+        parent.ok_or_else(|| CoreError::Other("folder path is empty".into()))
     }
 
     /// Create a folder, here and on the account's server, and return its id.
@@ -8385,6 +8480,157 @@ impl Core {
             .await
     }
 
+    /// Apply or remove a tab tag on the thread's own account.
+    ///
+    /// The keyword is adopted on that account when it has no copy yet. A label
+    /// owned by a different account is never passed to the action, so the
+    /// cross-account refusal stays in place for a direct label id.
+    pub async fn apply_keyword_label(
+        &self,
+        thread_id: i64,
+        keyword: String,
+        name: String,
+        color: String,
+        add: bool,
+    ) -> Result<()> {
+        let label_id = self
+            .db
+            .write(move |conn| {
+                let account_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT account_id FROM threads WHERE id = ?1",
+                        rusqlite::params![thread_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                let Some(account_id) = account_id else {
+                    return Err(CoreError::NotFound(format!("thread {thread_id}")));
+                };
+                if let Some(existing) = repo::labels::label_by_keyword(conn, account_id, &keyword)?
+                {
+                    return Ok(Some(existing.id));
+                }
+                if !add {
+                    return Ok(None);
+                }
+                let created =
+                    repo::labels::ensure_keyword_label(conn, account_id, &name, &color, &keyword)?;
+                Ok(Some(created.id))
+            })
+            .await?;
+        let Some(label_id) = label_id else {
+            return Ok(());
+        };
+        self.perform_action(PerformActionArgs {
+            kind: if add {
+                ActionKind::AddLabel
+            } else {
+                ActionKind::RemoveLabel
+            },
+            thread_ids: vec![thread_id],
+            params: Some(ActionParams {
+                wake_at: None,
+                target_folder_id: None,
+                label_id: Some(label_id),
+            }),
+        })
+        .await
+        .map(|_| ())
+    }
+
+    /// Create one tag on every account, sharing a `$label:` keyword.
+    pub async fn create_tab_tags(
+        &self,
+        account_ids: Vec<i64>,
+        name: String,
+        color: String,
+    ) -> Result<Vec<Label>> {
+        let keyword = company_view::keyword_for_new_tag(&name);
+        let mut labels = Vec::new();
+        for account_id in account_ids {
+            let keyword_for_account = keyword.clone();
+            let existing = self
+                .db
+                .read(move |conn| {
+                    repo::labels::label_by_keyword(conn, account_id, &keyword_for_account)
+                })
+                .await?;
+            if let Some(label) = existing {
+                labels.push(label);
+                continue;
+            }
+            let mut label = self
+                .save_label(None, name.clone(), color.clone(), 500, Some(account_id))
+                .await?;
+            let id = label.id;
+            let keyword_for_update = keyword.clone();
+            self.db
+                .write(move |conn| {
+                    conn.execute(
+                        "UPDATE labels SET keyword = ?2 WHERE id = ?1",
+                        rusqlite::params![id, keyword_for_update],
+                    )?;
+                    Ok(())
+                })
+                .await?;
+            label.keyword = keyword.clone();
+            labels.push(label);
+        }
+        Ok(labels)
+    }
+
+    /// The color and name chosen for a merged tag apply to every account copy.
+    pub async fn restyle_keyword(
+        &self,
+        account_ids: Vec<i64>,
+        keyword: String,
+        name: String,
+        color: String,
+    ) -> Result<()> {
+        self.db
+            .write(move |conn| {
+                repo::labels::restyle_keyword(conn, &account_ids, &keyword, &name, &color)?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn folder_unread_counts(&self) -> Result<std::collections::HashMap<i64, i64>> {
+        self.db
+            .read(|conn| repo::counts::folder_unread_counts(conn))
+            .await
+    }
+
+    /// Remember whether a mailbox feeds company views.
+    ///
+    /// `None` clears the stored choice and returns to the address default.
+    /// Addresses starting with `hub@` stay excluded either way.
+    pub async fn set_company_view_excluded(
+        &self,
+        account_id: i64,
+        excluded: Option<bool>,
+    ) -> Result<Settings> {
+        self.db
+            .write(move |conn| {
+                if repo::accounts::get(conn, account_id)?.is_none() {
+                    return Err(CoreError::NotFound(format!("account {account_id}")));
+                }
+                let mut settings = repo::settings::get(conn)?;
+                let key = account_id.to_string();
+                match excluded {
+                    Some(value) => {
+                        settings.company_view_excluded.insert(key, value);
+                    }
+                    None => {
+                        settings.company_view_excluded.remove(&key);
+                    }
+                }
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
     /// Set an account-specific marker color, or restore its generated color.
     /// Choosing an individual color also leaves any profile in the same
     /// settings write so the visible color has one unambiguous owner.
@@ -10013,6 +10259,62 @@ mod move_action_validation_tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn keyword_label_is_created_on_the_messages_account() {
+        let mut conn = db::testutil::conn();
+        db::testutil::seed_account(&conn);
+        conn.execute(
+            "INSERT INTO accounts (id, email, provider, auth_kind, username,
+             incoming_host, incoming_port, smtp_host, smtp_port, created_at, mail_protocol, settings_json)
+             VALUES (2,'other@example.com','generic','password','other','h',993,'h',587,0,'imap','{\"connection\":{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}')",
+            [],
+        )
+        .unwrap();
+        let (thread_id, message_id) =
+            db::testutil::seed_message(&conn, "sender@example.com", "route the tag", false);
+        let foreign =
+            repo::labels::ensure_keyword_label(&conn, 2, "Lead", "#112233", "$label:lead").unwrap();
+        let own =
+            repo::labels::ensure_keyword_label(&conn, 1, "Lead", "#112233", "$label:lead").unwrap();
+        assert_ne!(own.id, foreign.id);
+        assert_eq!(own.owner_account_id, Some(1));
+        assert_eq!(own.keyword, "$label:lead");
+
+        apply_thread_action(
+            &mut conn,
+            thread_id,
+            ActionKind::AddLabel,
+            Some(&ActionParams {
+                wake_at: None,
+                target_folder_id: None,
+                label_id: Some(own.id),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row(
+                "SELECT label_id FROM message_labels WHERE message_id = ?1",
+                [message_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            own.id
+        );
+
+        let error = apply_thread_action(
+            &mut conn,
+            thread_id,
+            ActionKind::AddLabel,
+            Some(&ActionParams {
+                wake_at: None,
+                target_folder_id: None,
+                label_id: Some(foreign.id),
+            }),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("another account"));
     }
 
     #[test]

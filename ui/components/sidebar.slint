@@ -225,6 +225,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                     width: max(0px, mailbox-scroll.visible-width - LayoutMetrics.sidebar-scrollbar-gutter);
                     height: !entry.show_row || (entry.reveal_row && !self.reveal-ready && MotionSettings.enabled) ? 0px
                         : entry.kind == SidebarRowKind.unified-heading ? 21px
+                        : entry.kind == SidebarRowKind.accounts-heading && entry.key == "mailboxes" ? 31px
                         : entry.kind == SidebarRowKind.accounts-heading ? 25px
                         : entry.kind == SidebarRowKind.account ? (entry.mailbox.detail == "" ? 35px : root.account-row-height)
                         : entry.kind == SidebarRowKind.address-inbox ? max(48px, root.account-row-height)
@@ -245,7 +246,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         x: 0px;
                         y: 0px;
                         width: parent.width;
-                        label: @tr("ALL ACCOUNTS");
+                        label: entry.key == "company-heading" ? @tr("COMPANY") : @tr("ALL ACCOUNTS");
                         label-color: root.muted-color;
                     }
 
@@ -266,25 +267,27 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                     }
 
                     if entry.kind == SidebarRowKind.unified-inbox: SidebarItem {
+                        private property <string> inbox-scope: entry.mailbox.scope == "" ? "Unified Inbox" : entry.mailbox.scope;
+                        private property <bool> inbox-selected: root.selected-scope == self.inbox-scope;
                         x: 0px;
                         interactive: entry.show_row;
                         y: 0px;
                         width: parent.width;
-                        label: @tr("Inbox");
-                        count: root.unified-count;
-                        scope: "Unified Inbox";
+                        label: entry.mailbox.label == "" ? @tr("Inbox") : entry.mailbox.label;
+                        count: entry.mailbox.scope == "" ? root.unified-count : entry.mailbox.count;
+                        scope: self.inbox-scope;
                         account-id: 0;
                         folder-id: -1;
                         mail-drop-enabled: true;
                         icon: @image-url("../icons/lucide/filled/inbox-flectar.svg");
-                        selected: root.selected-scope == "Unified Inbox";
+                        selected: self.inbox-selected;
                         row-height: 32px;
                         sidebar-background: root.background-color;
                         selection-background: root.selection-background;
                         accent-color: root.accent-color;
                         body-color: root.body-color;
                         muted-color: root.muted-color;
-                        icon-color: root.monochrome-icons ? (root.selected-scope == "Unified Inbox" ? root.accent-color : root.muted-color) : MailIconPalette.inbox;
+                        icon-color: root.monochrome-icons ? (self.inbox-selected ? root.accent-color : root.muted-color) : MailIconPalette.inbox;
                         clicked(scope) => { root.select-scope(scope); }
                     }
 
@@ -413,7 +416,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         interactive: entry.show_row;
                         y: 0px;
                         width: parent.width;
-                        label: @tr("Labels");
+                        label: entry.key == "company-tags" ? @tr("Tags") : @tr("Labels");
                         label-font-weight: 500;
                         folder-row-style: true;
                         sidebar-background: root.background-color;
@@ -459,7 +462,25 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         }
                     }
 
-                    if entry.kind == SidebarRowKind.accounts-heading: WorkspaceMiniHeading {
+                    if entry.kind == SidebarRowKind.accounts-heading && entry.key == "mailboxes": SidebarSectionHeader {
+                        x: 0px;
+                        interactive: entry.show_row;
+                        y: 0px;
+                        width: parent.width;
+                        label: @tr("Mailboxes");
+                        label-font-weight: 500;
+                        folder-row-style: true;
+                        sidebar-background: root.background-color;
+                        hover-background: root.hover-background;
+                        body-color: root.body-color;
+                        muted-color: root.muted-color;
+                        icon: @image-url("../icons/lucide/filled/folders.svg");
+                        icon-color: root.monochrome-icons ? root.body-color : MailIconPalette.folders;
+                        open: entry.open;
+                        toggled(open) => { root.toggle-section(entry.key, open); }
+                    }
+
+                    if entry.kind == SidebarRowKind.accounts-heading && entry.key != "mailboxes": WorkspaceMiniHeading {
                         x: 0px;
                         y: 0px;
                         width: parent.width;
@@ -608,6 +629,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                     }
 
                     if entry.kind == SidebarRowKind.account-label: SidebarItem {
+                        private property <string> label-scope: entry.mailbox.scope == "" ? "AccountLabel:" + entry.label.id : entry.mailbox.scope;
                         x: 0px;
                         interactive: entry.show_row;
                         y: 0px;
@@ -623,7 +645,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         expanded: entry.label.expanded;
                         label-tree-node: true;
                         editable-color: entry.label.color;
-                        scope: "AccountLabel:" + entry.label.id;
+                        scope: self.label-scope;
                         account-id: entry.label.account_id;
                         label-manageable: true;
                         label-can-create-child: entry.label.can_create_children;
@@ -631,14 +653,14 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         mail-drop-enabled: true;
                         mail-drop-copies: true;
                         icon: @image-url("../icons/lucide/filled/tag.svg");
-                        selected: root.selected-scope == "AccountLabel:" + entry.label.id;
+                        selected: root.selected-scope == self.label-scope;
                         sidebar-background: root.background-color;
                         selection-background: root.selection-background;
                         accent-color: root.accent-color;
                         body-color: root.body-color;
                         muted-color: root.muted-color;
                         icon-color: root.monochrome-icons
-                            ? (root.selected-scope == "AccountLabel:" + entry.label.id ? root.accent-color : root.muted-color)
+                            ? (root.selected-scope == self.label-scope ? root.accent-color : root.muted-color)
                             : entry.label.color;
                         clicked(scope) => { root.select-scope(scope); }
                         toggled(label-id, expanded) => { root.toggle-section(entry.key, expanded); }

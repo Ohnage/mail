@@ -100,7 +100,13 @@ pub(super) fn scope_owned_by(state: &InboxState, scope: Scope, account_id: i64) 
             .labels
             .iter()
             .any(|label| label.id == id && label.owner_account_id == Some(account_id)),
-        Scope::Unified(_) | Scope::Important | Scope::Other | Scope::AddressInbox(_) => false,
+        Scope::Unified(_)
+        | Scope::Important
+        | Scope::Other
+        | Scope::AddressInbox(_)
+        | Scope::CompanyInbox
+        | Scope::MergedFolder(_)
+        | Scope::TabTag(_) => false,
     }
 }
 

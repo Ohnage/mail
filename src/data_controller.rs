@@ -1627,7 +1627,8 @@ pub(super) fn register_data_management_callbacks(
                     }
                     apply_calendar(&app, &data_reset_calendar.borrow(), today);
                     app.set_theme_mode("system".into());
-                    app.global::<MessageColors>().set_preference("system".into());
+                    app.global::<MessageColors>()
+                        .set_preference("system".into());
                     app.set_monochrome_sidebar_icons(false);
                     crate::app_icon::apply(&app, Default::default());
                     app.set_show_avatars(true);

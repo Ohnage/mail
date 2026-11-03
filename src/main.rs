@@ -514,6 +514,7 @@ struct AccountPresentationSettings {
     account_colors: HashMap<String, String>,
     account_short_names: HashMap<String, String>,
     account_icons: HashMap<String, String>,
+    company_view_excluded: HashMap<String, bool>,
     account_icon_images: HashMap<String, slint::Image>,
     tab_icons: HashMap<String, slint::Image>,
     profile_logos: HashMap<String, slint::Image>,
@@ -536,6 +537,7 @@ impl AccountPresentationSettings {
             account_colors: settings.account_colors.clone(),
             account_short_names: settings.account_short_names.clone(),
             account_icons: settings.account_icons.clone(),
+            company_view_excluded: settings.company_view_excluded.clone(),
             account_icon_images: HashMap::new(),
             tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
@@ -821,6 +823,54 @@ impl AccountPresentationSettings {
         ids
     }
 
+    fn uses_named_tab(&self, tab: &flectar_mail_core::models::BusinessTab) -> bool {
+        self.business_tab_accounts.contains_key(&tab.id)
+            || (!self.inbox_accounts.is_empty()
+                && tab.account_ids.is_none()
+                && tab.address_view_ids.is_none()
+                && matches!(tab.resolved_scope(), "profiles" | "any" | "recipients"))
+    }
+
+    /// Mailboxes on the open business tab that feed the company views.
+    fn company_account_ids(&self, accounts: &[Account]) -> Vec<i64> {
+        let Some(tab) = self.active_business() else {
+            return Vec::new();
+        };
+        let sources = if self.uses_named_tab(tab) {
+            flectar_mail_core::company_view::TabMailboxSources {
+                named_mailboxes: Some(self.named_tab_mailbox_ids(tab)),
+                profile_mailboxes: Vec::new(),
+            }
+        } else {
+            let profile_mailboxes = match &tab.account_ids {
+                Some(ids) => {
+                    let mut ids = ids.clone();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids
+                }
+                None => self.accounts_in(&tab.profile_ids),
+            };
+            flectar_mail_core::company_view::TabMailboxSources {
+                named_mailboxes: None,
+                profile_mailboxes,
+            }
+        };
+        let explicit = self
+            .company_view_excluded
+            .iter()
+            .filter_map(|(id, excluded)| id.parse().ok().map(|id| (id, *excluded)))
+            .collect();
+        let records = accounts
+            .iter()
+            .map(|account| flectar_mail_core::company_view::CompanyAccount {
+                id: account.id,
+                email: account.email.clone(),
+            })
+            .collect::<Vec<_>>();
+        flectar_mail_core::company_view::company_mailbox_ids(&sources, &records, &explicit)
+    }
+
     /// A saved marker, without the generated fallback.
     ///
     /// An explicit named-account color wins, then the mail profile color,
@@ -833,7 +883,7 @@ impl AccountPresentationSettings {
                 account
                     .account_ids
                     .contains(&account_id)
-                    .then(|| account.color.as_deref())
+                    .then_some(account.color.as_deref())
                     .flatten()
                     .and_then(parse_marker_color)
             })
@@ -1037,6 +1087,12 @@ struct InboxState {
     /// The active profile's accounts, sorted. The mail view shows only these;
     /// `None` shows every connected account.
     profile_accounts: Option<Vec<i64>>,
+    /// Company-view mailboxes for the open business tab. `None` off a tab.
+    company_account_ids: Option<Vec<i64>>,
+    folder_unreads: HashMap<i64, i64>,
+    company_mailboxes: Vec<mail::MailboxEntry>,
+    /// The open business tab changed during the latest profile sync.
+    opened_business_tab: bool,
     calendar_connections: Vec<CalendarConnection>,
     carddav_connections: Vec<CardDavConnection>,
     calendar_errors: HashMap<i64, String>,
@@ -1067,7 +1123,19 @@ struct MailDragItem {
 enum MailDropDestination {
     Action(&'static str),
     Folder(i64),
+    /// Move into this path on the message's account, creating the folder there.
+    EnsureFolder {
+        account_id: i64,
+        path: String,
+    },
     Label(i64),
+    /// Apply or remove the keyword on the message's own account.
+    Keyword {
+        keyword: String,
+        name: String,
+        color: String,
+        add: bool,
+    },
     Route(String),
 }
 
@@ -1139,6 +1207,72 @@ fn resolve_single_mail_drop(
                 "Address inboxes are filtered views; choose a mailbox or folder destination"
                     .to_owned(),
             );
+        }
+        Scope::CompanyInbox if message.folder == "Spam" => MailDropDestination::Action("not_spam"),
+        Scope::CompanyInbox if message.folder == "Archive" => {
+            MailDropDestination::Action("unarchive")
+        }
+        Scope::CompanyInbox if message.folder != "Inbox" => MailDropDestination::Folder(
+            standard_mailbox_folder(state, message.account_id, StandardMailbox::Inbox)
+                .ok_or_else(|| "this account has no inbox destination".to_owned())?,
+        ),
+        Scope::CompanyInbox => {
+            return Err("message is already in this destination".to_owned());
+        }
+        Scope::MergedFolder(id) => {
+            let path = state
+                .company_mailboxes
+                .iter()
+                .find(|mailbox| mailbox.scope == Some(Scope::MergedFolder(id)))
+                .map(|mailbox| mailbox.detail.clone())
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| "folder destination is no longer available".to_owned())?;
+            let key = flectar_mail_core::company_view::folder_match_key(&path);
+            if let Some(folder) = state.mailboxes.iter().find(|mailbox| {
+                mailbox.account_id == message.account_id
+                    && !mailbox.is_account
+                    && !mailbox.is_standard
+                    && flectar_mail_core::company_view::folder_match_key(&mailbox.detail) == key
+            }) {
+                if folder.label == message.folder {
+                    return Err("message is already in this destination".to_owned());
+                }
+                MailDropDestination::Folder(folder.folder_id)
+            } else {
+                MailDropDestination::EnsureFolder {
+                    account_id: message.account_id,
+                    path,
+                }
+            }
+        }
+        Scope::TabTag(id) => {
+            let copies = state
+                .labels
+                .iter()
+                .filter(|label| {
+                    !label.keyword.is_empty()
+                        && flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id
+                })
+                .collect::<Vec<_>>();
+            let sample = copies
+                .first()
+                .ok_or_else(|| "tag destination is no longer available".to_owned())?;
+            if let Some(own) = copies
+                .iter()
+                .find(|label| label.owner_account_id == Some(message.account_id))
+            {
+                if message.labels.contains(&own.id) {
+                    return Err("message already has this label".to_owned());
+                }
+                MailDropDestination::Label(own.id)
+            } else {
+                MailDropDestination::Keyword {
+                    keyword: sample.keyword.clone(),
+                    name: sample.name.clone(),
+                    color: sample.color.clone(),
+                    add: true,
+                }
+            }
         }
         Scope::Important => MailDropDestination::Route("important".to_owned()),
         Scope::Other => MailDropDestination::Route("other".to_owned()),
@@ -1520,6 +1654,10 @@ impl InboxState {
             local_mail_reloads: 0,
             account_presentation: AccountPresentationSettings::default(),
             profile_accounts: None,
+            company_account_ids: None,
+            folder_unreads: HashMap::new(),
+            company_mailboxes: Vec::new(),
+            opened_business_tab: false,
             calendar_connections: Vec::new(),
             carddav_connections: Vec::new(),
             calendar_errors: HashMap::new(),
@@ -1600,6 +1738,9 @@ impl InboxState {
                 .iter()
                 .any(|view| view.id == id),
             Scope::Unified(_) | Scope::Important | Scope::Other => true,
+            Scope::CompanyInbox | Scope::MergedFolder(_) | Scope::TabTag(_) => {
+                self.account_presentation.active_business().is_some()
+            }
             Scope::Account { account_id, .. } => self.shows_account(account_id),
             Scope::Folder(_) => self
                 .mailboxes
@@ -1622,7 +1763,11 @@ impl InboxState {
     fn sync_profile_accounts(&mut self) -> bool {
         self.account_presentation
             .bind_accounts(&self.connected_accounts);
-        self.swap_sidebar_collapse_for_active_tab();
+        self.opened_business_tab = self.swap_sidebar_collapse_for_active_tab();
+        self.company_account_ids = self.account_presentation.active_business().map(|_| {
+            self.account_presentation
+                .company_account_ids(&self.connected_accounts)
+        });
         let (sidebar, query, scope) = self.account_presentation.view_scope();
         let changed = if let Some(core) = &self.core {
             core.set_view_scope(
@@ -1630,6 +1775,7 @@ impl InboxState {
                 query,
                 scope,
                 self.account_presentation.active_business().is_none(),
+                self.company_account_ids.clone(),
             )
         } else {
             false
@@ -1641,24 +1787,31 @@ impl InboxState {
 
     /// Account rows on a business tab start collapsed. Expanding one is
     /// remembered for that tab, including All accounts (the empty key).
-    fn swap_sidebar_collapse_for_active_tab(&mut self) {
+    fn swap_sidebar_collapse_for_active_tab(&mut self) -> bool {
         let tab_key = self
             .account_presentation
             .active_business_tab
             .clone()
             .unwrap_or_default();
         if self.sidebar_collapse_tab == tab_key {
-            return;
+            return false;
         }
         let previous = std::mem::replace(&mut self.sidebar_collapse_tab, tab_key.clone());
         self.sidebar_collapse_by_tab
             .insert(previous, self.collapsed_sidebar_sections.clone());
-        if let Some(saved) = self.sidebar_collapse_by_tab.get(&tab_key) {
-            self.collapsed_sidebar_sections = saved.clone();
-            return;
+        if let Some(saved) = self.sidebar_collapse_by_tab.get(&tab_key).cloned() {
+            let mut saved = saved;
+            if !tab_key.is_empty() && !saved.contains("company-layout") {
+                saved.insert("mailboxes".to_owned());
+                saved.insert("company-layout".to_owned());
+            }
+            self.collapsed_sidebar_sections = saved;
+            return true;
         }
         let mut collapsed = HashSet::from(["categories".to_owned(), "global-labels".to_owned()]);
         if !tab_key.is_empty() {
+            collapsed.insert("mailboxes".to_owned());
+            collapsed.insert("company-layout".to_owned());
             let (sidebar, _, _) = self.account_presentation.view_scope();
             let account_ids = sidebar.unwrap_or_else(|| {
                 self.connected_accounts
@@ -1671,6 +1824,7 @@ impl InboxState {
             }
         }
         self.collapsed_sidebar_sections = collapsed;
+        true
     }
 
     /// Replace the account inventory. Returns whether the selection moved to
@@ -3732,6 +3886,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 state.mailboxes = metadata.mailboxes;
                 state.unified_mailboxes = metadata.unified_mailboxes;
                 state.inbox_count = metadata.inbox_count;
+                state.folder_unreads = metadata.folder_unreads.clone();
                 if let Some(parent_id) = update.reveal_parent_id {
                     state.initialized_sidebar_folders.insert(parent_id);
                     state.collapsed_folder_ids.remove(&parent_id);
@@ -4068,6 +4223,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     state.mailboxes = metadata.mailboxes;
                     state.unified_mailboxes = metadata.unified_mailboxes;
                     state.inbox_count = metadata.inbox_count;
+                    state.folder_unreads = metadata.folder_unreads.clone();
                     drop(state);
                     if local_mail_changed {
                         // Its section is named at once; its size follows.
@@ -4761,6 +4917,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             state.mailboxes = metadata.mailboxes;
                             state.unified_mailboxes = metadata.unified_mailboxes;
                             state.inbox_count = metadata.inbox_count;
+                state.folder_unreads = metadata.folder_unreads.clone();
                         }
                         refresh_list_metadata(&app, &startup_state);
                     }
@@ -5153,6 +5310,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         state.mailboxes = metadata.mailboxes;
                         state.unified_mailboxes = metadata.unified_mailboxes;
                         state.inbox_count = metadata.inbox_count;
+                        state.folder_unreads = metadata.folder_unreads.clone();
                     }
                     let current = removal.scope == state.scope && removal.query == state.query;
                     let has_page = removal.page.is_some();
@@ -5738,6 +5896,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             state.mailboxes = metadata.mailboxes;
                             state.unified_mailboxes = metadata.unified_mailboxes;
                             state.inbox_count = metadata.inbox_count;
+                            state.folder_unreads = metadata.folder_unreads.clone();
                         }
                     }
                     if let Err(error) =
@@ -6032,26 +6191,56 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let Some(app) = app_weak.upgrade() else {
             return;
         };
-        let (core, selected_id, thread_id) = {
+        let (core, operations) = {
             let state = state_for_label.borrow();
-            let thread_id = state
+            let selected = state
                 .selected_id
-                .and_then(|id| state.messages.iter().find(|message| message.id == id))
-                .and_then(|message| message.thread_id);
-            (state.core.clone(), state.selected_id, thread_id)
+                .and_then(|id| state.messages.iter().find(|message| message.id == id));
+            let label = state
+                .labels
+                .iter()
+                .find(|label| label.id == i64::from(label_id));
+            let selection = selected
+                .filter(|message| state.checked_ids.contains(&message.id))
+                .map(|_| {
+                    state
+                        .messages
+                        .iter()
+                        .filter(|message| state.checked_ids.contains(&message.id))
+                        .collect::<Vec<_>>()
+                })
+                .or_else(|| selected.map(|message| vec![message]));
+            let operations = selection.map(|messages| {
+                let route_keyword = state.company_account_ids.is_some()
+                    && label.is_some_and(|label| !label.keyword.is_empty());
+                messages
+                    .into_iter()
+                    .filter_map(|message| {
+                        let thread_id = message.thread_id?;
+                        let operation = if route_keyword {
+                            let label = label?;
+                            mail_work::Operation::Keyword {
+                                keyword: label.keyword.clone(),
+                                name: label.name.clone(),
+                                color: label.color.clone(),
+                                add: applied,
+                            }
+                        } else {
+                            mail_work::Operation::Label(i64::from(label_id), applied)
+                        };
+                        Some((message.id, thread_id, operation))
+                    })
+                    .collect::<Vec<_>>()
+            });
+            (state.core.clone(), operations)
         };
         let result = (|| {
             let core = core.ok_or_else(|| "mail core is unavailable".to_owned())?;
-            let thread_id = thread_id.ok_or_else(|| "no message is selected".to_owned())?;
-            mail_work::enqueue(
-                &state_for_label,
-                core,
-                vec![(
-                    selected_id.unwrap(),
-                    thread_id,
-                    mail_work::Operation::Label(i64::from(label_id), applied),
-                )],
-            )
+            let operations = operations.ok_or_else(|| "no message is selected".to_owned())?;
+            if operations.is_empty() {
+                return Err("no message is selected".to_owned());
+            }
+            mail_work::enqueue(&state_for_label, core, operations)
         })();
         if let Err(error) = result {
             app.set_render_status(UiMessage::detail("Could not update label: {}", error));
@@ -6066,7 +6255,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let (core, thread_id, selected_account_id, parent_path) = {
+            let (core, thread_id, selected_account_id, company_ids, parent_path) = {
                 let state = state_for_save_label.borrow();
                 let selected = state
                     .selected_id
@@ -6075,6 +6264,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     state.core.clone(),
                     selected.and_then(|message| message.thread_id),
                     selected.map(|message| message.account_id),
+                    state.company_account_ids.clone(),
                     if parent_label_id >= 0 {
                         state
                             .labels
@@ -6116,6 +6306,53 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 } else {
                     leaf.to_owned()
                 };
+                if owner_account_id == -2 {
+                    let accounts = company_ids
+                        .filter(|accounts| !accounts.is_empty())
+                        .ok_or_else(|| "this tab has no company mailboxes".to_owned())?;
+                    runtime_for_save_label.block_on(core.create_tab_tags(
+                        accounts,
+                        full_name,
+                        color.clone(),
+                    ))?;
+                    refresh_from_source(
+                        &app,
+                        &state_for_save_label,
+                        &runtime_for_save_label,
+                        true,
+                        &[],
+                    )?;
+                    return Ok(false);
+                }
+                if let Some(label_id) = existing_id
+                    && let Some(accounts) = company_ids.filter(|accounts| !accounts.is_empty())
+                {
+                    let keyword = {
+                        let state = state_for_save_label.borrow();
+                        state
+                            .labels
+                            .iter()
+                            .find(|label| label.id == label_id)
+                            .map(|label| label.keyword.clone())
+                            .unwrap_or_default()
+                    };
+                    if !keyword.is_empty() {
+                        runtime_for_save_label.block_on(core.restyle_keyword(
+                            accounts,
+                            keyword,
+                            full_name,
+                            color.clone(),
+                        ))?;
+                        refresh_from_source(
+                            &app,
+                            &state_for_save_label,
+                            &runtime_for_save_label,
+                            true,
+                            &[],
+                        )?;
+                        return Ok(true);
+                    }
+                }
                 let label = runtime_for_save_label.block_on(core.save_label(
                     existing_id,
                     &full_name,
@@ -6148,7 +6385,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             })();
             match result {
                 Ok(true) => app.set_render_status(UiMessage::plain("Label updated.")),
-                Ok(false) if owner_account_id >= 0 => {
+                Ok(false) if owner_account_id >= 0 || owner_account_id == -2 => {
                     app.set_render_status(UiMessage::plain("Label created."))
                 }
                 Ok(false) => app.set_render_status(UiMessage::plain("Label created and added.")),
@@ -8225,12 +8462,26 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let mut state = state_for_profile.borrow_mut();
             // With one account, the unified mailboxes go by its name.
             let single_account = state.mail_accounts().len() == 1;
-            if !state.sync_profile_accounts() {
+            let changed = state.sync_profile_accounts();
+            let opened = state.opened_business_tab;
+            state.opened_business_tab = false;
+            if !changed && !opened {
                 return;
             }
-            let scope = match state.scope {
-                Scope::Account { mailbox, .. } if single_account => Scope::Unified(mailbox),
-                scope => scope,
+            let scope = if opened && state.account_presentation.active_business().is_some() {
+                Scope::CompanyInbox
+            } else if opened
+                && matches!(
+                    state.scope,
+                    Scope::CompanyInbox | Scope::MergedFolder(_) | Scope::TabTag(_)
+                )
+            {
+                Scope::UNIFIED_INBOX
+            } else {
+                match state.scope {
+                    Scope::Account { mailbox, .. } if single_account => Scope::Unified(mailbox),
+                    scope => scope,
+                }
             };
             state.set_scope(scope);
             state.pending_selection = None;

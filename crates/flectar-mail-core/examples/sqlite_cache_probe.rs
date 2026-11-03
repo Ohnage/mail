@@ -390,6 +390,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 account_id: Some(1),
                 account_ids: None,
                 folder_id: None,
+                folder_ids: None,
+                label_ids: None,
                 cursor: None,
                 limit: 50,
             };
@@ -407,6 +409,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             account_id: Some(1),
             account_ids: None,
             folder_id: None,
+            folder_ids: None,
+            label_ids: None,
             cursor: None,
             limit: 50,
         };

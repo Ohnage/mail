@@ -77,11 +77,10 @@ fn account_removal_clears_deleted_models_and_preserves_surviving_selection() {
         },
     ];
     initial_scopes.extend(StandardMailbox::ALL.map(Scope::Unified));
-    for (removed, initial_scope) in [2, 1].into_iter().flat_map(|removed| {
-        initial_scopes
-            .iter()
-            .map(move |scope| (removed, *scope))
-    }) {
+    for (removed, initial_scope) in [2, 1]
+        .into_iter()
+        .flat_map(|removed| initial_scopes.iter().map(move |scope| (removed, *scope)))
+    {
         let (fav, _) = bounded_ui_channel();
         let (avatars, _) = bounded_ui_channel();
         let mut state = InboxState::empty(

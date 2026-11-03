@@ -13,9 +13,7 @@
 
 use super::{TitleBarAction, WindowFrame};
 use crate::{AppWindow, WindowChrome};
-use objc2_app_kit::{
-    NSView, NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility,
-};
+use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility};
 use objc2_foundation::{NSPoint, NSRect, NSString, NSUserDefaults};
 use slint::ComponentHandle;
 use slint::winit_030::winit::platform::macos::WindowAttributesExtMacOS;
@@ -197,8 +195,11 @@ fn title_bar_container(button: &NSView) -> Option<objc2::rc::Retained<NSView>> {
 }
 
 fn traffic_lights(ns_window: &NSWindow) -> Option<[objc2::rc::Retained<NSView>; 3]> {
-    let [close, minimize, zoom] =
-        BUTTONS.map(|kind| ns_window.standardWindowButton(kind).map(|button| button.into_super().into_super()));
+    let [close, minimize, zoom] = BUTTONS.map(|kind| {
+        ns_window
+            .standardWindowButton(kind)
+            .map(|button| button.into_super().into_super())
+    });
     Some([close?, minimize?, zoom?])
 }
 

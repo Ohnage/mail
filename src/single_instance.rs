@@ -444,7 +444,10 @@ mod tests {
             Acquired::Forwarded
         ));
         assert_eq!(
-            shown_rx.recv_timeout(Duration::from_secs(5)).unwrap().as_deref(),
+            shown_rx
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .as_deref(),
             Some("launcher-token_1")
         );
 
@@ -470,8 +473,7 @@ mod tests {
         let first = tempfile::tempdir().unwrap();
         let second = tempfile::tempdir().unwrap();
         assert_ne!(profile_key(first.path()), profile_key(second.path()));
-        let Acquired::Primary(_first) = acquire(&runtime, first.path(), show(None)).unwrap()
-        else {
+        let Acquired::Primary(_first) = acquire(&runtime, first.path(), show(None)).unwrap() else {
             panic!("first profile");
         };
         assert!(matches!(
@@ -489,7 +491,10 @@ mod tests {
         );
         // Invalid tokens are dropped by the sender rather than the request.
         assert_eq!(parse_show(&encode_show(Some("has space"))), Some(None));
-        assert_eq!(parse_show(&encode_show(Some(&"x".repeat(MAX_TOKEN + 1)))), Some(None));
+        assert_eq!(
+            parse_show(&encode_show(Some(&"x".repeat(MAX_TOKEN + 1)))),
+            Some(None)
+        );
 
         for request in [
             &b"quit\n"[..],

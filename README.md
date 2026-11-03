@@ -18,6 +18,12 @@
     <a href="CONTRIBUTING.md">Contribute</a>
   </p>
   <p>
+    <strong>Forked from <a href="https://github.com/flectar/mail">flectar/mail</a>.</strong>
+    This repository is Ohnage's fork. The original project, its AGPLv3 license,
+    and its acknowledgements are unchanged. Fork-only behavior is described in
+    <a href="#this-fork">This fork</a>.
+  </p>
+  <p>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/flectar/mail?style=flat&label=license&color=2563eb" alt="License: AGPL-3.0"></a>
     <a href="https://github.com/flectar/mail/releases"><img src="https://img.shields.io/github/downloads/flectar/mail/total?style=flat&label=downloads&color=16a34a" alt="Downloads across all releases"></a>
     <a href="https://github.com/flectar/mail/releases"><img src="https://img.shields.io/github/v/release/flectar/mail?display_name=tag&include_prereleases&sort=semver&style=flat&label=release&color=0ea5e9" alt="Latest release"></a>
@@ -38,6 +44,83 @@
 Flectar Mail is a lightweight, native home for your email, calendars, and
 contacts. It is engineered to open instantly, stay responsive, and use a
 fraction of the memory of a typical web-based mail client.
+
+## This fork
+
+[Ohnage/mail](https://github.com/Ohnage/mail) is forked from
+[flectar/mail](https://github.com/flectar/mail). Everything above and below
+this section is the upstream project: the same application, the same
+[GNU Affero General Public License v3](LICENSE), and the same acknowledgements
+at the bottom of this file. Changes in this fork are the commits
+on `main` that are not in upstream `main`.
+
+What this fork adds:
+
+- **Business tabs.** Pinned mail scopes sit after All accounts. A tab can
+  show the accounts in selected profiles, mail that matches recipient or
+  sender rules, or both. Each tab has its own name, icon, and color. The
+  color picker is in the tab editor; a tab with no chosen color keeps the
+  linked profile color.
+- **Mail profiles, with color and a logo.** Profiles still group accounts.
+  This fork stores a profile color and a logo, and uses them on the tab, in
+  the sidebar, and as the company badge on a message row.
+- **Named accounts.** Settings → Accounts groups selected mailboxes and
+  receiving addresses under a name, icon, and color. A mailbox can belong to
+  more than one named account. Business tabs choose those named accounts.
+  The same color picker writes the named-account color and, when the account
+  is linked to a profile, the profile color and the per-mailbox marker colors.
+- **Brand registry import.** Settings can import a brand-registry JSON file,
+  and the app also reads `%APPDATA%/flectar-mail/brand-registry.json` when
+  that file changes. Import replaces mail profiles and untouched default
+  tabs with the registry's ids, logos, and colors. Accounts no rule places
+  go to Unassigned. The previous grouping is kept once in
+  `brandRegistryBackup`. A locally edited tab list and independent account
+  icons survive a later import.
+- **Company logo badges.** Message rows use the profile logo as the avatar
+  when one is stored, and the account color as the left-edge marker.
+- **Sender and subject list.** The preview line under the subject is off
+  unless Settings turns it on, so each row is the sender and the subject.
+- **Tab-scoped collapsed sidebar.** Opening a business tab starts its
+  account sections collapsed. Inbox, Sent, and the other unified rows stay
+  visible when the tab's named accounts span more than one mailbox. Expanding
+  a section is remembered for that tab. A tab shows only its chosen
+  accounts' mail and folders.
+- **Server `$label` tags.** During IMAP sync, a keyword named `$label:<id>`
+  (the form used by server-side tag tools) becomes an account tag and stays
+  in sync with that keyword. Adding or removing a non-automatic account tag
+  writes the keyword back to the server. Other unknown keywords are left
+  alone.
+- **Recipient matching for the registry's Tim tab.** Recipient patterns from
+  the brand registry are applied to that tab, including Bcc. Matching is one
+  lookup over exact addresses and globs, so a few hundred patterns do not
+  exceed SQLite's expression limit.
+- **More sender identities.** The per-account cap is 1024, up from the
+  previous 256. A Stalwart Identity/get page of 500 identities fits, and
+  replies can match every stored address. The list becomes searchable once
+  an account has more than eight identities.
+- **Receiving-address inboxes.** Aliases stay separate from the login
+  mailbox and from sending identities. A business tab can classify mail by
+  the recipient address, including delivery headers, and a tab can show its
+  icon without its name.
+
+### Build and install
+
+Build this fork from source with Rust 1.92 or newer:
+
+```bash
+cargo run --bin flectar-mail
+```
+
+A push to `main` on this fork runs
+[Native platform artifacts](https://github.com/Ohnage/mail/actions/workflows/native-platforms.yml)
+and publishes a Windows x64 installer (`flectar-mail-windows-x64-setup.exe`)
+and a portable zip (`flectar-mail-windows-x64.zip`) as workflow artifacts.
+Linux, macOS, and Android packages are not built on every push here; use the
+source command above, or install an upstream build from
+[flectar/mail releases](https://github.com/flectar/mail/releases) when you do
+not need the fork features. Upstream install notes, keyring requirements, and
+signature checks remain in [Get Flectar Mail](#get-flectar-mail). Verify an
+upstream download with `gh attestation verify <download> --repo flectar/mail`.
 
 ## ❓ Why Flectar Mail?
 

@@ -19,9 +19,9 @@
   </p>
   <p>
     <strong>Forked from <a href="https://github.com/flectar/mail">flectar/mail</a>.</strong>
-    This repository is Ohnage's fork. The original project, its AGPLv3 license,
-    and its acknowledgements are unchanged. Fork-only behavior is described in
-    <a href="#this-fork">This fork</a>.
+    This repository is Ohnage's fork and a mentinkizm project. The original
+    project, its AGPLv3 license, and its acknowledgements are unchanged.
+    Fork-only behavior is described in <a href="#this-fork">This fork</a>.
   </p>
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/github/license/flectar/mail?style=flat&label=license&color=2563eb" alt="License: AGPL-3.0"></a>
@@ -661,3 +661,7 @@ contributors:
   the Dioxus team that powers the email reading experience.
 
 ---
+
+<div align="center">
+<sub>Maintained by <a href="https://mentinkizm.com">Mentinkizm LLC</a></sub>
+</div>

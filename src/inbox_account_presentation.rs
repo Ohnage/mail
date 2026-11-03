@@ -144,6 +144,9 @@ impl AccountPresentationSettings {
             avatar: image.cloned().unwrap_or_default(),
             has_avatar: image.is_some(),
             checked: false,
+            color: self
+                .saved_inbox_color(account)
+                .unwrap_or_else(|| fallback_account_color(account.id)),
         }
     }
 }
@@ -156,6 +159,7 @@ mod tests {
             id,
             name: format!("Account {}", id.unsigned_abs()),
             icon: None,
+            color: None,
             account_ids: vec![],
             address_view_ids: addresses,
             automatic_profile: None,

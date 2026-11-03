@@ -3309,8 +3309,8 @@ pub fn fixtures() -> Vec<EmailFixture> {
 mod tests {
     use super::{
         ComposeMessage, compose_args, display_thread_subject, mailbox_entries, markdown_to_html,
-        markdown_to_plain_text, readable_message_html, resolve_scope, snapshot_legacy_tab_icons,
-        summary_to_message, validated_startup_scope, with_local_mail,
+        markdown_to_plain_text, readable_message_html, resolve_scope, retain_profile_accounts,
+        snapshot_legacy_tab_icons, summary_to_message, validated_startup_scope, with_local_mail,
     };
     use crate::mail_scope::{LabelKind, Scope, StandardMailbox};
     use flectar_mail_core::models::{
@@ -3333,6 +3333,63 @@ mod tests {
             can_create_top_level_mailbox: true,
             server_keeps_mail_days: None,
         }
+    }
+
+    fn folder(account_id: i64, name: &str) -> FolderInfo {
+        FolderInfo {
+            id: account_id,
+            account_id,
+            parent_id: None,
+            display_name: name.into(),
+            is_jmap: false,
+            path: name.into(),
+            delimiter: None,
+            role: None,
+            selectable: true,
+            can_create_children: true,
+            can_rename: true,
+            can_delete: true,
+        }
+    }
+
+    #[test]
+    fn named_tab_mailbox_ids_keep_that_accounts_folders() {
+        let mut accounts = vec![
+            Account {
+                id: 2,
+                ..test_account()
+            },
+            Account {
+                id: 9,
+                email: "other@example.com".into(),
+                ..test_account()
+            },
+        ];
+        let mut folders = vec![folder(2, "Clients"), folder(9, "Archive")];
+        retain_profile_accounts(Some(&[2, 4, 9]), &mut accounts, &mut folders);
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|account| account.id)
+                .collect::<Vec<_>>(),
+            vec![2, 9]
+        );
+        assert_eq!(
+            folders
+                .iter()
+                .map(|folder| folder.display_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Clients", "Archive"]
+        );
+
+        let mut accounts = vec![Account {
+            id: 2,
+            ..test_account()
+        }];
+        let mut folders = vec![folder(2, "Clients")];
+        retain_profile_accounts(Some(&[]), &mut accounts, &mut folders);
+        assert!(accounts.is_empty());
+        assert!(folders.is_empty());
     }
 
     #[test]

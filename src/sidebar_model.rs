@@ -274,13 +274,21 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         },
     );
     for row in &mut mailboxes {
-        if row.is_account
-            && let Some(icon) = state
+        if row.is_account {
+            if let Some(icon) = state
                 .account_presentation
                 .account_icon(i64::from(row.account_id))
-        {
-            row.avatar_image = icon.clone();
-            row.has_avatar = true;
+            {
+                row.avatar_image = icon.clone();
+                row.has_avatar = true;
+            }
+            if let Some(color) = state
+                .account_presentation
+                .saved_marker(i64::from(row.account_id))
+            {
+                row.color = color;
+                row.has_custom_color = true;
+            }
         }
     }
     let account_names = mailboxes
@@ -333,6 +341,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 SidebarRowKind::AddressInbox,
                 format!("inbox-account:{}", account.id),
             );
+            let marker = state.account_presentation.saved_inbox_color(account);
             entry.mailbox = MailboxRow {
                 account_id: -1,
                 folder_id: -1,
@@ -342,6 +351,8 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 avatar: choice.initials,
                 avatar_image: choice.avatar,
                 has_avatar: choice.has_avatar,
+                color: marker.unwrap_or_default(),
+                has_custom_color: marker.is_some(),
                 count: if state.scope == Scope::AddressInbox(account.id) && state.inbox_count > 0 {
                     state.inbox_count.to_string().into()
                 } else {
@@ -352,7 +363,18 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             entry
         })
         .collect::<Vec<_>>();
-    if !state.account_presentation.inbox_accounts.is_empty() {
+    // Named accounts replace the raw connection list, except on a business
+    // tab whose chosen accounts span mailboxes: those mailboxes' Inbox, Sent,
+    // and folders have to stay reachable.
+    let tab_active = state.account_presentation.active_business().is_some();
+    let tab_has_mailboxes = state
+        .profile_accounts
+        .as_ref()
+        .is_some_and(|ids| !ids.is_empty());
+    if hides_connection_rows(
+        !state.account_presentation.inbox_accounts.is_empty(),
+        tab_active && tab_has_mailboxes,
+    ) {
         rows.retain(|row| {
             !matches!(
                 row.kind,
@@ -772,6 +794,13 @@ fn account_rows(
         }
     }
     rows
+}
+
+/// Named accounts replace the raw mailbox list, except when the open business
+/// tab's chosen accounts actually span mailboxes. Those rows are Inbox, Sent,
+/// and the account folders.
+fn hides_connection_rows(named_accounts: bool, tab_shows_mailboxes: bool) -> bool {
+    named_accounts && !tab_shows_mailboxes
 }
 
 #[cfg(test)]
@@ -1579,6 +1608,112 @@ mod tests {
         let filtered = vec![row(Kind::Account, "account:1")];
         animation.reconcile(&model, filtered.clone(), false);
         assert_rows_equal(&model.iter().collect::<Vec<_>>(), &filtered);
+    }
+
+    #[test]
+    fn a_named_account_spanning_mailboxes_keeps_inbox_sent_and_its_folders() {
+        use flectar_mail_core::models::InboxAccount;
+
+        let mut presentation = super::super::AccountPresentationSettings::default();
+        presentation.inbox_accounts = vec![InboxAccount {
+            id: -7,
+            name: "Mentink Media".into(),
+            icon: None,
+            color: None,
+            account_ids: vec![9, 4, 9, 2],
+            address_view_ids: vec![],
+            automatic_profile: None,
+            profile_id: None,
+        }];
+        presentation.business_tabs = serde_json::from_value(serde_json::json!([
+            {"id":"tm","name":"TM","profileIds":[]}
+        ]))
+        .unwrap();
+        presentation
+            .business_tab_accounts
+            .insert("tm".into(), vec![-7]);
+        presentation.active_business_tab = Some("tm".into());
+
+        let (sidebar, query, scope) = presentation.view_scope();
+        assert_eq!(sidebar, Some(vec![2, 4, 9]));
+        assert!(query.is_none());
+        assert_eq!(scope.or_account_ids, vec![2, 4, 9]);
+        assert_eq!(
+            SidebarLayout::for_account_count(sidebar.unwrap().len()),
+            SidebarLayout::Unified
+        );
+        assert!(!hides_connection_rows(true, true));
+        assert!(hides_connection_rows(true, false));
+
+        let mailboxes = [2, 4, 9]
+            .into_iter()
+            .flat_map(|account_id| {
+                let header = MailboxRow {
+                    account_id,
+                    is_account: true,
+                    can_create_children: true,
+                    label: format!("Mailbox {account_id}").into(),
+                    ..Default::default()
+                };
+                std::iter::once(header).chain(["Inbox", "Sent", "Clients"].into_iter().map(
+                    move |name| MailboxRow {
+                        account_id,
+                        folder_id: account_id,
+                        scope: format!("{name}:{account_id}").into(),
+                        label: name.into(),
+                        ..Default::default()
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
+        let unified = vec![MailboxRow {
+            scope: "Unified Sent".into(),
+            label: "Sent".into(),
+            ..Default::default()
+        }];
+        let shows = |rows: &[SidebarRow], label: &str| {
+            rows.iter().any(|row| row.mailbox.label.as_str() == label)
+        };
+        let expanded = make_sidebar_rows(
+            SidebarLayout::Unified,
+            mailboxes.clone(),
+            unified.clone(),
+            vec![],
+            &HashSet::new(),
+            &HashSet::new(),
+            None,
+        );
+        let unified_inbox = crate::SidebarRowKind::UnifiedInbox;
+        let folder = crate::SidebarRowKind::Folder;
+        assert!(expanded.iter().any(|row| row.kind == unified_inbox));
+        assert!(shows(&expanded, "Sent"));
+        assert!(
+            expanded
+                .iter()
+                .any(|row| row.kind == folder && row.mailbox.label.as_str() == "Clients")
+        );
+        assert!(
+            expanded
+                .iter()
+                .any(|row| row.kind == folder && row.mailbox.label.as_str() == "Inbox")
+        );
+
+        let collapsed = make_sidebar_rows(
+            SidebarLayout::Unified,
+            mailboxes,
+            unified,
+            vec![],
+            &HashSet::new(),
+            &HashSet::from(["account:2".into(), "account:4".into(), "account:9".into()]),
+            None,
+        );
+        assert!(collapsed.iter().any(|row| row.kind == unified_inbox));
+        assert!(shows(&collapsed, "Sent"));
+        assert!(
+            collapsed
+                .iter()
+                .all(|row| row.mailbox.label.as_str() != "Clients")
+        );
     }
 }
 

@@ -6,6 +6,8 @@ import { Button } from "button.slint";
 import { IconButton, LineEdit } from "controls.slint";
 import { InboxViewChoice } from "inbox-view-choice.slint";
 import { FormField } from "settings-components.slint";
+import { ProfileColorChoice, ProfilePalette } from "profile-controls.slint";
+import { RuntimeColorPicker } from "theme-editor.slint";
 
 // Saved settings live in Rust. Every field below belongs to an isolated draft.
 export global BusinessTabEditorUi {
@@ -17,6 +19,8 @@ export global BusinessTabEditorUi {
     in-out property <string> query;
     in property <image> icon;
     in property <bool> has-icon: false;
+    in-out property <color> accent: #3b82f6;
+    in-out property <bool> custom-accent: false;
     in property <string> error;
     in property <[InboxViewChoiceRow]> members;
     in property <int> selected-count;
@@ -83,6 +87,39 @@ export component BusinessTabEditor inherits VerticalBox {
             Button { text: @tr("Remove icon"); width: max(96px, self.content-width); enabled: BusinessTabEditorUi.has-icon; clicked => { BusinessTabEditorUi.remove-icon(); } }
         }
         Rectangle { horizontal-stretch: 1; }
+    }
+    Text {
+        text: @tr("Color");
+        color: AppTheme.secondary;
+        font-size: TypeScale.caption;
+        font-weight: 600;
+    }
+    HorizontalBox {
+        padding: 0px;
+        spacing: 8px;
+        alignment: start;
+        for swatch[index] in ProfilePalette.colors : ProfileColorChoice {
+            width: 30px;
+            height: 30px;
+            value: swatch;
+            selected: !BusinessTabEditorUi.custom-accent && BusinessTabEditorUi.accent == swatch;
+            label: BusinessTabEditorUi.account-mode ? @tr("Account color {}", index + 1) : @tr("Profile color {}", index + 1);
+            chosen => {
+                BusinessTabEditorUi.custom-accent = false;
+                BusinessTabEditorUi.accent = swatch;
+            }
+        }
+    }
+    Button {
+        text: @tr("Custom color…");
+        width: max(120px, self.content-width);
+        selected: BusinessTabEditorUi.custom-accent;
+        clicked => { BusinessTabEditorUi.custom-accent = true; }
+    }
+    if BusinessTabEditorUi.custom-accent : RuntimeColorPicker {
+        height: 222px;
+        value: BusinessTabEditorUi.accent;
+        edited(value) => { BusinessTabEditorUi.accent = value; }
     }
     Text {
         text: BusinessTabEditorUi.account-mode ? @tr("Choose the email addresses and mailboxes that belong to this account. The same inbox can belong to more than one account.") : @tr("Choose the accounts to show in this business tab. An account can appear in more than one tab.");
@@ -153,6 +190,7 @@ export component BusinessTabsCard inherits Rectangle {
                 spacing: 4px;
                 height: 36px;
                 if tab.has_logo : Image { width: 28px; height: 28px; source: tab.logo; image-fit: contain; }
+                Rectangle { width: 10px; height: 10px; border-radius: 5px; background: tab.color; }
                 Text { text: tab.name; color: AppTheme.body; font-size: TypeScale.body; overflow: elide; horizontal-stretch: 1; min-width: 0px; }
                 IconButton { icon: @image-url("../icons/lucide/outline/pencil.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Edit {}", tab.name); clicked => { BusinessTabEditorUi.open(tab.id); } }
                 IconButton { icon: @image-url("../icons/lucide/outline/chevron-up.svg"); icon-color: AppTheme.secondary; ghost: true; tooltip-text: @tr("Move {} up", tab.name); interactive: index > 0; clicked => { root.move-tab(tab.id, -1); } }
@@ -208,6 +246,7 @@ export component InboxAccountsCard inherits Rectangle {
                     HorizontalBox {
                         padding: 4px; spacing: 8px;
                         if account.has_avatar : Image { width: 30px; height: 30px; source: account.avatar; image-fit: contain; }
+                        Rectangle { width: 10px; height: 10px; border-radius: 5px; background: account.color; }
                         VerticalBox {
                             padding: 0px; spacing: 2px; horizontal-stretch: 1; min-width: 0px;
                             Text { text: account.name; color: AppTheme.heading; overflow: elide; font-size: TypeScale.body; }

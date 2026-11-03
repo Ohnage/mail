@@ -674,7 +674,15 @@ impl AccountPresentationSettings {
                 && tab.address_view_ids.is_none()
                 && matches!(tab.resolved_scope(), "profiles" | "any" | "recipients"))
         {
-            return (Some(Vec::new()), None, self.named_tab_scope(tab));
+            // Sidebar and folder loading follow the chosen named accounts'
+            // mailboxes. An empty list hid Inbox, Sent, and every folder.
+            // The query stays open so address rules can still match; the
+            // scope limits which of those mailboxes' messages are listed.
+            return (
+                Some(self.named_tab_mailbox_ids(tab)),
+                None,
+                self.named_tab_scope(tab),
+            );
         }
         let company_accounts = match &tab.account_ids {
             Some(ids) => {
@@ -799,17 +807,88 @@ impl AccountPresentationSettings {
             })
     }
 
-    fn marker_color(&self, account_id: i64) -> slint::Color {
-        let configured = self
-            .profile(account_id)
-            .map(|profile| profile.color.as_str())
+    /// Mailboxes belonging to the named accounts selected for this tab.
+    fn named_tab_mailbox_ids(&self, tab: &flectar_mail_core::models::BusinessTab) -> Vec<i64> {
+        let selected = self.selected_inbox_accounts(tab);
+        let mut ids = Vec::new();
+        for account in &self.inbox_accounts {
+            if selected.contains(&account.id) {
+                ids.extend(account.account_ids.iter().copied());
+            }
+        }
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// A saved marker, without the generated fallback.
+    ///
+    /// An explicit named-account color wins, then the mail profile color,
+    /// then a per-mailbox color. Missing values stay missing so a generated
+    /// hue is not stored over a color the user has not chosen.
+    fn saved_marker(&self, account_id: i64) -> Option<slint::Color> {
+        self.inbox_accounts
+            .iter()
+            .find_map(|account| {
+                account
+                    .account_ids
+                    .contains(&account_id)
+                    .then(|| account.color.as_deref())
+                    .flatten()
+                    .and_then(parse_marker_color)
+            })
+            .or_else(|| {
+                self.profile(account_id)
+                    .and_then(|profile| parse_marker_color(&profile.color))
+            })
             .or_else(|| {
                 self.account_colors
                     .get(&account_id.to_string())
-                    .map(String::as_str)
-            });
-        configured
+                    .and_then(|color| parse_marker_color(color))
+            })
+    }
+
+    fn saved_inbox_color(
+        &self,
+        account: &flectar_mail_core::models::InboxAccount,
+    ) -> Option<slint::Color> {
+        account
+            .color
+            .as_deref()
             .and_then(parse_marker_color)
+            .or_else(|| {
+                account.profile_id.as_ref().and_then(|id| {
+                    self.profiles
+                        .iter()
+                        .find(|profile| &profile.id == id)
+                        .and_then(|profile| parse_marker_color(&profile.color))
+                })
+            })
+            .or_else(|| {
+                account
+                    .account_ids
+                    .iter()
+                    .find_map(|id| self.saved_marker(*id))
+            })
+    }
+
+    fn business_tab_color(&self, tab: &flectar_mail_core::models::BusinessTab) -> slint::Color {
+        tab.color
+            .as_deref()
+            .and_then(parse_marker_color)
+            .or_else(|| {
+                tab.profile_ids.iter().find_map(|id| {
+                    self.profiles
+                        .iter()
+                        .find(|profile| &profile.id == id)
+                        .and_then(|profile| parse_marker_color(&profile.color))
+                })
+            })
+            .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
+    }
+
+    fn marker_color(&self, account_id: i64) -> slint::Color {
+        self.saved_marker(account_id)
             .unwrap_or_else(|| fallback_account_color(account_id))
     }
 
@@ -8549,6 +8628,7 @@ mod tests {
                 sender_names: Vec::new(),
                 sender_domains: Vec::new(),
                 icon: None,
+                color: None,
                 account_ids: None,
                 address_view_ids: None,
                 show_name: true,
@@ -8583,6 +8663,7 @@ mod tests {
                 sender_names: Vec::new(),
                 sender_domains: Vec::new(),
                 icon: None,
+                color: None,
                 account_ids: None,
                 address_view_ids: None,
                 show_name: true,

@@ -1495,6 +1495,7 @@ fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
             avatar: account.avatar_small,
             has_avatar: account.has_avatar,
             checked: draft.accounts.contains(&i64::from(account.id)),
+            color: Default::default(),
         })
         .collect::<Vec<_>>();
     choices.extend(app.get_address_inboxes().iter().map(|mut view| {
@@ -1536,6 +1537,25 @@ fn choose_settings_file_path(
     _extensions: &[&str],
 ) -> Option<std::path::PathBuf> {
     None
+}
+
+fn palette_color(color: slint::Color) -> bool {
+    matches!(
+        (color.red(), color.green(), color.blue()),
+        (0x3b, 0x82, 0xf6)
+            | (0x8b, 0x5c, 0xf6)
+            | (0x0d, 0x94, 0x88)
+            | (0xea, 0x58, 0x0c)
+            | (0xdb, 0x27, 0x77)
+            | (0x65, 0xa3, 0x0d)
+            | (0x08, 0x91, 0xb2)
+            | (0x93, 0x33, 0xea)
+    )
+}
+
+fn show_editor_color(editor: &BusinessTabEditorUi, color: slint::Color) {
+    editor.set_accent(color);
+    editor.set_custom_accent(!palette_color(color));
 }
 
 fn choose_custom_icon_path() -> Option<std::path::PathBuf> {
@@ -1687,6 +1707,14 @@ fn register_branding_callbacks(
                 || !tab.sender_names.is_empty()
                 || !tab.sender_domains.is_empty()
         }));
+        let color = tab
+            .map(|tab| presentation.business_tab_color(tab))
+            .unwrap_or_else(|| {
+                fallback_account_color(
+                    i64::try_from(presentation.business_tabs.len()).unwrap_or_default(),
+                )
+            });
+        show_editor_color(&editor, color);
         publish_tab_members(&app, &initial);
         *open_draft.borrow_mut() = Some(initial);
         editor.set_visible(true);
@@ -1713,6 +1741,7 @@ fn register_branding_callbacks(
                     id: 0,
                     name: String::new(),
                     icon: None,
+                    color: None,
                     account_ids: vec![],
                     address_view_ids: vec![],
                     automatic_profile: None,
@@ -1738,7 +1767,7 @@ fn register_branding_callbacks(
             } else {
                 id.to_string().into()
             });
-            editor.set_name(account.name.into());
+            editor.set_name(account.name.clone().into());
             editor.set_query(Default::default());
             editor.set_error(Default::default());
             let image = account.icon.as_ref().and_then(|relative| {
@@ -1751,6 +1780,14 @@ fn register_branding_callbacks(
             editor.set_icon(image.unwrap_or_default());
             editor.set_has_special_rules(false);
             editor.set_recipient_only(false);
+            let color = p.saved_inbox_color(&account).unwrap_or_else(|| {
+                fallback_account_color(if account.id == 0 {
+                    i64::try_from(p.inbox_accounts.len()).unwrap_or_default()
+                } else {
+                    account.id
+                })
+            });
+            show_editor_color(&editor, color);
             publish_tab_members(&app, &initial);
             *account_draft.borrow_mut() = Some(initial);
             editor.set_visible(true);
@@ -1905,6 +1942,7 @@ fn register_branding_callbacks(
                 account.address_view_ids = addresses.unwrap_or_default();
                 account.automatic_profile = None;
             }
+            account.color = Some(theme::color_to_hex(editor.get_accent()));
             save_runtime.block_on(core.account_preferences_core().save_inbox_account(account))
         } else {
             let members = (draft.membership_dirty || draft.id.is_none())
@@ -1915,6 +1953,7 @@ fn register_branding_callbacks(
                 draft.icon.clone(),
                 editor.get_show_name(),
                 members,
+                Some(theme::color_to_hex(editor.get_accent())),
             ))
         };
         drop(borrowed);

@@ -341,6 +341,7 @@ pub(super) fn apply_connected_accounts(
                     avatar: icon.cloned().unwrap_or_default(),
                     has_avatar: icon.is_some(),
                     checked: false,
+                    color: Default::default(),
                 }
             })
             .collect::<Vec<_>>(),
@@ -394,18 +395,7 @@ pub(super) fn apply_connected_accounts(
         .business_tabs
         .iter()
         .map(|tab| {
-            let profile = tab.profile_ids.iter().find_map(|id| {
-                presentation
-                    .profiles
-                    .iter()
-                    .find(|profile| &profile.id == id)
-            });
-            let color = profile
-                .map(|profile| {
-                    parse_marker_color(&profile.color)
-                        .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
-                })
-                .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128));
+            let color = presentation.business_tab_color(tab);
             let logo = presentation
                 .tab_icons
                 .get(&tab.id)

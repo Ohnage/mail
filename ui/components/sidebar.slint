@@ -488,7 +488,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         hover-background: root.hover-background;
                         body-color: root.title-color;
                         muted-color: root.muted-color;
-                        icon-color: self.local && !root.monochrome-icons ? MailIconPalette.folders : root.body-color;
+                        icon-color: entry.mailbox.has_custom_color ? entry.mailbox.color : self.local && !root.monochrome-icons ? MailIconPalette.folders : root.body-color;
                         open: entry.open;
                         toggled(open) => { root.toggle-section(entry.key, open); }
                     }
@@ -511,7 +511,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         accent-color: root.accent-color;
                         body-color: root.body-color;
                         muted-color: root.muted-color;
-                        icon-color: root.monochrome-icons ? root.muted-color : MailIconPalette.inbox;
+                        icon-color: entry.mailbox.has_custom_color ? entry.mailbox.color : root.monochrome-icons ? root.muted-color : MailIconPalette.inbox;
                         clicked(scope) => { root.select-scope(scope); }
                     }
 

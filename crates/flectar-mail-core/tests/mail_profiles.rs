@@ -83,6 +83,7 @@ async fn named_accounts_share_aliases_and_tabs_save_atomically_without_catalog_r
             id: 0,
             name: name.into(),
             icon: None,
+            color: None,
             account_ids: vec![2],
             address_view_ids: vec![address],
             automatic_profile: None,
@@ -99,7 +100,14 @@ async fn named_accounts_share_aliases_and_tabs_save_atomically_without_catalog_r
         .map(|account| account.id)
         .collect::<Vec<_>>();
     let saved = core
-        .save_account_tab(None, "Business".into(), None, true, Some(members.clone()))
+        .save_account_tab(
+            None,
+            "Business".into(),
+            None,
+            true,
+            Some(members.clone()),
+            None,
+        )
         .await
         .unwrap();
     let tab = saved.business_tabs[0].clone();
@@ -109,6 +117,7 @@ async fn named_accounts_share_aliases_and_tabs_save_atomically_without_catalog_r
             tab.name.clone(),
             tab.icon.clone(),
             tab.show_name,
+            None,
             None,
         )
         .await
@@ -129,7 +138,8 @@ async fn named_accounts_share_aliases_and_tabs_save_atomically_without_catalog_r
             "Must not commit".into(),
             None,
             false,
-            Some(vec![-999])
+            Some(vec![-999]),
+            None,
         )
         .await
         .is_err()

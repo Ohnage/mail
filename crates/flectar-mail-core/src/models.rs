@@ -1625,6 +1625,9 @@ pub struct InboxAccount {
     pub name: String,
     #[serde(default)]
     pub icon: Option<String>,
+    /// `#RRGGBB` marker. Absent accounts keep the linked profile or mailbox color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     #[serde(default)]
     pub account_ids: Vec<i64>,
     #[serde(default)]
@@ -1677,6 +1680,9 @@ pub struct BusinessTab {
     /// Independent normalized tab icon, relative to the application data folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// `#RRGGBB` chosen for the tab. Absent tabs keep the linked profile color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
     /// None inherits profile membership; Some(empty) deliberately selects no accounts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_ids: Option<Vec<i64>>,

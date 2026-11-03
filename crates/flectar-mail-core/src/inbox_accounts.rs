@@ -22,6 +22,7 @@ pub fn initialize(settings: &mut Settings, connections: &[RegistryAccount]) -> b
             id: key(&profile.id),
             name: profile.name.clone(),
             icon: profile.logo.clone(),
+            color: None,
             account_ids: Vec::new(),
             address_view_ids: Vec::new(),
             automatic_profile: Some(profile.id.clone()),
@@ -47,6 +48,7 @@ pub fn initialize(settings: &mut Settings, connections: &[RegistryAccount]) -> b
                     .map(|account| account.email.clone())
                     .unwrap_or_else(|| format!("Mailbox {id}")),
                 icon: settings.account_icons.get(&id.to_string()).cloned(),
+                color: settings.account_colors.get(&id.to_string()).cloned(),
                 account_ids: vec![*id],
                 address_view_ids: Vec::new(),
                 automatic_profile: None,
@@ -67,6 +69,7 @@ pub fn initialize(settings: &mut Settings, connections: &[RegistryAccount]) -> b
                     id: id_key,
                     name: view.address.clone(),
                     icon: None,
+                    color: None,
                     account_ids: Vec::new(),
                     address_view_ids: vec![*id],
                     automatic_profile: None,
@@ -115,6 +118,10 @@ pub fn save(
     if account.name.is_empty() || account.name.chars().count() > 120 {
         return Err("Enter an account name of 1–120 characters".into());
     }
+    if let Some(color) = account.color.as_deref() {
+        account.color =
+            Some(crate::normalize_mail_profile_color(color).map_err(|error| error.to_string())?);
+    }
     if account.id == 0 {
         account.id = key(&account.name);
         while settings
@@ -152,6 +159,9 @@ pub fn save(
             return Err("A selected address is no longer available".into());
         }
     }
+    let saved_color = account.color.clone();
+    let saved_profile = account.profile_id.clone();
+    let saved_mailboxes = account.account_ids.clone();
     if let Some(item) = settings
         .inbox_accounts
         .iter_mut()
@@ -160,6 +170,24 @@ pub fn save(
         *item = account;
     } else {
         settings.inbox_accounts.push(account);
+    }
+    // Keep the existing profile and per-mailbox colors in step with the
+    // named account so message markers and tabs that still read them update,
+    // and so a save that does not choose a color leaves them alone.
+    if let Some(color) = saved_color {
+        if let Some(profile_id) = saved_profile.as_ref()
+            && let Some(profile) = settings
+                .mail_profiles
+                .iter_mut()
+                .find(|profile| &profile.id == profile_id)
+        {
+            profile.color = color.clone();
+        }
+        for id in saved_mailboxes {
+            settings
+                .account_colors
+                .insert(id.to_string(), color.clone());
+        }
     }
     Ok(())
 }
@@ -224,9 +252,13 @@ impl crate::Core {
         icon: Option<String>,
         show_name: bool,
         members: Option<Vec<i64>>,
+        color: Option<String>,
     ) -> crate::error::Result<Settings> {
         let name = crate::normalize_mail_profile_name(&name)?;
         let icon = crate::normalize_identity_icon(icon, "tab-icons/")?;
+        let color = color
+            .map(|color| crate::normalize_mail_profile_color(&color))
+            .transpose()?;
         self.db
             .write(move |conn| {
                 use crate::{db::repo, error::CoreError};
@@ -269,6 +301,9 @@ impl crate::Core {
                     tab.name = name;
                     tab.icon = icon;
                     tab.show_name = show_name;
+                    if let Some(color) = color.clone() {
+                        tab.color = Some(color);
+                    }
                     id
                 } else {
                     let mut id = format!("tab-{}", settings.business_tabs.len() + 1);
@@ -280,6 +315,7 @@ impl crate::Core {
                         name,
                         icon,
                         show_name,
+                        color,
                         account_ids: Some(vec![]),
                         address_view_ids: Some(vec![]),
                         profile_ids: vec![],
@@ -302,5 +338,68 @@ impl crate::Core {
                 Ok(settings)
             })
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{MailProfile, Settings};
+
+    fn connected(id: i64) -> RegistryAccount {
+        RegistryAccount {
+            id,
+            email: format!("box{id}@example.com"),
+        }
+    }
+
+    #[test]
+    fn saving_a_named_account_color_updates_the_profile_and_mailbox_colors() {
+        let mut settings = Settings {
+            inbox_accounts_initialized: true,
+            mail_profiles: vec![MailProfile {
+                id: "mentink".into(),
+                name: "Mentink".into(),
+                color: "#3B82F6".into(),
+                account_ids: vec![2, 4],
+                logo: None,
+            }],
+            inbox_accounts: vec![InboxAccount {
+                id: -7,
+                name: "Mentink Media".into(),
+                icon: None,
+                color: None,
+                account_ids: vec![2, 4],
+                address_view_ids: vec![],
+                automatic_profile: None,
+                profile_id: Some("mentink".into()),
+            }],
+            ..Settings::default()
+        };
+        settings.account_colors.insert("2".into(), "#111111".into());
+        let connections = [connected(2), connected(4)];
+        let mut account = settings.inbox_accounts[0].clone();
+        account.color = Some("#ea580c".into());
+        save(&mut settings, account, &connections).unwrap();
+        assert_eq!(settings.inbox_accounts[0].color.as_deref(), Some("#EA580C"));
+        assert_eq!(settings.mail_profiles[0].color, "#EA580C");
+        assert_eq!(
+            settings.account_colors.get("2").map(String::as_str),
+            Some("#EA580C")
+        );
+        assert_eq!(
+            settings.account_colors.get("4").map(String::as_str),
+            Some("#EA580C")
+        );
+
+        let mut unchanged = settings.inbox_accounts[0].clone();
+        unchanged.color = None;
+        save(&mut settings, unchanged, &connections).unwrap();
+        assert!(settings.inbox_accounts[0].color.is_none());
+        assert_eq!(settings.mail_profiles[0].color, "#EA580C");
+        assert_eq!(
+            settings.account_colors.get("4").map(String::as_str),
+            Some("#EA580C")
+        );
     }
 }

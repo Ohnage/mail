@@ -92,6 +92,7 @@ fn alias_choices(icon: &slint::Image) -> Vec<InboxViewChoiceRow> {
         avatar: icon.clone(),
         has_avatar: true,
         checked: false,
+        color: Default::default(),
     })
     .collect()
 }
@@ -108,6 +109,7 @@ fn members(accounts: &[AccountRow], query: &str, empty_selection: bool) -> Vec<I
             avatar: account.avatar_small.clone(),
             has_avatar: true,
             checked: !empty_selection && account.id <= 2,
+            color: Default::default(),
         })
         .collect::<Vec<_>>();
     let icon = accounts
@@ -217,6 +219,7 @@ fn branding_surfaces_screenshots() {
                     avatar: icon.clone(),
                     has_avatar: true,
                     checked: i != 2,
+                    color: slint::Color::from_rgb_u8(0x3b, 0x82, 0xf6),
                 })
                 .collect::<Vec<_>>(),
         )));

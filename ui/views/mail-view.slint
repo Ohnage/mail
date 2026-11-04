@@ -147,6 +147,8 @@ export component MailView inherits FocusScope {
     callback request_folder_create(int, int, string);
     callback request_label_create(int, string, int, string);
     callback request_folder_rename(int, string);
+    callback request_folder_move(int, string);
+    callback move_folder(int, string);
     callback request_folder_delete(int, string);
     callback request_label_rename(int, string, color, string, bool);
     callback request_label_delete(int, string, string, bool, bool);
@@ -155,6 +157,7 @@ export component MailView inherits FocusScope {
     callback message_action(string);
     callback message_action_for_email(int, string);
     callback bulk_message_action(string);
+    callback request_file_messages(int);
     callback toggle_mail_group(string);
     callback request_empty_trash(int);
     callback set_email_checked(int, bool);
@@ -332,6 +335,8 @@ export component MailView inherits FocusScope {
                     root.request_label_create(account-id, account-name, parent-id, parent-path);
                 }
                 request-rename-folder(id, name) => { root.request_folder_rename(id, name); }
+                request-move-folder(id, name) => { root.request_folder_move(id, name); }
+                move-folder(id, destination) => { root.move_folder(id, destination); }
                 request-delete-folder(id, name) => { root.request_folder_delete(id, name); }
                 request-empty-trash(account-id) => { root.request_empty_trash(account-id); }
                 request-rename-label(id, name, color, account, global) => { root.request_label_rename(id, name, color, account, global); }
@@ -392,6 +397,7 @@ export component MailView inherits FocusScope {
                     root.message_action_for_email(id, action);
                 }
                 bulk_message_action(action) => { root.bulk_message_action(action); }
+                request_file_messages(id) => { root.request_file_messages(id); }
                 toggle_mail_group(key) => { root.toggle_mail_group(key); }
                 set_email_checked(id, checked) => { root.set_email_checked(id, checked); }
                 set_all_emails_checked(checked) => { root.set_all_emails_checked(checked); }
@@ -553,6 +559,8 @@ export component MailView inherits FocusScope {
                     root.request_label_create(account-id, account-name, parent-id, parent-path);
                 }
                 request-rename-folder(id, name) => { root.request_folder_rename(id, name); }
+                request-move-folder(id, name) => { root.request_folder_move(id, name); }
+                move-folder(id, destination) => { root.move_folder(id, destination); }
                 request-delete-folder(id, name) => { root.request_folder_delete(id, name); }
                 request-rename-label(id, name, color, account, global) => { root.request_label_rename(id, name, color, account, global); }
                 request-delete-label(id, name, account, global, has-children) => {
@@ -634,6 +642,7 @@ export component MailView inherits FocusScope {
                     root.message_action_for_email(id, action);
                 }
                 bulk_message_action(action) => { root.bulk_message_action(action); }
+                request_file_messages(id) => { root.request_file_messages(id); }
                 toggle_mail_group(key) => { root.toggle_mail_group(key); }
                 set_email_checked(id, checked) => { root.set_email_checked(id, checked); }
                 set_all_emails_checked(checked) => { root.set_all_emails_checked(checked); }
@@ -811,6 +820,8 @@ export component MailView inherits FocusScope {
                     root.request_label_create(account-id, account-name, parent-id, parent-path);
                 }
                 request-rename-folder(id, name) => { root.request_folder_rename(id, name); }
+                request-move-folder(id, name) => { root.request_folder_move(id, name); }
+                move-folder(id, destination) => { root.move_folder(id, destination); }
                 request-delete-folder(id, name) => { root.request_folder_delete(id, name); }
                 request-empty-trash(account-id) => { root.request_empty_trash(account-id); }
                 request-rename-label(id, name, color, account, global) => { root.request_label_rename(id, name, color, account, global); }

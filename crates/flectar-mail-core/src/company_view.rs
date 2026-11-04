@@ -15,32 +15,31 @@ pub fn address_local_part(email: &str) -> &str {
     }
 }
 
-/// Hub mailboxes copy mail that already lives on the company accounts.
+/// Whether the address's local part is `hub`. Hub mailboxes hold their own mail.
 pub fn is_hub_address(email: &str) -> bool {
     address_local_part(email).eq_ignore_ascii_case("hub")
 }
 
-/// `inbox@` and `hub@` start excluded. Any other address starts included.
+/// Only `inbox@` starts excluded. Every other address, including `hub@`, starts included.
 pub fn default_excluded_from_company_views(email: &str) -> bool {
-    let local = address_local_part(email);
-    local.eq_ignore_ascii_case("inbox") || local.eq_ignore_ascii_case("hub")
+    address_local_part(email).eq_ignore_ascii_case("inbox")
 }
 
 /// Whether this mailbox feeds Company Inbox, merged folders, and tab tags.
 ///
-/// `explicit` is the stored flag. `None` uses the address default. An address
-/// whose local part is `hub` stays out even when the flag is off, so a hub
-/// copy cannot be counted beside the account it mirrors.
+/// `explicit` is the stored `companyViewExcluded` flag. `None` uses the address
+/// default. The flag wins in both directions, so `hub@` can be left out and
+/// `inbox@` can be brought in.
 pub fn excluded_from_company_views(email: &str, explicit: Option<bool>) -> bool {
-    if is_hub_address(email) {
-        return true;
-    }
     explicit.unwrap_or_else(|| default_excluded_from_company_views(email))
 }
 
-/// Case-folded full folder path. Matching ignores case and nothing else.
+/// Case-folded full folder path.
+///
+/// Matching ignores case. JMAP stores a level as ` / `; that is the same
+/// separator as `/`, so `Clients / Acme` and `Clients/Acme` are one folder.
 pub fn folder_match_key(path: &str) -> String {
-    path.trim().to_lowercase()
+    path.trim().replace(" / ", "/").to_lowercase()
 }
 
 /// Positive id that fits in a sidebar `int` and stays clear of real folder ids.
@@ -95,6 +94,8 @@ pub struct MergedFolder {
 ///
 /// The first path in input order keeps its spelling. A child hangs under the
 /// merged folder whose path is the parent prefix before the last `/`.
+/// Grouping is by path, so hundreds of mailboxes that share a tree stay one
+/// tree rather than one row per mailbox.
 pub fn merge_folders(folders: &[FolderLeaf]) -> Vec<MergedFolder> {
     let mut groups: BTreeMap<String, Vec<&FolderLeaf>> = BTreeMap::new();
     for folder in folders {
@@ -104,89 +105,82 @@ pub fn merge_folders(folders: &[FolderLeaf]) -> Vec<MergedFolder> {
         }
         groups.entry(key).or_default().push(folder);
     }
-    let keys = groups.keys().cloned().collect::<Vec<_>>();
-    let mut nodes = Vec::new();
-    for key in &keys {
-        let members = &groups[key];
-        let path = members[0].path.clone();
-        let parent_key = key.rsplit_once('/').map(|(parent, _)| parent.to_owned());
-        let parent_id = parent_key
-            .as_ref()
-            .filter(|parent| groups.contains_key(parent.as_str()))
-            .map(|parent| folder_scope_id(parent))
+    let mut id_by_key: HashMap<&str, i64> = HashMap::with_capacity(groups.len());
+    for key in groups.keys() {
+        id_by_key.insert(key.as_str(), folder_scope_id(key));
+    }
+    let mut child_keys: HashMap<&str, Vec<&str>> = HashMap::new();
+    for key in groups.keys() {
+        if let Some((parent, _)) = key.rsplit_once('/')
+            && groups.contains_key(parent)
+        {
+            child_keys.entry(parent).or_default().push(key.as_str());
+        }
+    }
+    let mut nodes = Vec::with_capacity(groups.len());
+    for (key, members) in &groups {
+        let parent_id = key
+            .rsplit_once('/')
+            .and_then(|(parent, _)| id_by_key.get(parent).copied())
             .unwrap_or(-1);
-        let has_children = keys.iter().any(|other| {
-            other
-                .strip_prefix(key.as_str())
-                .is_some_and(|rest| rest.starts_with('/') && !rest[1..].contains('/'))
-        });
-        let unread = members.iter().map(|member| member.unread.max(0)).sum();
+        let path = members[0].path.clone();
+        let label = folder_leaf(&path).to_owned();
         nodes.push(MergedFolder {
-            id: folder_scope_id(key),
+            id: id_by_key[key.as_str()],
             path,
-            label: String::new(),
+            label,
             depth: 0,
             parent_id,
-            has_children,
-            unread,
+            has_children: child_keys.contains_key(key.as_str()),
+            unread: members.iter().map(|member| member.unread.max(0)).sum(),
             members: members
                 .iter()
                 .map(|member| (member.account_id, member.folder_id))
                 .collect(),
         });
     }
-    let depth_of = |nodes: &[MergedFolder], id: i64| -> i32 {
-        let mut depth = 0;
-        let mut parent = nodes
-            .iter()
-            .find(|node| node.id == id)
-            .map(|node| node.parent_id);
-        let mut seen = Vec::new();
-        while let Some(parent_id) = parent.filter(|parent| *parent >= 0 && seen.len() < nodes.len())
-        {
-            if !seen.contains(&parent_id) {
-                seen.push(parent_id);
-            } else {
-                break;
-            }
-            depth += 1;
-            parent = nodes
-                .iter()
-                .find(|node| node.id == parent_id)
-                .map(|node| node.parent_id);
-        }
-        depth
-    };
-    for index in 0..nodes.len() {
-        let id = nodes[index].id;
-        nodes[index].depth = depth_of(&nodes, id);
-        nodes[index].label = folder_leaf(&nodes[index].path).to_owned();
+    let mut by_parent: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (index, node) in nodes.iter().enumerate() {
+        by_parent.entry(node.parent_id).or_default().push(index);
     }
-    let mut ordered = Vec::new();
-    fn walk(nodes: &[MergedFolder], parent: i64, out: &mut Vec<MergedFolder>) {
-        let mut children = nodes
-            .iter()
-            .filter(|node| node.parent_id == parent)
-            .cloned()
-            .collect::<Vec<_>>();
-        children.sort_by(|a, b| {
-            a.label
+    for children in by_parent.values_mut() {
+        children.sort_by(|&left, &right| {
+            nodes[left]
+                .label
                 .to_lowercase()
-                .cmp(&b.label.to_lowercase())
-                .then(a.id.cmp(&b.id))
+                .cmp(&nodes[right].label.to_lowercase())
+                .then(nodes[left].id.cmp(&nodes[right].id))
         });
-        for child in children {
-            let id = child.id;
+    }
+    let mut ordered = Vec::with_capacity(nodes.len());
+    let mut placed = HashMap::<i64, ()>::with_capacity(nodes.len());
+    fn walk(
+        nodes: &[MergedFolder],
+        by_parent: &HashMap<i64, Vec<usize>>,
+        parent: i64,
+        depth: i32,
+        placed: &mut HashMap<i64, ()>,
+        out: &mut Vec<MergedFolder>,
+    ) {
+        let Some(children) = by_parent.get(&parent) else {
+            return;
+        };
+        for &index in children {
+            let id = nodes[index].id;
+            if placed.insert(id, ()).is_some() {
+                continue;
+            }
+            let mut child = nodes[index].clone();
+            child.depth = depth;
             out.push(child);
-            walk(nodes, id, out);
+            walk(nodes, by_parent, id, depth.saturating_add(1), placed, out);
         }
     }
-    walk(&nodes, -1, &mut ordered);
-    // A path whose parent string is missing still appears at the root.
-    let placed = ordered.iter().map(|node| node.id).collect::<Vec<_>>();
+    walk(&nodes, &by_parent, -1, 0, &mut placed, &mut ordered);
+    // A cycle has no root. Those folders still appear, after the tree.
     let mut orphans = nodes
         .into_iter()
-        .filter(|node| !placed.contains(&node.id))
+        .filter(|node| !placed.contains_key(&node.id))
         .collect::<Vec<_>>();
     orphans.sort_by_key(|node| node.label.to_lowercase());
     ordered.extend(orphans);
@@ -312,7 +306,8 @@ pub struct CompanyAccount {
 /// Tab mailboxes that feed the company inbox, merged folders, and tab tags.
 ///
 /// `explicit` is the stored flag for an account id. A missing account record
-/// stays included, because its address is unknown and cannot be a hub.
+/// stays included, because its address is unknown. The filter is one pass
+/// over the tab's ids.
 pub fn company_mailbox_ids(
     sources: &TabMailboxSources,
     accounts: &[CompanyAccount],
@@ -389,18 +384,84 @@ mod tests {
     }
 
     #[test]
-    fn hub_is_always_excluded_and_inbox_defaults_off() {
-        assert!(excluded_from_company_views("hub@example.com", None));
-        assert!(excluded_from_company_views("HUB@example.com", Some(false)));
+    fn jmap_spaced_paths_merge_with_slash_paths() {
+        let merged = merge_folders(&[
+            leaf(1, 1, "Clients", 0),
+            leaf(1, 2, "Clients / Acme", 1),
+            leaf(2, 3, "clients/acme", 2),
+        ]);
+        assert_eq!(merged.len(), 2);
+        let acme = merged.iter().find(|node| node.label == "Acme").unwrap();
+        assert_eq!(acme.depth, 1);
+        assert_eq!(acme.members, vec![(1, 2), (2, 3)]);
+        assert_eq!(acme.unread, 3);
+        assert_eq!(
+            folder_match_key("Clients / Acme"),
+            folder_match_key("clients/acme")
+        );
+    }
+
+    #[test]
+    fn company_view_exclusion_follows_the_flag_and_defaults_only_inbox() {
+        assert!(!excluded_from_company_views("hub@example.com", None));
+        assert!(!excluded_from_company_views("HUB@example.com", Some(false)));
+        assert!(excluded_from_company_views("hub@example.com", Some(true)));
         assert!(excluded_from_company_views("inbox@example.com", None));
         assert!(!excluded_from_company_views(
             "inbox@example.com",
             Some(false)
         ));
+        assert!(excluded_from_company_views("inbox@example.com", Some(true)));
         assert!(!excluded_from_company_views("work@example.com", None));
         assert!(excluded_from_company_views("work@example.com", Some(true)));
         assert!(!is_hub_address("hubs@example.com"));
         assert!(!excluded_from_company_views("not-an-email", None));
+    }
+
+    #[test]
+    fn hundreds_of_mailboxes_merge_shared_paths_once() {
+        let mut leaves = Vec::new();
+        for account in 1..=275 {
+            for (offset, path) in [(1, "Clients"), (2, "Clients/Acme"), (3, "Vendors")] {
+                leaves.push(leaf(account, account * 10 + offset, path, 1));
+            }
+        }
+        let merged = merge_folders(&leaves);
+        assert_eq!(merged.len(), 3);
+        let clients = merged.iter().find(|node| node.label == "Clients").unwrap();
+        assert_eq!(clients.members.len(), 275);
+        assert_eq!(clients.unread, 275);
+        assert!(clients.has_children);
+        let accounts = (1..=275)
+            .map(|id| CompanyAccount {
+                id,
+                email: format!("box{id}@example.com"),
+            })
+            .chain([
+                CompanyAccount {
+                    id: 276,
+                    email: "hub@example.com".into(),
+                },
+                CompanyAccount {
+                    id: 277,
+                    email: "inbox@example.com".into(),
+                },
+            ])
+            .collect::<Vec<_>>();
+        let sources = TabMailboxSources {
+            named_mailboxes: Some((1..=277).collect()),
+            profile_mailboxes: Vec::new(),
+        };
+        let included = company_mailbox_ids(&sources, &accounts, &HashMap::new());
+        assert_eq!(included.len(), 276);
+        assert!(included.contains(&276));
+        assert!(!included.contains(&277));
+        let mut explicit = HashMap::new();
+        explicit.insert(276, true);
+        explicit.insert(277, false);
+        let flagged = company_mailbox_ids(&sources, &accounts, &explicit);
+        assert!(!flagged.contains(&276));
+        assert!(flagged.contains(&277));
     }
 
     #[test]
@@ -479,6 +540,11 @@ mod tests {
         ];
         let mut explicit = HashMap::new();
         explicit.insert(3, false);
+        assert_eq!(
+            company_mailbox_ids(&named, &accounts, &explicit),
+            vec![1, 2, 3]
+        );
+        explicit.insert(2, true);
         assert_eq!(
             company_mailbox_ids(&named, &accounts, &explicit),
             vec![1, 3]

@@ -385,28 +385,49 @@ fn scoped_badge_sql(
 }
 
 /// Unread threads in each folder. A thread counts once per folder that holds
-/// one of its messages.
-pub fn folder_unread_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
-    let mut stmt = conn.prepare(
+/// one of its messages. `account_ids` limits the scan to one company tab.
+pub fn folder_unread_counts_for(
+    conn: &Connection,
+    account_ids: Option<&[i64]>,
+) -> Result<HashMap<i64, i64>> {
+    let (filter, binds) = match account_ids {
+        None => (String::new(), Vec::new()),
+        Some([]) => return Ok(HashMap::new()),
+        Some(ids) => {
+            let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let clause = super::search::account_set_clause("m.account_id", ids, &mut binds);
+            (format!(" AND {clause}"), binds)
+        }
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT folder_id, COUNT(DISTINCT thread_id) FROM (
              SELECT m.folder_id AS folder_id, m.thread_id AS thread_id
              FROM messages m
              JOIN threads t ON t.id = m.thread_id
-             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL
+             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL{filter}
              UNION
              SELECT mf.folder_id, m.thread_id
              FROM message_folders mf
              JOIN messages m ON m.id = mf.message_id
              JOIN threads t ON t.id = m.thread_id
              JOIN accounts a ON a.id = m.account_id AND a.provider = 'gmail'
-             WHERE t.unread_count > 0
+             WHERE t.unread_count > 0{filter}
          )
-         GROUP BY folder_id",
-    )?;
+         GROUP BY folder_id"
+    ))?;
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        binds.iter().map(|value| value.as_ref()).collect();
     let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows.into_iter().collect())
+}
+
+/// Unread threads in each folder, across every account.
+pub fn folder_unread_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
+    folder_unread_counts_for(conn, None)
 }
 
 #[cfg(test)]
@@ -700,5 +721,48 @@ mod tests {
         assert_eq!((conversations[0].inbox, conversations[0].starred), (1, 1));
         let messages = mailbox_badge_counts(&conn, MailGrouping::Messages).unwrap();
         assert_eq!((messages[0].inbox, messages[0].starred), (2, 1));
+    }
+
+    #[test]
+    fn folder_unread_counts_can_limit_the_scan_to_one_account_set() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO accounts (id, email, provider, auth_kind, username,
+             incoming_host, incoming_port, smtp_host, smtp_port, created_at, mail_protocol, settings_json)
+             VALUES (2,'other@x.com','generic','password','o','h',993,'h',587,0,'imap','{\"connection\":{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path) VALUES (2, 1, 'Clients'), (3, 2, 'Clients')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO threads (id, account_id, subject_norm, unread_count, last_message_at)
+             VALUES (1, 1, 'a', 1, 1000), (2, 2, 'b', 1, 1000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (thread_id, account_id, folder_id, uid, message_id, subject,
+             from_addr, date, is_read, is_automated, is_draft, is_outgoing)
+             VALUES (1, 1, 2, 1, 'mid-1', 'a', 'a@b.c', 1000, 0, 0, 0, 0),
+                    (2, 2, 3, 2, 'mid-2', 'b', 'b@b.c', 1000, 0, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        let all = folder_unread_counts_for(&conn, None).unwrap();
+        assert_eq!(all.get(&2), Some(&1));
+        assert_eq!(all.get(&3), Some(&1));
+        let company = folder_unread_counts_for(&conn, Some(&[2])).unwrap();
+        assert_eq!(company.get(&3), Some(&1));
+        assert!(!company.contains_key(&2));
+        assert!(
+            folder_unread_counts_for(&conn, Some(&[]))
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -1790,7 +1790,9 @@ fn register_branding_callbacks(
                 account.clone()
             };
             let initial = BusinessTabDraft {
-                accounts: account.account_ids.iter().copied().collect(),
+                accounts: flectar_mail_core::inbox_accounts::mailbox_ids(&account, &p.profiles)
+                    .into_iter()
+                    .collect(),
                 address_views: p.inbox_members(&account).into_iter().collect(),
                 icon: account.icon.clone(),
                 inbox_account: Some(account.clone()),

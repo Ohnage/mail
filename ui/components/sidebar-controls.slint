@@ -69,6 +69,7 @@ export component SidebarItem inherits SidebarRowSurface {
     in property <length> left-padding: SidebarStyle.icon-left;
     in property <int> account-id: -1;
     in property <int> folder-id: -1;
+    in property <int> parent-folder-id: -1;
     in property <int> label-id: -1;
     in property <bool> has-children: false;
     in property <bool> expanded: true;
@@ -95,6 +96,8 @@ export component SidebarItem inherits SidebarRowSurface {
     callback toggled(int, bool);
     callback new-subfolder(int, int, string);
     callback rename-folder(int, string);
+    callback move-folder(int, string);
+    callback request-move-folder(int, string);
     callback delete-folder(int, string);
     callback empty-trash(int);
     callback new-child-label(int, int, string, string);
@@ -212,6 +215,18 @@ export component SidebarItem inherits SidebarRowSurface {
                 title: @tr("Rename folder");
                 enabled: root.can-rename;
                 activated => { root.rename-folder(root.folder-id, root.label); }
+            }
+
+            MenuItem {
+                title: @tr("Move to top level");
+                enabled: root.can-rename && root.parent-folder-id >= 0;
+                activated => { root.move-folder(root.folder-id, ""); }
+            }
+
+            MenuItem {
+                title: @tr("Move into folder…");
+                enabled: root.can-rename;
+                activated => { root.request-move-folder(root.folder-id, root.label); }
             }
 
             MenuItem {

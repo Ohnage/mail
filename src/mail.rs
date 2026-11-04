@@ -953,10 +953,16 @@ impl CoreMailSource {
                 .iter()
                 .copied()
                 .collect::<std::collections::HashSet<_>>();
-            // Company totals are the real mailbox counts. The open per-account
-            // scope must not shrink them to a recipient rule.
-            let source = if scope_filter == flectar_mail_core::recipient_match::MailScope::default()
-            {
+            // Company totals are the real mailbox counts. A match-any scope
+            // that already names every company mailbox counted them in full,
+            // so the open per-account view does not need a second scan.
+            let counted_in_full = scope_filter
+                == flectar_mail_core::recipient_match::MailScope::default()
+                || (scope_filter.match_any
+                    && included
+                        .iter()
+                        .all(|id| scope_filter.or_account_ids.contains(id)));
+            let source = if counted_in_full {
                 unified.clone()
             } else {
                 self.core
@@ -976,9 +982,9 @@ impl CoreMailSource {
         } else {
             badges.clone()
         };
-        let folder_unreads = if company.is_some() {
+        let folder_unreads = if let Some(company) = company.as_deref() {
             self.core
-                .folder_unread_counts()
+                .folder_unread_counts_for(Some(company.to_vec()))
                 .await
                 .map_err(|error| error.to_string())?
         } else {
@@ -1056,8 +1062,9 @@ impl CoreMailSource {
             .filter(|_| resolved.account_id.is_none() && !matches!(scope, Scope::AddressInbox(_)))
             .map(|accounts| accounts.to_vec());
         if on_company_list && let Some(accounts) = company_ids.clone() {
-            // Company rows ignore the named-tab address scope, which would
-            // pull hub mailboxes back in. The account set is the AND.
+            // Company rows list the tab's company mailboxes. Hub mail is
+            // included unless `companyViewExcluded` says otherwise. The
+            // account set is the AND, so an address rule cannot hide it.
             listed_accounts = Some(accounts);
         }
         let account_id = resolved.account_id.filter(|_| listed_accounts.is_none());
@@ -1533,6 +1540,24 @@ impl CoreMailSource {
     pub async fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
         self.core
             .delete_folder(folder_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn move_folder(
+        &self,
+        folder_id: i64,
+        new_parent_id: Option<i64>,
+    ) -> Result<(), String> {
+        self.core
+            .move_folder(folder_id, new_parent_id)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub async fn folder_tree_is_empty(&self, folder_id: i64) -> Result<bool, String> {
+        self.core
+            .folder_tree_is_empty(folder_id)
             .await
             .map_err(|error| error.to_string())
     }

@@ -1720,6 +1720,8 @@ pub struct InboxAccount {
     /// `#RRGGBB` marker. Absent accounts keep the linked profile or mailbox color.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    /// Mailboxes stored on this account. A profile link also includes that
+    /// profile's current mailboxes; see `inbox_accounts::mailbox_ids`.
     #[serde(default)]
     pub account_ids: Vec<i64>,
     #[serde(default)]
@@ -2180,8 +2182,8 @@ pub struct Settings {
     #[serde(default)]
     pub account_short_names: std::collections::HashMap<String, String>,
     /// Whether a mailbox is left out of Company Inbox, merged folders, and tab
-    /// tags. Missing keys use the address default: `inbox@` and `hub@` are
-    /// excluded. `hub@` stays excluded even when this is false.
+    /// tags. Missing keys use the address default: only `inbox@` is excluded.
+    /// A stored value wins in both directions, including for `hub@` and `inbox@`.
     #[serde(default)]
     pub company_view_excluded: std::collections::HashMap<String, bool>,
     /// Optional local groups such as Personal and Work. An account may belong

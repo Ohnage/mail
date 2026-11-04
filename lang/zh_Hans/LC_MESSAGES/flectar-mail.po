@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-03 17:59+0000\n"
+"POT-Creation-Date: 2026-11-04 17:08+0000\n"
 "PO-Revision-Date: 2026-10-15 02:03+0000\n"
 "Last-Translator: Taivas Jumala <taivas_jumala@yafoss.org>\n"
 "Language-Team: Chinese (Simplified Han script) <https://translate.flectar."
@@ -287,7 +287,7 @@ msgctxt "time of day"
 msgid "AM"
 msgstr "上午"
 
-#: ui/app.slint:154 ui/views/mail-list-pane.slint:611
+#: ui/app.slint:154 ui/views/mail-list-pane.slint:612
 msgid "Yesterday"
 msgstr "昨天"
 
@@ -386,7 +386,7 @@ msgstr "有往来邮件记录"
 msgid "New address-book entry"
 msgstr "新建通讯录条目"
 
-#: ui/app.slint:180 ui/app.slint:1070 ui/components/composer-fields.slint:66
+#: ui/app.slint:180 ui/app.slint:1076 ui/components/composer-fields.slint:66
 #: ui/dialogs/compose-dialog.slint:37
 msgid "No connected account"
 msgstr "未连接账户"
@@ -1473,249 +1473,265 @@ msgid "Folder deleted."
 msgstr "文件夹已删除。"
 
 #: ui/app.slint:522
+msgid "Folder moved."
+msgstr ""
+
+#: ui/app.slint:523
+msgid "Message moved."
+msgstr ""
+
+#: ui/app.slint:524
 msgid "Could not create folder: {}"
 msgstr "无法创建文件夹：{}"
 
-#: ui/app.slint:523
+#: ui/app.slint:525
 msgid "Could not rename folder: {}"
 msgstr "无法重命名文件夹：{}"
 
-#: ui/app.slint:524
+#: ui/app.slint:526
 msgid "Could not delete folder: {}"
 msgstr "无法删除文件夹：{}"
 
-#: ui/app.slint:525
+#: ui/app.slint:527
+msgid "Could not move folder: {}"
+msgstr ""
+
+#: ui/app.slint:528
+msgid "Could not move message: {}"
+msgstr ""
+
+#: ui/app.slint:529
 msgid "Could not close preview: {}"
 msgstr "无法关闭预览：{}"
 
-#: ui/app.slint:526
+#: ui/app.slint:530
 msgid "Opened the system print view."
 msgstr "已打开系统打印视图。"
 
-#: ui/app.slint:527
+#: ui/app.slint:531
 msgid "Could not print message: {}"
 msgstr "无法打印邮件：{}"
 
-#: ui/app.slint:528
+#: ui/app.slint:532
 msgid "Opened the message in your browser."
 msgstr "已在浏览器中打开该邮件。"
 
-#: ui/app.slint:529
+#: ui/app.slint:533
 msgid "Could not open message in browser: {}"
 msgstr "无法在浏览器中打开邮件：{}"
 
-#: ui/app.slint:530
+#: ui/app.slint:534
 msgid "Connect an account before replying or forwarding."
 msgstr "请先连接账户再进行回复或转发。"
 
-#: ui/app.slint:531
+#: ui/app.slint:535
 msgid "Choose a message first."
 msgstr "请先选择一封邮件。"
 
-#: ui/app.slint:532
+#: ui/app.slint:536
 msgid "Only drafts can be reopened for editing."
 msgstr "只有草稿箱中的邮件可以重新编辑。"
 
-#: ui/app.slint:533
+#: ui/app.slint:537
 msgid "Could not open draft: {}"
 msgstr "无法打开草稿：{}"
 
-#: ui/app.slint:534
+#: ui/app.slint:538
 msgid "Could not open draft: invalid account identifier"
 msgstr "无法打开草稿：账户标识无效"
 
-#: ui/app.slint:535
+#: ui/app.slint:539
 msgid "Connected account"
 msgstr "已连接账户"
 
-#: ui/app.slint:536
+#: ui/app.slint:540
 msgid "Could not open composer: {}"
 msgstr "无法打开邮件编辑器：{}"
 
-#: ui/app.slint:537
+#: ui/app.slint:541
 msgid "Add an account to send mail."
 msgstr ""
 
-#: ui/app.slint:538 ui/components/sidebar.slint:536
+#: ui/app.slint:542 ui/components/sidebar.slint:538
 msgid "On this device"
 msgstr ""
 
-#: ui/app.slint:539
+#: ui/app.slint:543
 msgid "Could not open composer: invalid account identifier"
 msgstr "无法打开邮件编辑器：账户标识无效"
 
 #. Reply and forward quotation headers, written into the draft.
-#: ui/app.slint:545
+#: ui/app.slint:549
 msgid "On {}, {} wrote:"
 msgstr "{}，{} 写道："
 
-#: ui/app.slint:546
+#: ui/app.slint:550
 msgid "{} wrote:"
 msgstr "{} 写道："
 
-#: ui/app.slint:547
+#: ui/app.slint:551
 msgid "Forwarded message"
 msgstr "转发的邮件"
 
-#: ui/app.slint:548
+#: ui/app.slint:552
 msgctxt "forwarded message header"
 msgid "From: {}"
 msgstr "发件人：{}"
 
-#: ui/app.slint:549
+#: ui/app.slint:553
 msgctxt "forwarded message header"
 msgid "Date: {}"
 msgstr "日期：{}"
 
-#: ui/app.slint:550
+#: ui/app.slint:554
 msgctxt "forwarded message header"
 msgid "Subject: {}"
 msgstr "主题：{}"
 
-#: ui/app.slint:551
+#: ui/app.slint:555
 msgctxt "forwarded message header"
 msgid "To: {}"
 msgstr "收件人：{}"
 
-#: ui/app.slint:552
+#: ui/app.slint:556
 msgid "Attach files to this email"
 msgstr "为此邮件添加附件"
 
-#: ui/app.slint:553
+#: ui/app.slint:557
 msgid "Could not add attachments: {}"
 msgstr "无法添加附件：{}"
 
-#: ui/app.slint:554
+#: ui/app.slint:558
 msgid "Added 1 attachment."
 msgstr "已添加 1 个附件。"
 
-#: ui/app.slint:555
+#: ui/app.slint:559
 msgid "Added {} attachments."
 msgstr "已添加 {} 个附件。"
 
-#: ui/app.slint:556
+#: ui/app.slint:560
 msgid ""
 "Attachments added: {}. Skipped: {} (duplicate, unreadable, or over the 25 MB "
 "total limit)."
 msgstr "已添加 {} 个附件，跳过 {} 个（重复、无法读取或超过 25 MB 总量上限）。"
 
-#: ui/app.slint:557
+#: ui/app.slint:561
 msgid "Attachment removed."
 msgstr "附件已移除。"
 
-#: ui/app.slint:558
+#: ui/app.slint:562
 msgid "Choose the account this message should be sent from."
 msgstr "选择发送此邮件的账户。"
 
-#: ui/app.slint:559
+#: ui/app.slint:563
 msgid "Choose a verified sender identity for this message."
 msgstr "为此邮件选择已验证的发件人身份。"
 
-#: ui/app.slint:560
+#: ui/app.slint:564
 msgid "Connect an account before saving or sending mail."
 msgstr "请先连接账户再保存或发送邮件。"
 
-#: ui/app.slint:561
+#: ui/app.slint:565
 msgid "Message queued for delivery (action {})."
 msgstr "邮件已加入发送队列（操作 {}）。"
 
-#: ui/app.slint:562
+#: ui/app.slint:566
 msgid "Sending message…"
 msgstr "正在发送邮件…"
 
-#: ui/app.slint:563
+#: ui/app.slint:567
 msgid "Message sent."
 msgstr "邮件已发送。"
 
-#: ui/app.slint:564
+#: ui/app.slint:568
 msgid "Message was not sent: {} Your draft is preserved."
 msgstr "邮件未发送：{} 草稿已保留。"
 
-#: ui/app.slint:565
+#: ui/app.slint:569
 msgid "Draft saved locally (#{})."
 msgstr "草稿已保存到本地（#{}）。"
 
-#: ui/app.slint:566
+#: ui/app.slint:570
 msgid "Compose failed: {}"
 msgstr "撰写邮件失败：{}"
 
-#: ui/app.slint:567
+#: ui/app.slint:571
 msgid "Connect an account before managing email templates."
 msgstr "请先连接账户再管理邮件模板。"
 
-#: ui/app.slint:568
+#: ui/app.slint:572
 msgid "Could not load email templates: {}"
 msgstr "无法加载邮件模板：{}"
 
-#: ui/app.slint:569
+#: ui/app.slint:573
 msgid "Enter a template name."
 msgstr "请输入模板名称。"
 
-#: ui/app.slint:570
+#: ui/app.slint:574
 msgid "Add a subject or message to the template."
 msgstr "请为模板添加主题或正文。"
 
-#: ui/app.slint:571
+#: ui/app.slint:575
 msgid "Email template saved."
 msgstr "邮件模板已保存。"
 
-#: ui/app.slint:572
+#: ui/app.slint:576
 msgid "Could not save email template: {}"
 msgstr "无法保存邮件模板：{}"
 
-#: ui/app.slint:573
+#: ui/app.slint:577
 msgid "Email template deleted."
 msgstr "邮件模板已删除。"
 
-#: ui/app.slint:574
+#: ui/app.slint:578
 msgid "Could not delete email template: {}"
 msgstr "无法删除邮件模板：{}"
 
-#: ui/app.slint:575
+#: ui/app.slint:579
 msgid "Email template is no longer available."
 msgstr "邮件模板已不存在。"
 
-#: ui/app.slint:576
+#: ui/app.slint:580
 msgid "Email template inserted."
 msgstr "邮件模板已插入。"
 
-#: ui/app.slint:577
+#: ui/app.slint:581
 msgid "Email template inserted, but its usage could not be saved: {}"
 msgstr "邮件模板已插入，但无法记录其使用情况：{}"
 
-#: ui/app.slint:578
+#: ui/app.slint:582
 msgid "Choose a supported account type and connection security."
 msgstr ""
 
-#: ui/app.slint:579
+#: ui/app.slint:583
 msgid "IMAP port must be between 1 and 65535."
 msgstr "IMAP 端口必须在 1 到 65535 之间。"
 
-#: ui/app.slint:580
+#: ui/app.slint:584
 msgid "POP3 port must be between 1 and 65535."
 msgstr ""
 
-#: ui/app.slint:581
+#: ui/app.slint:585
 msgid "SMTP port must be between 1 and 65535."
 msgstr "SMTP 端口必须在 1 到 65535 之间。"
 
-#: ui/app.slint:582
+#: ui/app.slint:586
 msgid "Local mail data is unavailable. Retry startup."
 msgstr "本地邮件数据不可用，请重新启动。"
 
-#: ui/app.slint:583
+#: ui/app.slint:587
 msgid "Discovering JMAP and checking capabilities…"
 msgstr "正在发现 JMAP 并检查服务能力…"
 
-#: ui/app.slint:584
+#: ui/app.slint:588
 msgid "Certificate imported. Connect to verify the server."
 msgstr "证书已导入。请连接以验证服务器。"
 
-#: ui/app.slint:585
+#: ui/app.slint:589
 msgid "Could not load account preferences: {}"
 msgstr "无法加载账户偏好设置：{}"
 
-#: ui/app.slint:586
+#: ui/app.slint:590
 msgid ""
 "Your edited signature was preserved. Choose No signature to keep it as "
 "message text before inserting another."
@@ -1723,161 +1739,161 @@ msgstr ""
 "您编辑过的签名已保留。插入其他签名前，请选择“不使用签名”，以便将其保留为邮件"
 "正文。"
 
-#: ui/app.slint:587
+#: ui/app.slint:591
 msgid "Certificate import failed: {}"
 msgstr "证书导入失败：{}"
 
-#: ui/app.slint:588
+#: ui/app.slint:592
 msgid "Testing IMAP and SMTP connections…"
 msgstr "正在测试 IMAP 和 SMTP 连接…"
 
-#: ui/app.slint:589
+#: ui/app.slint:593
 msgid "Testing POP3 and SMTP connections…"
 msgstr ""
 
-#: ui/app.slint:594
+#: ui/app.slint:598
 msgid ""
 "Another browser authorization is already in progress; finish it or choose "
 "Cancel."
 msgstr "已有另一项浏览器授权正在进行，请完成它或选择“取消”。"
 
-#: ui/app.slint:595 ui/dialogs/settings-dialog.slint:1876
+#: ui/app.slint:599 ui/dialogs/settings-dialog.slint:1876
 #: ui/dialogs/settings-dialog.slint:1919 ui/views/onboarding-view.slint:161
 msgid "Add app keys in Sign-in settings to enable this provider."
 msgstr "请在“登录设置”中添加应用密钥以启用此服务商。"
 
-#: ui/app.slint:596
+#: ui/app.slint:600
 msgid "Choose Gmail or Outlook OAuth."
 msgstr "请选择 Gmail 或 Outlook OAuth。"
 
-#: ui/app.slint:597
+#: ui/app.slint:601
 msgid "Complete sign-in in your browser, or choose Cancel here."
 msgstr "请在浏览器中完成登录，或在此处选择“取消”。"
 
-#: ui/app.slint:598
+#: ui/app.slint:602
 msgid "Cancelling browser sign-in…"
 msgstr "正在取消浏览器登录…"
 
-#: ui/app.slint:599
+#: ui/app.slint:603
 msgid "Finishing browser sign-in…"
 msgstr "正在完成浏览器登录…"
 
-#: ui/app.slint:600
+#: ui/app.slint:604
 msgid "Could not use that browser address: {}"
 msgstr "无法使用该浏览器地址：{}"
 
-#: ui/app.slint:601
+#: ui/app.slint:605
 msgid "Calendar core is unavailable."
 msgstr "日历核心不可用。"
 
-#: ui/app.slint:602
+#: ui/app.slint:606
 msgid "Account no longer exists."
 msgstr "账户已不存在。"
 
-#: ui/app.slint:603
+#: ui/app.slint:607
 msgid "Authorize calendar access in your browser."
 msgstr "请在浏览器中授权日历访问。"
 
-#: ui/app.slint:604
+#: ui/app.slint:608
 msgid "OAuth app keys saved."
 msgstr "OAuth 应用密钥已保存。"
 
-#: ui/app.slint:605
+#: ui/app.slint:609
 msgid "{} OAuth settings saved."
 msgstr "{} OAuth 设置已保存。"
 
-#: ui/app.slint:606
+#: ui/app.slint:610
 msgid "OAuth settings failed: {}"
 msgstr "OAuth 设置失败：{}"
 
-#: ui/app.slint:607
+#: ui/app.slint:611
 msgid "Mail refresh failed: {}"
 msgstr "邮件刷新失败：{}"
 
-#: ui/app.slint:608
+#: ui/app.slint:612
 msgid "Mail filter failed: {}"
 msgstr "邮件筛选失败：{}"
 
-#: ui/app.slint:609
+#: ui/app.slint:613
 msgid "Mail pagination failed: {}"
 msgstr "邮件分页失败：{}"
 
-#: ui/app.slint:610
+#: ui/app.slint:614
 msgid "Could not mark message as read: {}"
 msgstr "无法将邮件标记为已读：{}"
 
-#: ui/app.slint:611 ui/views/mail-reading-pane.slint:196
+#: ui/app.slint:615 ui/views/mail-reading-pane.slint:196
 #: ui/views/mail-reading-pane.slint:1279
 msgid "Loading message…"
 msgstr "正在加载邮件…"
 
-#: ui/app.slint:617 ui/components/workspace-navigation.slint:798
+#: ui/app.slint:621 ui/components/workspace-navigation.slint:798
 #: ui/tray.slint:13 ui/tray.slint:14
 msgid "Flectar Mail"
 msgstr "Flectar Mail"
 
-#: ui/app.slint:1303 ui/app.slint:1316
+#: ui/app.slint:1333 ui/app.slint:1346
 msgid "Global Labels (local only)"
 msgstr "全局标签（仅本地）"
 
-#: ui/app.slint:2266
+#: ui/app.slint:2299
 msgid "Empty Trash?"
 msgstr "清空回收站？"
 
-#: ui/app.slint:2266 ui/views/files-view.slint:578
+#: ui/app.slint:2299 ui/views/files-view.slint:578
 msgid "Delete permanently?"
 msgstr "永久删除？"
 
-#: ui/app.slint:2270
+#: ui/app.slint:2303
 msgid ""
 "Permanently delete all messages in Trash across every connected account?"
 msgstr "永久删除每个已连接帐户的回收站中的所有邮件？"
 
-#: ui/app.slint:2271
+#: ui/app.slint:2304
 msgid "Permanently delete all messages in this account’s Trash?"
 msgstr "是否永久删除此帐户的回收站中的所有邮件？"
 
-#: ui/app.slint:2273
+#: ui/app.slint:2306
 msgid "Permanently delete the selected conversations from Trash?"
 msgstr "是否从回收站中永久删除选定的对话？"
 
-#: ui/app.slint:2274
+#: ui/app.slint:2307
 msgid "Permanently delete this conversation from Trash?"
 msgstr "是否从回收站中永久删除此对话？"
 
-#: ui/app.slint:2275 ui/components/calendar.slint:947
+#: ui/app.slint:2308 ui/components/calendar.slint:947
 msgid "This action cannot be undone."
 msgstr "此操作无法撤销。"
 
-#: ui/app.slint:2276
+#: ui/app.slint:2309
 msgid "Empty Trash"
 msgstr "清空回收站"
 
-#: ui/app.slint:2276 ui/views/files-view.slint:660
+#: ui/app.slint:2309 ui/views/files-view.slint:660
 msgid "Delete permanently"
 msgstr "永久删除"
 
-#: ui/app.slint:2450
+#: ui/app.slint:2487
 msgid "Mailbox startup failed"
 msgstr "邮箱启动失败"
 
-#: ui/app.slint:2456
+#: ui/app.slint:2493
 msgid "Flectar Mail could not open local storage"
 msgstr "Flectar Mail 无法打开本地存储"
 
-#: ui/app.slint:2469
+#: ui/app.slint:2506
 msgid "Diagnostic ID: {}"
 msgstr "诊断 ID：{}"
 
-#: ui/app.slint:2472
+#: ui/app.slint:2509
 msgid "Diagnostic ID {}"
 msgstr "诊断 ID {}"
 
-#: ui/app.slint:2477
+#: ui/app.slint:2514
 msgid "Retry"
 msgstr "重试"
 
-#: ui/app.slint:2485 ui/components/copyable-diagnostic.slint:43
+#: ui/app.slint:2522 ui/components/copyable-diagnostic.slint:43
 msgid "Copy diagnostics"
 msgstr "复制诊断信息"
 
@@ -2116,7 +2132,7 @@ msgid "Add sender address"
 msgstr "添加发件人地址"
 
 #: ui/components/account-mail-preferences.slint:230
-#: ui/dialogs/folder-dialog.slint:128 ui/dialogs/oauth-setup-dialog.slint:126
+#: ui/dialogs/folder-dialog.slint:138 ui/dialogs/oauth-setup-dialog.slint:126
 #: ui/dialogs/settings-dialog.slint:2232 ui/dialogs/settings-dialog.slint:3032
 #: ui/views/contacts-view.slint:604 ui/views/files-view.slint:659
 msgid "Cancel"
@@ -2532,7 +2548,7 @@ msgstr ""
 msgid "Remove {} from Accounts"
 msgstr ""
 
-#: ui/components/business-tab-editor.slint:260 ui/components/sidebar.slint:233
+#: ui/components/business-tab-editor.slint:260 ui/components/sidebar.slint:235
 #: ui/dialogs/settings-dialog.slint:1853
 msgid "Add account"
 msgstr "添加账户"
@@ -2559,7 +2575,7 @@ msgid "Filters only affect this agenda."
 msgstr "筛选仅影响此日程视图。"
 
 #: ui/components/calendar-agenda.slint:212 ui/components/calendar.slint:582
-#: ui/views/mail-list-pane.slint:610
+#: ui/views/mail-list-pane.slint:611
 msgid "Today"
 msgstr "今天"
 
@@ -2951,7 +2967,7 @@ msgstr "开"
 msgid "Off"
 msgstr "关"
 
-#: ui/components/controls.slint:233 ui/views/mail-list-pane.slint:702
+#: ui/components/controls.slint:233 ui/views/mail-list-pane.slint:703
 msgid "Clear selection"
 msgstr "取消选择"
 
@@ -3313,141 +3329,153 @@ msgstr ""
 msgid "{}, {}"
 msgstr "{}，{}"
 
-#: ui/components/sidebar-controls.slint:190
+#: ui/components/sidebar-controls.slint:193
 msgid "Collapse label"
 msgstr "折叠标签"
 
-#: ui/components/sidebar-controls.slint:190
+#: ui/components/sidebar-controls.slint:193
 msgid "Expand label"
 msgstr "展开标签"
 
-#: ui/components/sidebar-controls.slint:191
+#: ui/components/sidebar-controls.slint:194
 msgid "Collapse folder"
 msgstr "折叠文件夹"
 
-#: ui/components/sidebar-controls.slint:191
+#: ui/components/sidebar-controls.slint:194
 msgid "Expand folder"
 msgstr "展开文件夹"
 
-#: ui/components/sidebar-controls.slint:206
+#: ui/components/sidebar-controls.slint:209
 msgid "New subfolder"
 msgstr "新建子文件夹"
 
-#: ui/components/sidebar-controls.slint:212 ui/dialogs/folder-dialog.slint:29
+#: ui/components/sidebar-controls.slint:215 ui/dialogs/folder-dialog.slint:31
 msgid "Rename folder"
 msgstr "重命名文件夹"
 
-#: ui/components/sidebar-controls.slint:218
+#: ui/components/sidebar-controls.slint:221
+msgid "Move to top level"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:227
+msgid "Move into folder…"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:233
 msgid "Delete folder"
 msgstr "删除文件夹"
 
-#: ui/components/sidebar-controls.slint:231
+#: ui/components/sidebar-controls.slint:246
 msgid "Empty Trash…"
 msgstr "清空回收站…"
 
-#: ui/components/sidebar-controls.slint:243
+#: ui/components/sidebar-controls.slint:258
 msgid "New nested label"
 msgstr "新建嵌套标签"
 
-#: ui/components/sidebar-controls.slint:249
+#: ui/components/sidebar-controls.slint:264
 msgid "Rename global label"
 msgstr "重命名全局标签"
 
-#: ui/components/sidebar-controls.slint:249
+#: ui/components/sidebar-controls.slint:264
 msgid "Rename label in {}"
 msgstr "重命名 {} 中的标签"
 
-#: ui/components/sidebar-controls.slint:254
+#: ui/components/sidebar-controls.slint:269
 msgid "Delete global label"
 msgstr "删除全局标签"
 
-#: ui/components/sidebar-controls.slint:254
+#: ui/components/sidebar-controls.slint:269
 msgid "Delete label from {}"
 msgstr "删除 {} 中的标签"
 
-#: ui/components/sidebar.slint:117 ui/views/mail-list-pane.slint:1440
+#: ui/components/sidebar.slint:119 ui/views/mail-list-pane.slint:1443
 msgid "New email"
 msgstr "新建邮件"
 
-#: ui/components/sidebar.slint:117
+#: ui/components/sidebar.slint:119
 msgid "Add an account"
 msgstr ""
 
-#: ui/components/sidebar.slint:171 ui/components/sidebar.slint:180
-#: ui/components/sidebar.slint:200
+#: ui/components/sidebar.slint:173 ui/components/sidebar.slint:182
+#: ui/components/sidebar.slint:202
 msgid "Find folder or label"
 msgstr "查找文件夹或标签"
 
-#: ui/components/sidebar.slint:217
+#: ui/components/sidebar.slint:219
 msgid "Clear folder filter"
 msgstr "清除文件夹筛选"
 
-#: ui/components/sidebar.slint:284 ui/views/contacts-view.slint:791
+#: ui/components/sidebar.slint:286 ui/views/contacts-view.slint:791
 msgid "COMPANY"
 msgstr "公司"
 
-#: ui/components/sidebar.slint:284
+#: ui/components/sidebar.slint:286
 msgid "ALL ACCOUNTS"
 msgstr "全部账户"
 
-#: ui/components/sidebar.slint:293
+#: ui/components/sidebar.slint:295
 msgid "All Inboxes"
 msgstr "所有收件箱"
 
-#: ui/components/sidebar.slint:311
+#: ui/components/sidebar.slint:313
 msgid "Inbox"
 msgstr "收件箱"
 
-#: ui/components/sidebar.slint:373
+#: ui/components/sidebar.slint:375
 msgid "Categories"
 msgstr "分类"
 
-#: ui/components/sidebar.slint:391
+#: ui/components/sidebar.slint:393
 msgid "Important"
 msgstr "重要"
 
-#: ui/components/sidebar.slint:411 ui/dialogs/settings-dialog.slint:271
+#: ui/components/sidebar.slint:413 ui/dialogs/settings-dialog.slint:271
 msgid "Other"
 msgstr "其他"
 
-#: ui/components/sidebar.slint:454
+#: ui/components/sidebar.slint:456
 msgid "Tags"
 msgstr ""
 
-#: ui/components/sidebar.slint:454 ui/components/sidebar.slint:653
+#: ui/components/sidebar.slint:456 ui/components/sidebar.slint:658
 msgid "Labels"
 msgstr "标签"
 
-#: ui/components/sidebar.slint:473
+#: ui/components/sidebar.slint:475
 msgid "Global label {}"
 msgstr "全局标签 {}"
 
-#: ui/components/sidebar.slint:505
+#: ui/components/sidebar.slint:507
 msgid "Mailboxes"
 msgstr ""
 
-#: ui/components/sidebar.slint:523 ui/views/contacts-view.slint:221
+#: ui/components/sidebar.slint:525 ui/views/contacts-view.slint:221
 msgid "ACCOUNTS"
 msgstr "账户"
 
-#: ui/components/sidebar.slint:557
+#: ui/components/sidebar.slint:559
 msgid "Address inbox {}"
 msgstr ""
 
-#: ui/components/sidebar.slint:674
+#: ui/components/sidebar.slint:679
 msgid "{} label, {} account"
 msgstr "{} 标签，{} 账户"
 
-#: ui/components/sidebar.slint:716 ui/dialogs/folder-dialog.slint:27
+#: ui/components/sidebar.slint:721 ui/dialogs/folder-dialog.slint:29
 #: ui/views/files-view.slint:354 ui/views/files-view.slint:578
 msgid "New folder"
 msgstr "新建文件夹"
 
-#: ui/components/sidebar.slint:733 ui/dialogs/folder-dialog.slint:26
+#: ui/components/sidebar.slint:738
+msgid "New tag"
+msgstr ""
+
+#: ui/components/sidebar.slint:738 ui/dialogs/folder-dialog.slint:28
 msgid "New label"
 msgstr "新建标签"
 
-#: ui/components/sidebar.slint:753
+#: ui/components/sidebar.slint:758
 msgid "No folders found"
 msgstr "未找到文件夹"
 
@@ -3646,7 +3674,7 @@ msgstr "重置此配色"
 msgid "Revert"
 msgstr "还原"
 
-#: ui/components/theme-editor.slint:785 ui/dialogs/folder-dialog.slint:135
+#: ui/components/theme-editor.slint:785 ui/dialogs/folder-dialog.slint:146
 #: ui/views/mail-reading-pane.slint:2027
 msgid "Save"
 msgstr "保存"
@@ -3843,56 +3871,87 @@ msgstr "绿色日历"
 msgid "Create"
 msgstr "创建"
 
-#: ui/dialogs/folder-dialog.slint:28 ui/dialogs/folder-dialog.slint:55
+#: ui/dialogs/folder-dialog.slint:26 ui/dialogs/folder-dialog.slint:55
+msgid "Move to folder"
+msgstr "移动到文件夹"
+
+#: ui/dialogs/folder-dialog.slint:27 ui/dialogs/folder-dialog.slint:56
+msgid "Move folder"
+msgstr ""
+
+#: ui/dialogs/folder-dialog.slint:30 ui/dialogs/folder-dialog.slint:59
 msgid "Rename label"
 msgstr "重命名标签"
 
-#: ui/dialogs/folder-dialog.slint:30 ui/dialogs/folder-dialog.slint:57
+#: ui/dialogs/folder-dialog.slint:32 ui/dialogs/folder-dialog.slint:61
 msgid "Delete label?"
 msgstr "删除标签？"
 
-#: ui/dialogs/folder-dialog.slint:31 ui/dialogs/folder-dialog.slint:58
+#: ui/dialogs/folder-dialog.slint:33 ui/dialogs/folder-dialog.slint:62
 msgid "Delete folder?"
 msgstr "删除文件夹？"
 
-#: ui/dialogs/folder-dialog.slint:73
+#: ui/dialogs/folder-dialog.slint:75
+msgid ""
+"Enter the folder path. On a company tab, each message uses that path on its "
+"own mailbox."
+msgstr ""
+
+#: ui/dialogs/folder-dialog.slint:77
+msgid ""
+"Enter the folder to move “{}” into. Leave this empty to place it at the top "
+"level."
+msgstr ""
+
+#: ui/dialogs/folder-dialog.slint:81
 msgid ""
 "Delete “{}” and all nested labels from “{}”? Messages will not be deleted."
 msgstr "从“{}”中删除“{}”及其所有嵌套标签？邮件不会被删除。"
 
-#: ui/dialogs/folder-dialog.slint:74
+#: ui/dialogs/folder-dialog.slint:82
 msgid "Delete “{}” from “{}”? Messages will not be deleted."
 msgstr "从“{}”中删除“{}”？邮件不会被删除。"
 
-#: ui/dialogs/folder-dialog.slint:75
-msgid "Delete “{}” and its contents from the mail server?"
-msgstr "从邮件服务器上删除“{}”及其全部内容？"
+#: ui/dialogs/folder-dialog.slint:84
+msgid ""
+"Delete “{}” from every company mailbox? It is removed only when it is empty "
+"in all of them."
+msgstr ""
 
-#: ui/dialogs/folder-dialog.slint:78
+#: ui/dialogs/folder-dialog.slint:85
+msgid ""
+"Delete “{}”? The folder is removed only when it and its subfolders are empty."
+msgstr ""
+
+#: ui/dialogs/folder-dialog.slint:88
 msgid "Rename this label in “{}”."
 msgstr "在“{}”中重命名此标签。"
 
-#: ui/dialogs/folder-dialog.slint:79
+#: ui/dialogs/folder-dialog.slint:89
 msgid "Enter a new name for this folder."
 msgstr "请输入此文件夹的新名称。"
 
-#: ui/dialogs/folder-dialog.slint:81
+#: ui/dialogs/folder-dialog.slint:91
 msgid "Create a label in “{}”."
 msgstr "在“{}”中创建标签。"
 
-#: ui/dialogs/folder-dialog.slint:83
+#: ui/dialogs/folder-dialog.slint:93
 msgid "Create at the top level"
 msgstr "在顶层创建"
 
-#: ui/dialogs/folder-dialog.slint:84
+#: ui/dialogs/folder-dialog.slint:94
 msgid "Inside “{}”"
 msgstr "在“{}”内"
 
-#: ui/dialogs/folder-dialog.slint:133 ui/views/mail-reading-pane.slint:1976
+#: ui/dialogs/folder-dialog.slint:143
+msgid "Move"
+msgstr ""
+
+#: ui/dialogs/folder-dialog.slint:144 ui/views/mail-reading-pane.slint:1976
 msgid "Create label"
 msgstr "创建标签"
 
-#: ui/dialogs/folder-dialog.slint:134
+#: ui/dialogs/folder-dialog.slint:145
 msgid "Create folder"
 msgstr "创建文件夹"
 
@@ -4674,7 +4733,7 @@ msgstr "6 个月 · 推荐"
 msgid "1 year"
 msgstr "1 年"
 
-#: ui/dialogs/settings-dialog.slint:673 ui/views/mail-list-pane.slint:653
+#: ui/dialogs/settings-dialog.slint:673 ui/views/mail-list-pane.slint:654
 msgid "All mail"
 msgstr "全部邮件"
 
@@ -5521,22 +5580,22 @@ msgstr "无需离开键盘即可操作邮件。"
 msgid "Compose a new message"
 msgstr "撰写新邮件"
 
-#: ui/dialogs/settings-dialog.slint:2396 ui/views/mail-list-pane.slint:651
+#: ui/dialogs/settings-dialog.slint:2396 ui/views/mail-list-pane.slint:652
 msgid "Search mail"
 msgstr "搜索邮件"
 
 #. Local mail has no archive or spam.
-#: ui/dialogs/settings-dialog.slint:2397 ui/views/mail-list-pane.slint:1358
+#: ui/dialogs/settings-dialog.slint:2397 ui/views/mail-list-pane.slint:1361
 #: ui/views/mail-reading-pane.slint:365
 msgid "Archive"
 msgstr "归档"
 
-#: ui/dialogs/settings-dialog.slint:2398 ui/views/mail-list-pane.slint:733
+#: ui/dialogs/settings-dialog.slint:2398 ui/views/mail-list-pane.slint:734
 #: ui/views/mail-reading-pane.slint:349 ui/views/mail-reading-pane.slint:795
 msgid "Move to spam"
 msgstr "移到垃圾邮件"
 
-#: ui/dialogs/settings-dialog.slint:2399 ui/views/mail-list-pane.slint:742
+#: ui/dialogs/settings-dialog.slint:2399 ui/views/mail-list-pane.slint:743
 #: ui/views/mail-reading-pane.slint:332 ui/views/mail-reading-pane.slint:367
 #: ui/views/mail-reading-pane.slint:399
 msgid "Move to trash"
@@ -6463,10 +6522,6 @@ msgid "Rename"
 msgstr "重命名"
 
 #: ui/views/files-view.slint:578
-msgid "Move to folder"
-msgstr "移动到文件夹"
-
-#: ui/views/files-view.slint:578
 msgid "Copy to folder"
 msgstr "复制到文件夹"
 
@@ -6726,7 +6781,7 @@ msgstr "继续"
 msgid "Reviewed as completed"
 msgstr "确认为已完成"
 
-#: ui/views/mail-list-pane.slint:91 ui/views/mail-list-pane.slint:605
+#: ui/views/mail-list-pane.slint:91 ui/views/mail-list-pane.slint:606
 msgid "Copied verification code {}"
 msgstr ""
 
@@ -6752,148 +6807,152 @@ msgid "{n} message"
 msgid_plural "{n} messages"
 msgstr[0] "{n}条消息"
 
-#: ui/views/mail-list-pane.slint:612
+#: ui/views/mail-list-pane.slint:613
 msgid "This week"
 msgstr "本周"
 
-#: ui/views/mail-list-pane.slint:613
+#: ui/views/mail-list-pane.slint:614
 msgid "Last week"
 msgstr "上周"
 
-#: ui/views/mail-list-pane.slint:614
+#: ui/views/mail-list-pane.slint:615
 msgid "This month"
 msgstr "本月"
 
-#: ui/views/mail-list-pane.slint:615
+#: ui/views/mail-list-pane.slint:616
 msgid "Last month"
 msgstr "上个月"
 
-#: ui/views/mail-list-pane.slint:616
+#: ui/views/mail-list-pane.slint:617
 msgid "Earlier"
 msgstr "更早以前"
 
-#: ui/views/mail-list-pane.slint:648
+#: ui/views/mail-list-pane.slint:649
 msgid "Show folders"
 msgstr "显示文件夹"
 
-#: ui/views/mail-list-pane.slint:648
+#: ui/views/mail-list-pane.slint:649
 msgid "Hide folders"
 msgstr "隐藏文件夹"
 
-#: ui/views/mail-list-pane.slint:654
+#: ui/views/mail-list-pane.slint:655
 msgid "Unread"
 msgstr "未读"
 
-#: ui/views/mail-list-pane.slint:655
+#: ui/views/mail-list-pane.slint:656
 msgid "Starred"
 msgstr "星标"
 
-#: ui/views/mail-list-pane.slint:656 ui/views/mail-list-pane.slint:903
+#: ui/views/mail-list-pane.slint:657 ui/views/mail-list-pane.slint:905
 msgid "Has attachments"
 msgstr "含附件"
 
-#: ui/views/mail-list-pane.slint:659
+#: ui/views/mail-list-pane.slint:660
 msgid "Filter mail"
 msgstr "筛选邮件"
 
-#: ui/views/mail-list-pane.slint:662
+#: ui/views/mail-list-pane.slint:663
 msgid "Synchronizing mail"
 msgstr "正在同步邮件"
 
-#: ui/views/mail-list-pane.slint:662
+#: ui/views/mail-list-pane.slint:663
 msgid "Reload mail"
 msgstr "重新加载邮件"
 
-#: ui/views/mail-list-pane.slint:702
+#: ui/views/mail-list-pane.slint:703
 msgid "Select all messages on this page"
 msgstr "全选本页邮件"
 
-#: ui/views/mail-list-pane.slint:724
+#: ui/views/mail-list-pane.slint:725
 msgid "Archive selected message"
 msgstr "归档所选邮件"
 
-#: ui/views/mail-list-pane.slint:742
+#: ui/views/mail-list-pane.slint:743
 msgid "Delete selected permanently"
 msgstr "永久删除选定项"
 
-#: ui/views/mail-list-pane.slint:755 ui/views/mail-reading-pane.slint:1016
+#: ui/views/mail-list-pane.slint:756 ui/views/mail-reading-pane.slint:1016
 msgid "More message actions"
 msgstr "更多邮件操作"
 
-#: ui/views/mail-list-pane.slint:762
+#: ui/views/mail-list-pane.slint:763
 msgid "Open in new tabs"
 msgstr ""
 
-#: ui/views/mail-list-pane.slint:762 ui/views/mail-list-pane.slint:1353
+#: ui/views/mail-list-pane.slint:763 ui/views/mail-list-pane.slint:1355
 msgid "Open in new tab"
 msgstr "在新标签页打开"
 
-#: ui/views/mail-list-pane.slint:766 ui/views/mail-list-pane.slint:1356
+#: ui/views/mail-list-pane.slint:767 ui/views/mail-list-pane.slint:1358
 #: ui/views/mail-reading-pane.slint:364 ui/views/mail-reading-pane.slint:398
 msgid "Mark as read"
 msgstr "标记为已读"
 
-#: ui/views/mail-list-pane.slint:767 ui/views/mail-list-pane.slint:1356
+#: ui/views/mail-list-pane.slint:768 ui/views/mail-list-pane.slint:1358
 #: ui/views/mail-reading-pane.slint:364 ui/views/mail-reading-pane.slint:398
 msgid "Mark as unread"
 msgstr "标记为未读"
 
-#: ui/views/mail-list-pane.slint:768 ui/views/mail-list-pane.slint:1355
+#: ui/views/mail-list-pane.slint:769 ui/views/mail-list-pane.slint:1357
 #: ui/views/mail-reading-pane.slint:356 ui/views/mail-reading-pane.slint:390
 msgid "Star message"
 msgstr "加星标"
 
-#: ui/views/mail-list-pane.slint:769 ui/views/mail-list-pane.slint:1355
+#: ui/views/mail-list-pane.slint:770 ui/views/mail-list-pane.slint:1357
 #: ui/views/mail-reading-pane.slint:356 ui/views/mail-reading-pane.slint:390
 msgid "Remove star"
 msgstr "取消星标"
 
-#: ui/views/mail-list-pane.slint:896 ui/views/mail-list-pane.slint:1156
+#: ui/views/mail-list-pane.slint:771 ui/views/mail-list-pane.slint:1359
+msgid "Move to folder…"
+msgstr ""
+
+#: ui/views/mail-list-pane.slint:898 ui/views/mail-list-pane.slint:1158
 msgid "(No subject)"
 msgstr "（无主题）"
 
-#: ui/views/mail-list-pane.slint:898
+#: ui/views/mail-list-pane.slint:900
 msgid "Profile: {}"
 msgstr "分组：{}"
 
-#: ui/views/mail-list-pane.slint:899
+#: ui/views/mail-list-pane.slint:901
 msgid "{} messages"
 msgstr "{} 封邮件"
 
-#: ui/views/mail-list-pane.slint:902
+#: ui/views/mail-list-pane.slint:904
 msgid "Verification code {}"
 msgstr ""
 
-#: ui/views/mail-list-pane.slint:904
+#: ui/views/mail-list-pane.slint:906
 msgid "Replied"
 msgstr "已回复"
 
-#: ui/views/mail-list-pane.slint:1099
+#: ui/views/mail-list-pane.slint:1101
 msgid "{} messages in this conversation"
 msgstr "此会话中有 {} 封邮件"
 
-#: ui/views/mail-list-pane.slint:1184
+#: ui/views/mail-list-pane.slint:1186
 msgid "Account: {}"
 msgstr "账户：{}"
 
-#: ui/views/mail-list-pane.slint:1345
+#: ui/views/mail-list-pane.slint:1347
 msgid "Deselect {}"
 msgstr "取消选择 {}"
 
-#: ui/views/mail-list-pane.slint:1360 ui/views/mail-reading-pane.slint:332
+#: ui/views/mail-list-pane.slint:1363 ui/views/mail-reading-pane.slint:332
 #: ui/views/mail-reading-pane.slint:367 ui/views/mail-reading-pane.slint:399
 msgid "Delete permanently…"
 msgstr "永久删除…"
 
-#: ui/views/mail-list-pane.slint:1417 ui/views/onboarding-view.slint:139
+#: ui/views/mail-list-pane.slint:1420 ui/views/onboarding-view.slint:139
 msgid "Opening your mailbox…"
 msgstr "正在打开您的邮箱…"
 
-#: ui/views/mail-list-pane.slint:1417
+#: ui/views/mail-list-pane.slint:1420
 msgid "Nothing here"
 msgstr "这里没有内容"
 
-#: ui/views/mail-list-pane.slint:1418
+#: ui/views/mail-list-pane.slint:1421
 msgid "Try another folder or search term."
 msgstr "请尝试其他文件夹或搜索词。"
 
@@ -7146,11 +7205,11 @@ msgstr "石板色"
 msgid "Use across all accounts (local only)"
 msgstr "在所有账户中使用（仅本地）"
 
-#: ui/views/mail-view.slint:405
+#: ui/views/mail-view.slint:411
 msgid "Message list width"
 msgstr "邮件列表宽度"
 
-#: ui/views/mail-view.slint:749
+#: ui/views/mail-view.slint:758
 msgid "Close folders"
 msgstr "关闭文件夹"
 
@@ -7222,3 +7281,6 @@ msgstr "还原"
 #: ui/window-chrome.slint:202 ui/window-chrome.slint:239
 msgid "Maximize"
 msgstr "最大化"
+
+#~ msgid "Delete “{}” and its contents from the mail server?"
+#~ msgstr "从邮件服务器上删除“{}”及其全部内容？"

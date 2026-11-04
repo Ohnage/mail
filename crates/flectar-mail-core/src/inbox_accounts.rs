@@ -82,6 +82,28 @@ pub fn initialize(settings: &mut Settings, connections: &[RegistryAccount]) -> b
     true
 }
 
+/// Mailboxes a named account covers right now.
+///
+/// An account tied to a profile or group includes that profile's current
+/// mailboxes, including ones added after the account was saved, plus any
+/// extra mailboxes stored on the account itself.
+pub fn mailbox_ids(account: &InboxAccount, profiles: &[crate::models::MailProfile]) -> Vec<i64> {
+    let mut ids = account.account_ids.clone();
+    for profile_id in account
+        .profile_id
+        .as_deref()
+        .into_iter()
+        .chain(account.automatic_profile.as_deref())
+    {
+        if let Some(profile) = profiles.iter().find(|profile| profile.id == profile_id) {
+            ids.extend(profile.account_ids.iter().copied());
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
 pub fn selected_for_tab(settings: &Settings, tab: &crate::models::BusinessTab) -> Vec<i64> {
     if let Some(ids) = settings.business_tab_accounts.get(&tab.id) {
         return ids.clone();
@@ -161,7 +183,7 @@ pub fn save(
     }
     let saved_color = account.color.clone();
     let saved_profile = account.profile_id.clone();
-    let saved_mailboxes = account.account_ids.clone();
+    let saved_mailboxes = mailbox_ids(&account, &settings.mail_profiles);
     if let Some(item) = settings
         .inbox_accounts
         .iter_mut()
@@ -401,5 +423,54 @@ mod tests {
             settings.account_colors.get("4").map(String::as_str),
             Some("#EA580C")
         );
+    }
+
+    #[test]
+    fn a_profile_link_includes_mailboxes_added_later() {
+        let account = InboxAccount {
+            id: -7,
+            name: "Pixelated Cities".into(),
+            icon: None,
+            color: None,
+            account_ids: vec![1],
+            address_view_ids: vec![],
+            automatic_profile: None,
+            profile_id: Some("cities".into()),
+        };
+        let mut profiles = vec![MailProfile {
+            id: "cities".into(),
+            name: "Pixelated Cities".into(),
+            color: "#112233".into(),
+            account_ids: vec![1, 2],
+            logo: None,
+        }];
+        assert_eq!(mailbox_ids(&account, &profiles), vec![1, 2]);
+        profiles[0].account_ids.push(9);
+        assert_eq!(mailbox_ids(&account, &profiles), vec![1, 2, 9]);
+        let mut settings = Settings {
+            inbox_accounts_initialized: true,
+            mail_profiles: profiles,
+            inbox_accounts: vec![account],
+            ..Settings::default()
+        };
+        let connections = [connected(1), connected(2), connected(9)];
+        let mut saved = settings.inbox_accounts[0].clone();
+        saved.color = Some("#336699".into());
+        save(&mut settings, saved, &connections).unwrap();
+        assert_eq!(
+            settings.account_colors.get("9").map(String::as_str),
+            Some("#336699")
+        );
+        let loose = InboxAccount {
+            id: -1,
+            name: "Loose".into(),
+            icon: None,
+            color: None,
+            account_ids: vec![4],
+            address_view_ids: vec![],
+            automatic_profile: None,
+            profile_id: None,
+        };
+        assert_eq!(mailbox_ids(&loose, &settings.mail_profiles), vec![4]);
     }
 }

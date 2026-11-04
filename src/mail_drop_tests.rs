@@ -13,6 +13,14 @@ impl Platform for Headless {
     }
 }
 
+fn install_headless_platform() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
+        slint::platform::set_platform(Box::new(Headless(window))).expect("headless platform");
+    });
+}
+
 fn mailbox(scope: Scope, folder_id: i64, label: &str) -> MailboxEntry {
     MailboxEntry {
         account_id: 1,
@@ -37,8 +45,7 @@ fn mailbox(scope: Scope, folder_id: i64, label: &str) -> MailboxEntry {
 
 #[test]
 fn drops_resolve_by_scope_not_by_mailbox_name() {
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer);
-    slint::platform::set_platform(Box::new(Headless(window))).unwrap();
+    install_headless_platform();
     let app = AppWindow::new().unwrap();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -130,4 +137,56 @@ fn drops_resolve_by_scope_not_by_mailbox_name() {
         )
         .is_err()
     );
+
+    // A merged company folder files into the message's own mailbox, or
+    // creates that path there. JMAP stores the same path as `Clients / Acme`.
+    let merged_id = 1_000_000_042;
+    state.company_mailboxes = vec![MailboxEntry {
+        account_id: -2,
+        folder_id: merged_id,
+        parent_folder_id: -1,
+        depth: 1,
+        has_children: false,
+        is_standard: false,
+        is_selectable: true,
+        can_create_children: true,
+        can_rename: true,
+        can_delete: true,
+        label: "Acme".into(),
+        scope: Some(Scope::MergedFolder(merged_id)),
+        context: "Company".into(),
+        detail: "Clients/Acme".into(),
+        avatar: String::new(),
+        is_account: false,
+        count: String::new(),
+    }];
+    let mut existing = mailbox(Scope::Folder(42), 42, "Acme");
+    existing.detail = "Clients / Acme".into();
+    state.mailboxes.push(existing);
+    let mut missing = message.clone();
+    missing.id = message.id + 1;
+    missing.account_id = 2;
+    missing.thread_id = Some(78);
+    let mut already = message.clone();
+    already.id = message.id + 2;
+    already.folder = "Acme".into();
+    state.messages = vec![message.clone(), missing.clone(), already.clone()];
+    state.set_scope(Scope::CompanyInbox);
+    let drop_merged = |message: &mail::MailMessage| {
+        let item = MailDragItem {
+            message_id: message.id,
+            account_id: i32::try_from(message.account_id).unwrap(),
+        };
+        resolve_single_mail_drop(&state, &item, Scope::MergedFolder(merged_id), -2, -1)
+            .map(|(_, destination)| destination)
+    };
+    assert_eq!(drop_merged(&message), Ok(MailDropDestination::Folder(42)));
+    assert_eq!(
+        drop_merged(&missing),
+        Ok(MailDropDestination::EnsureFolder {
+            account_id: 2,
+            path: "Clients/Acme".into(),
+        })
+    );
+    assert!(drop_merged(&already).unwrap_err().contains("already"));
 }

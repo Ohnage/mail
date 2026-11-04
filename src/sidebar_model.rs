@@ -766,8 +766,6 @@ fn make_company_sidebar_rows(
         mailbox,
         ..row(Kind::UnifiedMailbox, "")
     }));
-    rows.extend(shared_navigation_rows(&labels, collapsed));
-
     let leaves = mailboxes
         .iter()
         .filter(|mailbox| {
@@ -802,16 +800,16 @@ fn make_company_sidebar_rows(
         }
         let scope = Scope::MergedFolder(node.id);
         company_mailboxes.push(MailboxEntry {
-            account_id: 0,
+            account_id: -2,
             folder_id: node.id,
             parent_folder_id: node.parent_id,
             depth: usize::try_from(node.depth).unwrap_or(0),
             has_children: node.has_children,
             is_standard: false,
             is_selectable: true,
-            can_create_children: false,
-            can_rename: false,
-            can_delete: false,
+            can_create_children: true,
+            can_rename: true,
+            can_delete: true,
             label: node.label.clone(),
             scope: Some(scope),
             context: "Company".to_owned(),
@@ -828,13 +826,16 @@ fn make_company_sidebar_rows(
         rows.push(SidebarRow {
             key: format!("merged-folder:{folder_id}").into(),
             mailbox: MailboxRow {
-                account_id: 0,
+                account_id: -2,
                 folder_id,
                 parent_folder_id: i32::try_from(node.parent_id).unwrap_or(-1),
                 depth: node.depth,
                 has_children: node.has_children,
                 expanded,
                 is_selectable: true,
+                can_create_children: true,
+                can_rename: true,
+                can_delete: true,
                 label: node.label.clone().into(),
                 scope: scope.to_string().into(),
                 detail: node.path.clone().into(),
@@ -848,6 +849,15 @@ fn make_company_sidebar_rows(
             ..row(Kind::Folder, "")
         });
     }
+    rows.push(SidebarRow {
+        mailbox: MailboxRow {
+            account_id: -2,
+            folder_id: -1,
+            context: "Company".into(),
+            ..Default::default()
+        },
+        ..row(Kind::NewFolder, "new-folder:company")
+    });
     let copies = source_labels
         .iter()
         .filter(|label| {
@@ -1399,6 +1409,68 @@ mod tests {
             !rows
                 .iter()
                 .any(|row| { row.kind == Kind::NewLabel && row.mailbox.account_id == 2 })
+        );
+    }
+
+    #[test]
+    fn company_sidebar_offers_folders_and_tags_without_categories() {
+        let mailboxes = vec![
+            MailboxRow {
+                account_id: 1,
+                is_account: true,
+                can_create_children: false,
+                label: "Hub".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 1,
+                folder_id: 10,
+                is_selectable: true,
+                label: "Clients".into(),
+                detail: "Clients".into(),
+                ..Default::default()
+            },
+        ];
+        let (rows, entries) = make_company_sidebar_rows(
+            mailboxes,
+            vec![],
+            vec![],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[1],
+            &HashMap::new(),
+            0,
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == Kind::NewFolder && row.mailbox.account_id == -2)
+        );
+        assert!(rows.iter().any(|row| {
+            row.kind == Kind::Folder
+                && row.mailbox.account_id == -2
+                && row.mailbox.can_create_children
+                && row.mailbox.can_rename
+                && row.mailbox.can_delete
+        }));
+        assert!(
+            !rows.iter().any(|row| {
+                matches!(
+                    row.kind,
+                    Kind::CategoriesSection | Kind::Important | Kind::Other | Kind::Category
+                )
+            })
+        );
+        assert!(rows.iter().any(|row| row.key.as_str() == "company-tags"));
+        assert!(
+            rows.iter()
+                .any(|row| row.kind == Kind::NewLabel && row.mailbox.account_id == -2)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.can_rename && entry.detail == "Clients")
         );
     }
 

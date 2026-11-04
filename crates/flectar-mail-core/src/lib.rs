@@ -4309,6 +4309,12 @@ impl Core {
         let account_id = folder.account_id;
         let protocol = self.account_protocol(account_id).await?;
         let delimiter = folder_path_delimiter(protocol, &folder);
+        if !self.folder_tree_is_empty(folder_id).await? {
+            return Err(CoreError::Other(
+                "this folder still has mail; move or delete those messages before deleting the folder"
+                    .into(),
+            ));
+        }
         let prefix = format!("{}{delimiter}", folder.path);
         let mut tree = self
             .db
@@ -4341,7 +4347,7 @@ impl Core {
                         CoreError::NotFound(format!("remote folder {}", candidate.id))
                     })?;
                     connected
-                        .mailbox_destroy(remote_id, true)
+                        .mailbox_destroy(remote_id, false)
                         .await
                         .map_err(jmap::client::map_error)?;
                 }
@@ -4361,6 +4367,154 @@ impl Core {
             // The folders and their mail exist only here.
             MailProtocol::Pop3 | MailProtocol::Local => {
                 sync::delete_folder_tree(&self.sync_ctx(), account_id, folder.path, delimiter)
+                    .await?;
+            }
+        }
+        self.bus.emit(CoreEvent::MailUpdated { thread_ids: vec![] });
+        Ok(())
+    }
+
+    /// Whether `folder_id` and every folder under it contain no messages.
+    pub async fn folder_tree_is_empty(&self, folder_id: i64) -> Result<bool> {
+        let folder = self
+            .db
+            .read(move |conn| repo::folders::get(conn, folder_id))
+            .await?
+            .ok_or_else(|| CoreError::NotFound(format!("folder {folder_id}")))?;
+        let account_id = folder.account_id;
+        let protocol = self.account_protocol(account_id).await?;
+        let delimiter = folder_path_delimiter(protocol, &folder);
+        let path = folder.path;
+        let count = self
+            .db
+            .read(move |conn| {
+                Ok(repo::folders::messages_in_tree(conn, account_id, &path, &delimiter)?.len())
+            })
+            .await?;
+        Ok(count == 0)
+    }
+
+    /// Place `folder_id` under `new_parent_id`. `None` puts it at the top level.
+    pub async fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<()> {
+        let folder = self
+            .db
+            .read(move |conn| repo::folders::get(conn, folder_id))
+            .await?
+            .ok_or_else(|| CoreError::NotFound(format!("folder {folder_id}")))?;
+        if folder.role.is_some() {
+            return Err(CoreError::Other("system folders cannot be moved".into()));
+        }
+        if !folder.can_rename {
+            return Err(CoreError::Other(
+                "the server does not allow moving this folder".into(),
+            ));
+        }
+        if new_parent_id == Some(folder_id) || new_parent_id == folder.parent_id {
+            return Ok(());
+        }
+        let account_id = folder.account_id;
+        let protocol = self.account_protocol(account_id).await?;
+        let delimiter = folder_path_delimiter(protocol, &folder);
+        let parent = match new_parent_id {
+            Some(parent_id) => Some(self.folder_for_child(account_id, parent_id).await?),
+            None => None,
+        };
+        let siblings = self
+            .db
+            .read(move |conn| repo::folders::list(conn, Some(account_id)))
+            .await?;
+        if let Some(parent) = &parent {
+            let mut cursor = Some(parent.id);
+            let mut seen = std::collections::HashSet::new();
+            while let Some(id) = cursor {
+                if id == folder.id || !seen.insert(id) {
+                    return Err(CoreError::Other(
+                        "a folder cannot be moved into itself".into(),
+                    ));
+                }
+                cursor = siblings
+                    .iter()
+                    .find(|candidate| candidate.id == id)
+                    .and_then(|candidate| candidate.parent_id);
+            }
+        }
+        let leaf = folder
+            .path
+            .rsplit_once(delimiter.as_str())
+            .map(|(_, leaf)| leaf.to_owned())
+            .unwrap_or_else(|| folder.path.clone());
+        let new_path = match &parent {
+            Some(parent) => format!("{}{delimiter}{leaf}", parent.path),
+            None => leaf,
+        };
+        if new_path == folder.path {
+            self.db
+                .write(move |conn| repo::folders::set_parent(conn, folder_id, new_parent_id))
+                .await?;
+            self.bus.emit(CoreEvent::MailUpdated { thread_ids: vec![] });
+            return Ok(());
+        }
+        let old_path = folder.path.clone();
+        match protocol {
+            MailProtocol::Gmail => {
+                let config = self.folder_account_config(account_id).await?;
+                sync::gmail::rename_user_folder(&self.sync_ctx(), &config, folder_id, &new_path)
+                    .await?;
+            }
+            MailProtocol::Jmap => {
+                let config = self.folder_account_config(account_id).await?;
+                let secret =
+                    credentials::load_async(self.credentials.clone(), config.id, Slot::Password)
+                        .await?;
+                let connected = jmap::client::connect(&config, &secret).await?;
+                let remote_id = folder
+                    .jmap_id
+                    .as_deref()
+                    .ok_or_else(|| CoreError::NotFound(format!("remote folder {folder_id}")))?;
+                let parent_remote = parent.as_ref().and_then(|parent| parent.jmap_id.clone());
+                connected
+                    .mailbox_move(remote_id, parent_remote.as_deref())
+                    .await
+                    .map_err(jmap::client::map_error)?;
+                self.db
+                    .write(move |conn| {
+                        repo::folders::rename_tree(
+                            conn, account_id, &old_path, &new_path, &delimiter,
+                        )?;
+                        repo::folders::set_parent(conn, folder_id, new_parent_id)?;
+                        Ok(())
+                    })
+                    .await?;
+            }
+            MailProtocol::Imap => {
+                let config = self.folder_account_config(account_id).await?;
+                let mut session = self.connect_folder_imap(&config).await?;
+                imap::rename_folder(&mut session, &old_path, &new_path).await?;
+                imap::logout(session).await;
+                self.db
+                    .write(move |conn| {
+                        repo::folders::rename_tree(
+                            conn, account_id, &old_path, &new_path, &delimiter,
+                        )?;
+                        repo::folders::set_parent(conn, folder_id, new_parent_id)?;
+                        Ok(())
+                    })
+                    .await?;
+            }
+            MailProtocol::Pop3 | MailProtocol::Local => {
+                self.db
+                    .write(move |conn| {
+                        let tx = conn.transaction()?;
+                        if repo::folders::path_exists(&tx, account_id, &new_path)? {
+                            return Err(folder_exists());
+                        }
+                        repo::folders::rename_tree(
+                            &tx, account_id, &old_path, &new_path, &delimiter,
+                        )?;
+                        repo::folders::set_parent(&tx, folder_id, new_parent_id)?;
+                        tx.commit()?;
+                        Ok(())
+                    })
                     .await?;
             }
         }
@@ -8818,15 +8972,23 @@ impl Core {
     }
 
     pub async fn folder_unread_counts(&self) -> Result<std::collections::HashMap<i64, i64>> {
+        self.folder_unread_counts_for(None).await
+    }
+
+    /// [`Self::folder_unread_counts`] for one set of accounts. One grouped query.
+    pub async fn folder_unread_counts_for(
+        &self,
+        account_ids: Option<Vec<i64>>,
+    ) -> Result<std::collections::HashMap<i64, i64>> {
         self.db
-            .read(|conn| repo::counts::folder_unread_counts(conn))
+            .read(move |conn| repo::counts::folder_unread_counts_for(conn, account_ids.as_deref()))
             .await
     }
 
     /// Remember whether a mailbox feeds company views.
     ///
     /// `None` clears the stored choice and returns to the address default.
-    /// Addresses starting with `hub@` stay excluded either way.
+    /// A stored value wins in both directions, including for `hub@`.
     pub async fn set_company_view_excluded(
         &self,
         account_id: i64,
@@ -12431,6 +12593,84 @@ mod calendar_connection_tests {
             credentials::load_async(core.credentials.clone(), 1, Slot::CaldavPassword(shared.id))
                 .await
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod local_folder_mutation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_device_folder_can_be_created_nested_moved_and_deleted_only_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let core = Core::start(Paths::for_tests(tmp.path())).await.unwrap();
+        core.db
+            .write(|conn| {
+                db::testutil::seed_account(conn);
+                conn.execute(
+                    "UPDATE accounts SET mail_protocol = 'pop3' WHERE id = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        core.create_folder(1, None, "Clients".into()).await.unwrap();
+        let clients = core
+            .child_folder(1, None, "Clients")
+            .await
+            .unwrap()
+            .unwrap();
+        core.create_folder(1, Some(clients), "Acme".into())
+            .await
+            .unwrap();
+        let acme = core
+            .child_folder(1, Some(clients), "Acme")
+            .await
+            .unwrap()
+            .unwrap();
+
+        core.move_folder(acme, None).await.unwrap();
+        let folders = core.list_folders(Some(1)).await.unwrap();
+        let acme_folder = folders.iter().find(|folder| folder.id == acme).unwrap();
+        assert_eq!(acme_folder.path, "Acme");
+        assert_eq!(acme_folder.parent_id, None);
+        assert!(folders.iter().any(|folder| folder.id == clients));
+
+        core.delete_folder(acme).await.unwrap();
+        assert!(
+            !core
+                .list_folders(Some(1))
+                .await
+                .unwrap()
+                .iter()
+                .any(|folder| folder.id == acme)
+        );
+
+        core.db
+            .write(move |conn| {
+                let (_, id) = db::testutil::seed_message(conn, "sender@test.dev", "filed", false);
+                conn.execute(
+                    "UPDATE messages SET folder_id = ?1 WHERE id = ?2",
+                    rusqlite::params![clients, id],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let error = core.delete_folder(clients).await.unwrap_err().to_string();
+        assert!(
+            error.contains("still has mail"),
+            "delete of a folder with mail should be refused, got {error}"
+        );
+        assert!(
+            core.list_folders(Some(1))
+                .await
+                .unwrap()
+                .iter()
+                .any(|folder| folder.id == clients)
         );
     }
 }

@@ -71,16 +71,21 @@ What this fork adds:
   uses that path on the message's own account and creates it there when it
   is missing. Tags that share a `$label:` keyword appear once. Applying one
   writes the keyword on each message's account, and a new tag or a color
-  chosen for it is stored on every company mailbox so it syncs. The separate
-  accounts stay under a Mailboxes section that starts collapsed. Addresses
-  starting with `hub@` never feed these views. `inbox@` starts excluded, and
-  any other address starts included; `companyViewExcluded` in settings
-  overrides that default except for `hub@`.
+  chosen for it is stored on every company mailbox so it syncs. The company
+  sidebar is that folder tree plus those tags. Creating, renaming, or moving
+  a folder there does the same on every company mailbox. Deleting one is
+  confirmed, and it happens only when that folder is empty in every mailbox.
+  The separate accounts stay under a Mailboxes section that starts collapsed.
+  `inbox@` starts excluded. Every other address, including `hub@`, starts
+  included, because a hub mailbox holds its own mail. `companyViewExcluded`
+  in settings overrides that default in either direction.
 - **Named accounts.** Settings → Accounts groups selected mailboxes and
   receiving addresses under a name, icon, and color. A mailbox can belong to
-  more than one named account. Business tabs choose those named accounts.
-  The same color picker writes the named-account color and, when the account
-  is linked to a profile, the profile color and the per-mailbox marker colors.
+  more than one named account. An account tied to a profile includes that
+  profile's current mailboxes, including mailboxes added to the profile
+  later. Business tabs choose those named accounts. The same color picker
+  writes the named-account color and, when the account is linked to a
+  profile, the profile color and the per-mailbox marker colors.
 - **Brand registry import.** Settings can import a brand-registry JSON file,
   and the app also reads `%APPDATA%/flectar-mail/brand-registry.json` when
   that file changes. Import replaces mail profiles and untouched default

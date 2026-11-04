@@ -175,6 +175,22 @@ impl ConnectedClient {
             .updated(id)
     }
 
+    /// Move a mailbox under `parent_id`. `None` places it at the top level.
+    pub async fn mailbox_move(
+        &self,
+        id: &str,
+        parent_id: Option<&str>,
+    ) -> jmap_client::Result<Option<Mailbox>> {
+        let mut request = self.request();
+        request
+            .set_mailbox()
+            .update(id)
+            .parent_id(parent_id.map(str::to_owned));
+        self.send_single::<MailboxSetResponse>(request)
+            .await?
+            .updated(id)
+    }
+
     pub async fn mailbox_destroy(&self, id: &str, delete_emails: bool) -> jmap_client::Result<()> {
         let mut request = self.request();
         request

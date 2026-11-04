@@ -519,9 +519,13 @@ export global I18n {
         if (key == "Folder created.") { return @tr("Folder created."); }
         if (key == "Folder renamed.") { return @tr("Folder renamed."); }
         if (key == "Folder deleted.") { return @tr("Folder deleted."); }
+        if (key == "Folder moved.") { return @tr("Folder moved."); }
+        if (key == "Message moved.") { return @tr("Message moved."); }
         if (key == "Could not create folder: {}") { return @tr("Could not create folder: {}", argument); }
         if (key == "Could not rename folder: {}") { return @tr("Could not rename folder: {}", argument); }
         if (key == "Could not delete folder: {}") { return @tr("Could not delete folder: {}", argument); }
+        if (key == "Could not move folder: {}") { return @tr("Could not move folder: {}", argument); }
+        if (key == "Could not move message: {}") { return @tr("Could not move message: {}", argument); }
         if (key == "Could not close preview: {}") { return @tr("Could not close preview: {}", argument); }
         if (key == "Opened the system print view.") { return @tr("Opened the system print view."); }
         if (key == "Could not print message: {}") { return @tr("Could not print message: {}", argument); }
@@ -637,7 +641,9 @@ export component AppWindow inherits Window {
     callback filter_folders(string);
     callback create_folder(int, int, string);
     callback rename_folder(int, string);
+    callback move_folder(int, string);
     callback delete_folder(int);
+    callback file_messages(int, string);
     callback load_more();
     callback toggle_settings();
     callback sync_mail();
@@ -1269,6 +1275,30 @@ export component AppWindow inherits Window {
         root.folder-dialog-open = true;
     }
 
+    function open-folder-move(folder-id: int, name: string) {
+        root.folder-dialog-item-kind = "folder";
+        root.folder-dialog-mode = "move";
+        root.folder-dialog-folder-id = folder-id;
+        root.folder-dialog-parent-label-id = -1;
+        root.folder-dialog-parent-label-path = "";
+        root.folder-dialog-has-descendants = false;
+        root.folder-dialog-parent-name = name;
+        root.folder-dialog-name = "";
+        root.folder-dialog-open = true;
+    }
+
+    function open-file-messages(message-id: int) {
+        root.folder-dialog-item-kind = "message";
+        root.folder-dialog-mode = "file";
+        root.folder-dialog-folder-id = message-id;
+        root.folder-dialog-parent-label-id = -1;
+        root.folder-dialog-parent-label-path = "";
+        root.folder-dialog-has-descendants = false;
+        root.folder-dialog-parent-name = "";
+        root.folder-dialog-name = "";
+        root.folder-dialog-open = true;
+    }
+
     function open-folder-rename(folder-id: int, name: string) {
         root.folder-dialog-item-kind = "folder";
         root.folder-dialog-mode = "rename";
@@ -1288,7 +1318,7 @@ export component AppWindow inherits Window {
         root.folder-dialog-parent-label-id = -1;
         root.folder-dialog-parent-label-path = "";
         root.folder-dialog-has-descendants = false;
-        root.folder-dialog-parent-name = "";
+        root.folder-dialog-parent-name = folder-id >= 1000000000 ? "company" : "";
         root.folder-dialog-name = name;
         root.folder-dialog-open = true;
     }
@@ -1621,6 +1651,9 @@ export component AppWindow inherits Window {
                 root.open-label-create(account-id, account-name, parent-id, parent-path);
             }
             request_folder_rename(id, name) => { root.open-folder-rename(id, name); }
+            request_folder_move(id, name) => { root.open-folder-move(id, name); }
+            move_folder(id, destination) => { root.move_folder(id, destination); }
+            request_file_messages(id) => { root.open-file-messages(id); }
             request_folder_delete(id, name) => { root.open-folder-delete(id, name); }
             request_label_rename(id, name, color, account, global) => { root.open-label-rename(id, name, color, account, global); }
             request_label_delete(id, name, account, global, has-descendants) => {
@@ -2343,6 +2376,10 @@ export component AppWindow inherits Window {
                 }
             } else if (root.folder-dialog-mode == "create") {
                 root.create-folder(root.folder-dialog-account-id, root.folder-dialog-parent-id, name);
+            } else if (root.folder-dialog-mode == "move") {
+                root.move-folder(root.folder-dialog-folder-id, name);
+            } else if (root.folder-dialog-mode == "file") {
+                root.file-messages(root.folder-dialog-folder-id, name);
             } else {
                 root.rename-folder(root.folder-dialog-folder-id, name);
             }

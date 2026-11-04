@@ -289,8 +289,53 @@ async fn a_pop3_account_downloads_files_and_sends_mail_on_this_device() {
         .unwrap();
     assert_eq!(in_folder.threads.len(), 1);
 
-    // Deleting the folder deletes its mail and the stored original.
+    // A folder that still has mail stays, along with the stored original.
+    let refused = core.delete_folder(projects).await.unwrap_err();
+    assert!(refused.to_string().contains("still has mail"), "{refused}");
+    let inbox_id = core
+        .list_folders(Some(account.id))
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|folder| folder.role.as_deref() == Some("inbox"))
+        .unwrap()
+        .id;
+    let result = core
+        .perform_action(PerformActionArgs {
+            kind: ActionKind::Move,
+            target: ActionTarget::Threads(vec![thread.id]),
+            params: Some(ActionParams {
+                wake_at: None,
+                target_folder_id: Some(inbox_id),
+                label_id: None,
+            }),
+        })
+        .await
+        .unwrap();
+    let action_id = *result.action_ids.first().unwrap();
+    wait_for(|| async {
+        core.db
+            .read(move |conn| {
+                Ok(conn.query_row(
+                    "SELECT state FROM pending_actions WHERE id = ?1",
+                    [action_id],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .await
+            .ok()
+            .filter(|state| state == "done")
+    })
+    .await;
     core.delete_folder(projects).await.unwrap();
+    assert!(
+        !core
+            .list_folders(Some(account.id))
+            .await
+            .unwrap()
+            .iter()
+            .any(|folder| folder.id == projects)
+    );
     let account_id = account.id;
     let (messages, originals): (i64, i64) = core
         .db
@@ -303,7 +348,7 @@ async fn a_pop3_account_downloads_files_and_sends_mail_on_this_device() {
         })
         .await
         .unwrap();
-    assert_eq!((messages, originals), (0, 0));
+    assert_eq!((messages, originals), (1, 1));
     assert_eq!(pop3_commands.lock().unwrap().len(), commands_before);
 
     // Sending goes through SMTP into the local Sent folder only.
@@ -392,8 +437,10 @@ async fn a_pop3_account_downloads_files_and_sends_mail_on_this_device() {
         .unwrap();
     assert_eq!(
         (exported.folders, exported.messages, exported.missing),
-        (2, 2, 0)
+        (3, 3, 0)
     );
+    let inbox = std::fs::read_to_string(second_export.join("Inbox.mbox")).unwrap();
+    assert!(inbox.contains("Subject: Hello there\n"), "{inbox}");
     let drafts = std::fs::read_to_string(second_export.join("Drafts.mbox")).unwrap();
     assert!(drafts.contains("Subject: Unsent idea\n"), "{drafts}");
     let sent = std::fs::read_to_string(second_export.join("Sent.mbox")).unwrap();

@@ -815,7 +815,10 @@ impl AccountPresentationSettings {
         let mut ids = Vec::new();
         for account in &self.inbox_accounts {
             if selected.contains(&account.id) {
-                ids.extend(account.account_ids.iter().copied());
+                ids.extend(flectar_mail_core::inbox_accounts::mailbox_ids(
+                    account,
+                    &self.profiles,
+                ));
             }
         }
         ids.sort_unstable();
@@ -880,8 +883,7 @@ impl AccountPresentationSettings {
         self.inbox_accounts
             .iter()
             .find_map(|account| {
-                account
-                    .account_ids
+                flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles)
                     .contains(&account_id)
                     .then_some(account.color.as_deref())
                     .flatten()
@@ -1162,6 +1164,75 @@ fn mail_operation_ids(
 }
 
 /// The provider folder backing one account's standard mailbox, if any.
+/// Folders on the open company tab whose path matches `path`.
+fn company_member_folders(state: &InboxState, path: &str) -> Vec<(i64, i64, bool, bool)> {
+    let key = flectar_mail_core::company_view::folder_match_key(path);
+    let company = state
+        .company_account_ids
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<HashSet<_>>();
+    state
+        .mailboxes
+        .iter()
+        .filter(|mailbox| {
+            !mailbox.is_account
+                && !mailbox.is_standard
+                && mailbox.folder_id >= 0
+                && company.contains(&mailbox.account_id)
+                && flectar_mail_core::company_view::folder_match_key(&mailbox.detail) == key
+        })
+        .map(|mailbox| {
+            (
+                mailbox.account_id,
+                mailbox.folder_id,
+                mailbox.can_rename,
+                mailbox.can_delete,
+            )
+        })
+        .collect()
+}
+
+fn company_folder_path(state: &InboxState, folder_id: i64) -> Option<String> {
+    state
+        .company_mailboxes
+        .iter()
+        .find(|mailbox| mailbox.folder_id == folder_id)
+        .map(|mailbox| mailbox.detail.clone())
+        .filter(|path| !path.is_empty())
+}
+
+fn path_is_inside(parent: &str, child: &str) -> bool {
+    let parent = flectar_mail_core::company_view::folder_match_key(parent);
+    let child = flectar_mail_core::company_view::folder_match_key(child);
+    child == parent || child.starts_with(&format!("{parent}/"))
+}
+
+fn path_drop_destination(
+    state: &InboxState,
+    message: &mail::MailMessage,
+    path: &str,
+) -> Result<MailDropDestination, String> {
+    let key = flectar_mail_core::company_view::folder_match_key(path);
+    if let Some(folder) = state.mailboxes.iter().find(|mailbox| {
+        mailbox.account_id == message.account_id
+            && !mailbox.is_account
+            && !mailbox.is_standard
+            && mailbox.folder_id >= 0
+            && flectar_mail_core::company_view::folder_match_key(&mailbox.detail) == key
+    }) {
+        if folder.label == message.folder {
+            return Err("message is already in this destination".to_owned());
+        }
+        return Ok(MailDropDestination::Folder(folder.folder_id));
+    }
+    Ok(MailDropDestination::EnsureFolder {
+        account_id: message.account_id,
+        path: path.to_owned(),
+    })
+}
+
 fn standard_mailbox_folder(
     state: &InboxState,
     account_id: i64,
@@ -3922,10 +3993,18 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 let shown_removed = matches!(
                     state.scope,
                     Scope::Folder(id) if update.removed_folders.contains(&id)
+                ) || matches!(
+                    state.scope,
+                    Scope::MergedFolder(id) if update.removed_folders.contains(&id)
                 );
                 let navigate = shown_removed || state.scope == update.issued_scope;
                 if shown_removed {
-                    state.set_scope(Scope::UNIFIED_INBOX);
+                    let company = state.company_account_ids.is_some();
+                    state.set_scope(if company {
+                        Scope::CompanyInbox
+                    } else {
+                        Scope::UNIFIED_INBOX
+                    });
                 } else if navigate {
                     state.set_scope(metadata.scope);
                 }
@@ -4013,14 +4092,50 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let scope = create_folder_state.borrow().scope;
         let updates = create_folder_updates.clone();
         let name = name.to_string();
+        let company = account_id == -2 || parent_id >= 1_000_000_000;
+        let company_create = if company {
+            let state = create_folder_state.borrow();
+            let account_ids = state.company_account_ids.clone().unwrap_or_default();
+            let path = if parent_id >= 0 {
+                company_folder_path(&state, i64::from(parent_id))
+                    .map(|parent| {
+                        format!(
+                            "{}/{}",
+                            flectar_mail_core::company_view::folder_match_key(&parent),
+                            name.trim()
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                name.trim().to_owned()
+            };
+            Some((account_ids, path))
+        } else {
+            None
+        };
         create_folder_runtime.spawn(async move {
-            let result = core
-                .create_folder(
+            let result = if let Some((account_ids, path)) = company_create {
+                if account_ids.is_empty() || path.is_empty() {
+                    Err("This tab has no company mailboxes for that folder.".into())
+                } else {
+                    let mut created = Ok(());
+                    for account_id in account_ids {
+                        if let Err(error) = core.ensure_mailbox_path(account_id, path.clone()).await
+                        {
+                            created = Err(error);
+                            break;
+                        }
+                    }
+                    created
+                }
+            } else {
+                core.create_folder(
                     i64::from(account_id),
                     (parent_id >= 0).then_some(i64::from(parent_id)),
                     name,
                 )
-                .await;
+                .await
+            };
             let metadata = if result.is_ok() {
                 core.load_mail_metadata(scope).await.ok()
             } else {
@@ -4052,8 +4167,32 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let scope = rename_folder_state.borrow().scope;
         let updates = rename_folder_updates.clone();
         let name = name.to_string();
+        let folder_id = i64::from(folder_id);
+        let members = if folder_id >= 1_000_000_000 {
+            let state = rename_folder_state.borrow();
+            company_folder_path(&state, folder_id).map(|path| company_member_folders(&state, &path))
+        } else {
+            None
+        };
         rename_folder_runtime.spawn(async move {
-            let result = core.rename_folder(i64::from(folder_id), name).await;
+            let result = if let Some(members) = members {
+                if members.is_empty() {
+                    Err("That folder is no longer on a company mailbox.".into())
+                } else if members.iter().any(|(_, _, can_rename, _)| !can_rename) {
+                    Err("A company mailbox does not allow renaming this folder.".into())
+                } else {
+                    let mut renamed = Ok(());
+                    for (_, folder_id, _, _) in members {
+                        if let Err(error) = core.rename_folder(folder_id, name.clone()).await {
+                            renamed = Err(error);
+                            break;
+                        }
+                    }
+                    renamed
+                }
+            } else {
+                core.rename_folder(folder_id, name).await
+            };
             let metadata = if result.is_ok() {
                 core.load_mail_metadata(scope).await.ok()
             } else {
@@ -4077,7 +4216,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
     let delete_folder_state = Rc::clone(&state);
     let delete_folder_runtime = Rc::clone(&runtime);
-    let delete_folder_updates = folder_tx;
+    let delete_folder_updates = folder_tx.clone();
     app.on_delete_folder(move |folder_id| {
         let Some(core) = delete_folder_state.borrow().core.clone() else {
             return;
@@ -4116,15 +4255,59 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let selected_folder_is_deleted = matches!(
             current_scope,
             Scope::Folder(id) if removed_folders.contains(&id)
-        );
+        ) || matches!(current_scope, Scope::MergedFolder(id) if id == folder_id);
         let scope = if selected_folder_is_deleted {
-            Scope::UNIFIED_INBOX
+            if delete_folder_state.borrow().company_account_ids.is_some() {
+                Scope::CompanyInbox
+            } else {
+                Scope::UNIFIED_INBOX
+            }
         } else {
             current_scope
         };
         let updates = delete_folder_updates.clone();
+        let members = if folder_id >= 1_000_000_000 {
+            let state = delete_folder_state.borrow();
+            company_folder_path(&state, folder_id).map(|path| company_member_folders(&state, &path))
+        } else {
+            None
+        };
         delete_folder_runtime.spawn(async move {
-            let result = core.delete_folder(folder_id).await;
+            let result = if let Some(members) = members {
+                if members.is_empty() {
+                    Err("That folder is no longer on a company mailbox.".into())
+                } else if members.iter().any(|(_, _, _, can_delete)| !can_delete) {
+                    Err("A company mailbox does not allow deleting this folder.".into())
+                } else {
+                    let mut deleted = Ok(());
+                    for (_, member_id, _, _) in &members {
+                        match core.folder_tree_is_empty(*member_id).await {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                deleted = Err(
+                                    "This folder still has mail in a company mailbox.".into(),
+                                );
+                                break;
+                            }
+                            Err(error) => {
+                                deleted = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    if deleted.is_ok() {
+                        for (_, member_id, _, _) in members {
+                            if let Err(error) = core.delete_folder(member_id).await {
+                                deleted = Err(error);
+                                break;
+                            }
+                        }
+                    }
+                    deleted
+                }
+            } else {
+                core.delete_folder(folder_id).await
+            };
             let metadata = if result.is_ok() {
                 core.load_mail_metadata(scope).await.ok()
             } else {
@@ -4145,6 +4328,196 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 .await;
         });
     });
+
+    let move_folder_state = Rc::clone(&state);
+    let move_folder_runtime = Rc::clone(&runtime);
+    let move_folder_updates = folder_tx.clone();
+    app.on_move_folder(move |folder_id, destination| {
+        let Some(core) = move_folder_state.borrow().core.clone() else {
+            return;
+        };
+        let folder_id = i64::from(folder_id);
+        let destination = destination.trim().to_owned();
+        let scope = move_folder_state.borrow().scope;
+        let plan = {
+            let state = move_folder_state.borrow();
+            if folder_id >= 1_000_000_000 {
+                match company_folder_path(&state, folder_id) {
+                    None => Err("That folder is no longer on a company mailbox.".to_owned()),
+                    Some(path) if !destination.is_empty() && path_is_inside(&path, &destination) => {
+                        Err("A folder cannot be moved into itself.".to_owned())
+                    }
+                    Some(path) => {
+                        let members = company_member_folders(&state, &path);
+                        if members.is_empty() {
+                            Err("That folder is no longer on a company mailbox.".to_owned())
+                        } else if members.iter().any(|(_, _, can_rename, _)| !can_rename) {
+                            Err("A company mailbox does not allow moving this folder.".to_owned())
+                        } else {
+                            Ok((Some(members), None))
+                        }
+                    }
+                }
+            } else {
+                match state
+                    .mailboxes
+                    .iter()
+                    .find(|mailbox| mailbox.folder_id == folder_id && !mailbox.is_account)
+                {
+                    Some(mailbox)
+                        if !destination.is_empty()
+                            && path_is_inside(&mailbox.detail, &destination) =>
+                    {
+                        Err("A folder cannot be moved into itself.".to_owned())
+                    }
+                    Some(mailbox) => Ok((None, Some(mailbox.account_id))),
+                    None => Err("That folder is no longer available.".to_owned()),
+                }
+            }
+        };
+        let (members, account_id) = match plan {
+            Ok(plan) => plan,
+            Err(error) => {
+                let message = UiMessage::detail("Could not move folder: {}", error);
+                let updates = move_folder_updates.clone();
+                move_folder_runtime.spawn(async move {
+                    let _ = updates
+                        .send(FolderMutationUpdate {
+                            message,
+                            metadata: None,
+                            reveal_parent_id: None,
+                            issued_scope: scope,
+                            removed_folders: Vec::new(),
+                        })
+                        .await;
+                });
+                return;
+            }
+        };
+        let updates = move_folder_updates.clone();
+        move_folder_runtime.spawn(async move {
+            let result = if let Some(members) = members {
+                let mut moved = Ok(());
+                for (account_id, member_id, _, _) in members {
+                    let parent = if destination.is_empty() {
+                        None
+                    } else {
+                        match core
+                            .ensure_mailbox_path(account_id, destination.clone())
+                            .await
+                        {
+                            Ok(parent) => Some(parent),
+                            Err(error) => {
+                                moved = Err(error);
+                                break;
+                            }
+                        }
+                    };
+                    if moved.is_err() {
+                        break;
+                    }
+                    if let Err(error) = core.move_folder(member_id, parent).await {
+                        moved = Err(error);
+                        break;
+                    }
+                }
+                moved
+            } else {
+                let account_id = account_id.unwrap_or_default();
+                let parent = if destination.is_empty() {
+                    None
+                } else {
+                    match core.ensure_mailbox_path(account_id, destination).await {
+                        Ok(parent) => Some(parent),
+                        Err(error) => {
+                            let metadata = None;
+                            let _ = updates
+                                .send(FolderMutationUpdate {
+                                    message: UiMessage::detail("Could not move folder: {}", error),
+                                    metadata,
+                                    reveal_parent_id: None,
+                                    issued_scope: scope,
+                                    removed_folders: Vec::new(),
+                                })
+                                .await;
+                            return;
+                        }
+                    }
+                };
+                core.move_folder(folder_id, parent).await
+            };
+            let metadata = if result.is_ok() {
+                core.load_mail_metadata(scope).await.ok()
+            } else {
+                None
+            };
+            let message = match result {
+                Ok(()) => UiMessage::plain("Folder moved."),
+                Err(error) => UiMessage::detail("Could not move folder: {}", error),
+            };
+            let _ = updates
+                .send(FolderMutationUpdate {
+                    message,
+                    metadata,
+                    reveal_parent_id: None,
+                    issued_scope: scope,
+                    removed_folders: Vec::new(),
+                })
+                .await;
+        });
+    });
+
+    let file_state = Rc::clone(&state);
+    let file_app = app.as_weak();
+    app.on_file_messages(move |message_id, path| {
+        let path = path.trim().to_owned();
+        if path.is_empty() {
+            return;
+        }
+        let (core, operations) = {
+            let state = file_state.borrow();
+            let Some(core) = state.core.clone() else {
+                return;
+            };
+            let ids = if message_id < 0 {
+                state
+                    .messages
+                    .iter()
+                    .filter(|message| state.checked_ids.contains(&message.id))
+                    .map(|message| message.id)
+                    .collect::<Vec<_>>()
+            } else {
+                mail_operation_ids(&state.messages, &state.checked_ids, message_id)
+            };
+            if ids.is_empty() {
+                return;
+            }
+            let mut operations = Vec::new();
+            for id in ids {
+                let Some(message) = state.messages.iter().find(|message| message.id == id) else {
+                    continue;
+                };
+                let Some(target) = mail::MailTarget::of(message) else {
+                    continue;
+                };
+                match path_drop_destination(&state, message, &path) {
+                    Ok(destination) => operations.push((id, target, mail_work::Operation::Drop(destination))),
+                    Err(error) if error.contains("already") => {}
+                    Err(_) => return,
+                }
+            }
+            if operations.is_empty() {
+                return;
+            }
+            (core, operations)
+        };
+        if let Err(error) = mail_work::enqueue(&file_state, core, operations)
+            && let Some(app) = file_app.upgrade()
+        {
+            app.set_render_status(UiMessage::detail("Could not move message: {}", error));
+        }
+    });
+
     let mail_update_state = Rc::clone(&state);
     let mail_update_runtime = Rc::clone(&runtime);
     let mail_update_app = app.as_weak();

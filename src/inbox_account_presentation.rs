@@ -63,7 +63,10 @@ impl AccountPresentationSettings {
             .collect::<HashSet<_>>();
         MailScope {
             match_any: true,
-            or_account_ids: account.account_ids.clone(),
+            or_account_ids: flectar_mail_core::inbox_accounts::mailbox_ids(
+                account,
+                &self.profiles,
+            ),
             address_inboxes: self
                 .address_views
                 .iter()
@@ -136,7 +139,7 @@ impl AccountPresentationSettings {
             name: account.name.clone().into(),
             detail: format!(
                 "{} mailboxes · {} addresses",
-                account.account_ids.len(),
+                flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles).len(),
                 self.inbox_members(account).len()
             )
             .into(),
@@ -225,5 +228,26 @@ mod tests {
         assert_eq!(scope.to_string().parse::<Scope>().unwrap(), scope);
         assert!("InboxAccount:0".parse::<Scope>().is_err());
         assert!("InboxAccount:-1".parse::<Scope>().is_err());
+    }
+    #[test]
+    fn a_linked_profile_adds_mailboxes_without_rewriting_the_account() {
+        use flectar_mail_core::models::MailProfile;
+        let mut p = presentation();
+        p.inbox_accounts[0].profile_id = Some("work".into());
+        p.inbox_accounts[0].account_ids = vec![1];
+        p.profiles = vec![MailProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            color: "#112233".into(),
+            account_ids: vec![1, 8],
+            logo: None,
+        }];
+        assert_eq!(p.inbox_scope(&p.inbox_accounts[0]).or_account_ids, vec![1, 8]);
+        p.profiles[0].account_ids.push(9);
+        assert_eq!(
+            p.inbox_scope(&p.inbox_accounts[0]).or_account_ids,
+            vec![1, 8, 9]
+        );
+        assert!(p.inbox_choice(&p.inbox_accounts[0]).detail.starts_with("3 mailboxes"));
     }
 }

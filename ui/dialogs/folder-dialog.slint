@@ -23,7 +23,9 @@ export component FolderDialog inherits Rectangle {
     background: #00000066;
     forward-focus: folder-name-input;
     accessible-role: groupbox;
-    accessible-label: root.mode == "create" && root.item-kind == "label" ? @tr("New label")
+    accessible-label: root.mode == "file" ? @tr("Move to folder")
+        : root.mode == "move" ? @tr("Move folder")
+        : root.mode == "create" && root.item-kind == "label" ? @tr("New label")
         : root.mode == "create" ? @tr("New folder")
         : root.mode == "rename" && root.item-kind == "label" ? @tr("Rename label")
         : root.mode == "rename" ? @tr("Rename folder")
@@ -50,7 +52,9 @@ export component FolderDialog inherits Rectangle {
             y: 20px;
             width: parent.width - 44px;
             height: max(28px, self.preferred-height);
-            text: root.mode == "create" && root.item-kind == "label" ? @tr("New label")
+            text: root.mode == "file" ? @tr("Move to folder")
+                : root.mode == "move" ? @tr("Move folder")
+                : root.mode == "create" && root.item-kind == "label" ? @tr("New label")
                 : root.mode == "create" ? @tr("New folder")
                 : root.mode == "rename" && root.item-kind == "label" ? @tr("Rename label")
                 : root.mode == "rename" ? @tr("Rename folder")
@@ -67,12 +71,18 @@ export component FolderDialog inherits Rectangle {
             y: folder-heading.y + folder-heading.height + 6px;
             width: parent.width - 44px;
             height: max(root.mode == "delete" ? 54px : 34px, self.preferred-height);
-            text: root.mode == "delete"
+            text: root.mode == "file"
+                ? @tr("Enter the folder path. On a company tab, each message uses that path on its own mailbox.")
+                : root.mode == "move"
+                ? @tr("Enter the folder to move “{}” into. Leave this empty to place it at the top level.", root.parent-name)
+                : root.mode == "delete"
                 ? root.item-kind == "label"
                     ? root.has-descendants
                         ? @tr("Delete “{}” and all nested labels from “{}”? Messages will not be deleted.", root.name, root.parent-name)
                         : @tr("Delete “{}” from “{}”? Messages will not be deleted.", root.name, root.parent-name)
-                    : @tr("Delete “{}” and its contents from the mail server?", root.name)
+                    : root.parent-name == "company"
+                        ? @tr("Delete “{}” from every company mailbox? It is removed only when it is empty in all of them.", root.name)
+                        : @tr("Delete “{}”? The folder is removed only when it and its subfolders are empty.", root.name)
                 : root.mode == "rename"
                     ? root.item-kind == "label"
                         ? @tr("Rename this label in “{}”.", root.parent-name)
@@ -110,7 +120,7 @@ export component FolderDialog inherits Rectangle {
                 single-line: true;
                 vertical-alignment: center;
                 accepted => {
-                    if self.text != "" {
+                    if root.mode == "move" || self.text != "" {
                         root.submit(self.text);
                     }
                 }
@@ -130,12 +140,13 @@ export component FolderDialog inherits Rectangle {
             }
             Button {
                 text: root.mode == "delete" ? @tr("Delete")
+                    : root.mode == "move" || root.mode == "file" ? @tr("Move")
                     : root.mode == "create" && root.item-kind == "label" ? @tr("Create label")
                     : root.mode == "create" ? @tr("Create folder")
                     : @tr("Save");
                 destructive: root.mode == "delete";
                 primary: root.mode != "delete";
-                enabled: root.mode == "delete" || root.name != "";
+                enabled: root.mode == "delete" || root.mode == "move" || root.name != "";
                 clicked => {
                     if root.mode == "delete" {
                         root.confirm-delete();

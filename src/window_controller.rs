@@ -540,9 +540,12 @@ impl LaunchAtLogin {
                     Ok(Applied::Done) if enabled => {
                         UiMessage::plain("Flectar Mail will start when you sign in.")
                     }
-                    Ok(Applied::Done) => {
-                        UiMessage::plain("Flectar Mail will no longer start when you sign in.")
-                    }
+                    Ok(Applied::Done) => UiMessage::plain(
+                        "Flectar Mail will no longer start when you sign in.",
+                    ),
+                    Ok(Applied::NeedsApproval) if cfg!(target_os = "windows") => UiMessage::plain(
+                        "Turn on Flectar Mail under Startup apps in Windows Settings to finish.",
+                    ),
                     Ok(Applied::NeedsApproval) => UiMessage::plain(
                         "Allow Flectar Mail under Login Items in System Settings to finish.",
                     ),

@@ -15,14 +15,33 @@ mod ios;
 #[cfg(target_os = "ios")]
 pub use ios::*;
 
+/// The iOS Keychain credential store, whose rules every platform tests.
+#[cfg(any(test, target_os = "ios"))]
+mod keychain;
+/// The iOS sign-in session broker, whose rules every platform tests.
+#[cfg(any(test, target_os = "ios"))]
+mod web_authentication;
+
 #[cfg(target_env = "ohos")]
 mod ohos;
 #[cfg(target_env = "ohos")]
 pub use ohos::*;
 
+/// Fonts a host without Fontconfig hands to the email (Blitz/Parley) renderer
+/// and the composer: the platform font directory, and the fallback policy the
+/// host applies to its own UI, so mail content falls back the same way.
+pub struct EmailFonts {
+    /// The platform font directory.
+    pub dir: &'static std::path::Path,
+    /// Family-name fragments of the Han (CJK) faces, most preferred first.
+    pub han_families: &'static [&'static str],
+    /// Scripts, as ISO 15924 tags, that fall back to every system family.
+    pub fallback_scripts: &'static [[u8; 4]],
+}
+
 /// Desktop reach system fonts through the fontique system backend.
 #[cfg(desktop)]
-pub(crate) fn email_font_dir() -> Option<&'static std::path::Path> {
+pub(crate) fn email_fonts() -> Option<&'static EmailFonts> {
     None
 }
 

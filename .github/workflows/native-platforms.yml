@@ -422,22 +422,39 @@ jobs:
           path: target/flatpak/flectar-mail.flatpak
           if-no-files-found: error
 
+  windows-plan:
+    name: Choose Windows architectures
+    # Job-level if cannot read matrix, so the architecture list is chosen here.
+    # This fork publishes the x64 installer and portable zip. Arm64 stays on
+    # the upstream repository, which also publishes the Store bundle.
+    if: github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        shell: bash
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if [[ "$REPOSITORY" == "flectar/mail" ]]; then
+            matrix='{"include":[{"arch":"x64","runner":"windows-2025"},{"arch":"arm64","runner":"windows-11-arm"}]}'
+          else
+            matrix='{"include":[{"arch":"x64","runner":"windows-2025"}]}'
+          fi
+          {
+            echo "matrix<<EOF"
+            echo "$matrix"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
   windows:
-    needs: metadata
-    # This fork publishes the x64 installer and portable zip. Arm64 packages
-    # stay on the upstream repository, which also publishes the Store bundle.
-    if: >-
-      (github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')) &&
-      (matrix.arch == 'x64' || github.repository == 'flectar/mail')
+    needs: [metadata, windows-plan]
+    if: github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')
     name: Windows packages (${{ matrix.arch }})
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: windows-2025
-          - arch: arm64
-            runner: windows-11-arm
+      matrix: ${{ fromJson(needs.windows-plan.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5

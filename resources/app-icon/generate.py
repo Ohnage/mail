@@ -22,8 +22,8 @@ import zlib
 ROOT = Path(__file__).resolve().parent
 PROJECT = ROOT.parents[1]
 SOURCE = ROOT / "source/NewFlectarIcon.png"
-SOURCE_SHA256 = "485ca8a7067b496d70e82c3df44b2fe8f59a6dfced8cf8e7ce3ede833df50216"
-SOURCE_SIZE = (1448, 1086)
+SOURCE_SHA256 = "e90b358583e953bee1590b2b529df9669e570cec1fbc14973a7dfc21b1bf429e"
+SOURCE_SIZE = (1254, 1254)
 VARIANTS = ("graphite", "light", "blue", "green", "purple")
 ICO_SIZES = (16, 20, 24, 32, 40, 48, 64, 96, 128, 256)
 MANIFEST = ROOT / "generated.json"
@@ -71,11 +71,12 @@ def png_bytes(image):
 
 
 def contain(source, size, opaque=False, safe_zone=False):
-    """Center the entire source canvas; never trim, stretch, mask, or recolor.
+    """Center the entire source canvas on black; never trim, stretch, or recolor.
 
-    Android adaptive launchers mask the outer canvas. Fit inside their 66/108
-    safe zone (including the corners), keeping the entire artwork visible.
-    iOS alone requires opaque icons, so composite onto a black canvas there.
+    The master PNG leaves its margins transparent. Every shipped icon composites
+    those margins onto black so the skyline keeps the black background from the
+    supplied picture. Android adaptive launchers mask the outer canvas, so that
+    artwork fits inside their 66/108 safe zone. iOS requires opaque RGB.
     """
     from PIL import Image
     limit = size * 66 / 108 / (2 ** 0.5) if safe_zone else size
@@ -84,16 +85,16 @@ def contain(source, size, opaque=False, safe_zone=False):
     resized = source.resize(dimensions, Image.Resampling.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     canvas.paste(resized, ((size - dimensions[0]) // 2, (size - dimensions[1]) // 2))
-    if opaque:
-        background = Image.new("RGBA", canvas.size, (0, 0, 0, 255))
-        return Image.alpha_composite(background, canvas).convert("RGB")
-    return canvas
+    background = Image.new("RGBA", canvas.size, (0, 0, 0, 255))
+    composited = Image.alpha_composite(background, canvas)
+    return composited.convert("RGB") if opaque else composited
 
 
 def svg_bytes(data):
     encoded = base64.b64encode(data).decode("ascii")
     return (f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
             f'width="1024" height="1024" viewBox="0 0 1024 1024">\n'
+            f'  <rect width="1024" height="1024" fill="#000000"/>\n'
             f'  <image x="0" y="0" width="1024" height="1024" '
             f'preserveAspectRatio="xMidYMid meet" xlink:href="data:image/png;base64,{encoded}"/>\n'
             f'</svg>\n').encode("utf-8")
@@ -123,6 +124,8 @@ def expected_outputs():
                        ("window", 256), ("tray", 64)):
         outputs[ROOT / f"flectar-mail-{name}.png"] = png_bytes(contain(source, size))
     outputs[ROOT / "flectar-mail.ico"] = ico_bytes(source)
+    for name, (size, _scale) in windows_logos().items():
+        outputs[WINDOWS_ASSETS / name] = png_bytes(contain(source, size))
     # Saved appIcon values keep working; every legacy choice is the same art.
     for name in VARIANTS:
         outputs[ROOT / f"variants/{name}.svg"] = svg
@@ -257,6 +260,7 @@ def check_declarations(recorded):
                     required.add(ANDROID_RES / f"mipmap-anydpi-{version}" / (resource[8:] + ".xml"))
     required.add(ANDROID_RES / "drawable-nodpi/ic_launcher_artwork.png")
     required.update((ANDROID_RES / "drawable").glob("ic_launcher_*.xml"))
+    required.update(WINDOWS_ASSETS / name for name in windows_logos())
     actual = {PROJECT / name for name in recorded["files"]}
     if required != actual:
         raise ValueError("Platform declarations and generated asset inventory differ; regenerate icons")

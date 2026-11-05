@@ -4,7 +4,7 @@
 //! folders by their full path and tags by their keyword, then asks each
 //! message's own account to carry out the change.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Local part of an address, without the domain. Empty when there is no `@`.
 pub fn address_local_part(email: &str) -> &str {
@@ -326,6 +326,132 @@ pub fn company_mailbox_ids(
         .collect()
 }
 
+/// Mailboxes a named account lists itself. Membership in a profile is not a claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailboxClaim {
+    pub named_account_id: i64,
+    pub mailbox_ids: Vec<i64>,
+}
+
+/// Drop mailboxes claimed by a named account this view did not select.
+///
+/// A mailbox stays when a selected named account lists it explicitly, or when
+/// no unselected named account lists it. Profile membership alone never claims
+/// a mailbox, so a personal account that lists its mailboxes stays out of a
+/// company view that did not select that account.
+pub fn without_foreign_claims(
+    mailboxes: impl IntoIterator<Item = i64>,
+    selected_named_accounts: &[i64],
+    claims: &[MailboxClaim],
+) -> Vec<i64> {
+    let selected = selected_named_accounts
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut kept = HashSet::new();
+    let mut foreign = HashSet::new();
+    for claim in claims {
+        let bucket = if selected.contains(&claim.named_account_id) {
+            &mut kept
+        } else {
+            &mut foreign
+        };
+        bucket.extend(claim.mailbox_ids.iter().copied());
+    }
+    let mut ids = mailboxes
+        .into_iter()
+        .filter(|id| kept.contains(id) || !foreign.contains(id))
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// No extra icon. The chip and the sidebar keep the ordinary tag glyph.
+pub const TAG_ICON_NONE: i32 = 0;
+/// Exclamation, for action and urgent tags.
+pub const TAG_ICON_ALERT: i32 = 1;
+/// Dollar sign, for past-due and unpaid tags.
+pub const TAG_ICON_DOLLAR: i32 = 2;
+/// Check, for paid and done tags.
+pub const TAG_ICON_CHECK: i32 = 3;
+/// Clock, for due-soon and waiting tags.
+pub const TAG_ICON_CLOCK: i32 = 4;
+
+fn tag_key(value: &str) -> String {
+    let value = value.trim().to_ascii_lowercase();
+    let value = value.strip_prefix("$label:").unwrap_or(&value);
+    value
+        .chars()
+        .map(|character| match character {
+            '_' | ' ' => '-',
+            _ => character,
+        })
+        .collect()
+}
+
+fn normalized_hex(value: &str) -> Option<String> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    (hex.len() == 6 && hex.chars().all(|character| character.is_ascii_hexdigit()))
+        .then(|| format!("#{hex}").to_ascii_lowercase())
+}
+
+fn generic_tag_color(hex: &str) -> bool {
+    matches!(
+        hex,
+        "#6b7280" | "#9ca3af" | "#808080" | "#cccccc" | "#4a86e8" | "#000000" | "#ffffff"
+    )
+}
+
+/// A stored swatch the user or the server chose, rather than a placeholder gray.
+pub fn is_tag_color_override(value: &str) -> bool {
+    normalized_hex(value).is_some_and(|hex| !generic_tag_color(&hex))
+}
+
+fn semantic_tag(key: &str) -> Option<(&'static str, i32)> {
+    const RED: &str = "#DC2626";
+    const ORANGE: &str = "#EA580C";
+    const YELLOW: &str = "#CA8A04";
+    const BLUE: &str = "#2563EB";
+    const GREEN: &str = "#16A34A";
+    match key {
+        "needs-action" | "requires-action" | "action-required" | "urgent" => {
+            Some((RED, TAG_ICON_ALERT))
+        }
+        "overdue" | "past-due" | "unpaid" => Some((RED, TAG_ICON_DOLLAR)),
+        "due-soon" | "upcoming" | "due-this-week" => Some((ORANGE, TAG_ICON_CLOCK)),
+        "waiting" | "waiting-on" | "follow-up" | "followup" => Some((YELLOW, TAG_ICON_CLOCK)),
+        "important" | "informational" | "info" => Some((BLUE, TAG_ICON_NONE)),
+        "paid" | "done" | "complete" | "completed" => Some((GREEN, TAG_ICON_CHECK)),
+        _ => None,
+    }
+}
+
+/// Color and icon for a tag chip or sidebar row.
+///
+/// A stored non-generic `#RRGGBB` wins over the default. The icon still follows
+/// the keyword or the display name. Tags with no default keep their stored color.
+pub fn tag_display(keyword: &str, name: &str, stored_colors: &[&str]) -> (String, i32) {
+    let appearance = semantic_tag(&tag_key(keyword)).or_else(|| semantic_tag(&tag_key(name)));
+    if let Some(color) = stored_colors
+        .iter()
+        .copied()
+        .find(|color| is_tag_color_override(color))
+    {
+        let icon = appearance.map(|(_, icon)| icon).unwrap_or(TAG_ICON_NONE);
+        return (color.trim().to_owned(), icon);
+    }
+    if let Some((color, icon)) = appearance {
+        return (color.to_owned(), icon);
+    }
+    let fallback = stored_colors
+        .iter()
+        .copied()
+        .find(|color| normalized_hex(color).is_some())
+        .unwrap_or("#6b7280");
+    (fallback.to_owned(), TAG_ICON_NONE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,5 +675,69 @@ mod tests {
             company_mailbox_ids(&named, &accounts, &explicit),
             vec![1, 3]
         );
+    }
+
+    #[test]
+    fn a_named_account_claim_drops_that_mailbox_from_other_tabs() {
+        let claims = vec![
+            MailboxClaim {
+                named_account_id: -5,
+                mailbox_ids: vec![15, 16],
+            },
+            MailboxClaim {
+                named_account_id: -9,
+                mailbox_ids: vec![16, 40],
+            },
+        ];
+        assert_eq!(
+            without_foreign_claims(vec![15, 16, 40, 41], &[-9], &claims),
+            vec![16, 40, 41]
+        );
+        assert_eq!(
+            without_foreign_claims(vec![15, 16, 40, 41], &[-5, -9], &claims),
+            vec![15, 16, 40, 41]
+        );
+        assert_eq!(
+            without_foreign_claims(vec![41, 15, 41], &[], &claims),
+            vec![41]
+        );
+    }
+
+    #[test]
+    fn standard_tags_take_a_default_color_unless_a_real_color_is_stored() {
+        assert_eq!(
+            tag_display("$label:needs-action", "Needs Action", &["#6b7280"]),
+            ("#DC2626".into(), TAG_ICON_ALERT)
+        );
+        assert_eq!(
+            tag_display("$label:past_due", "Past Due", &[""]),
+            ("#DC2626".into(), TAG_ICON_DOLLAR)
+        );
+        assert_eq!(
+            tag_display("$label:due-soon", "Due Soon", &["#4A86E8"]),
+            ("#EA580C".into(), TAG_ICON_CLOCK)
+        );
+        assert_eq!(
+            tag_display("$label:follow-up", "Follow Up", &["#cccccc"]),
+            ("#CA8A04".into(), TAG_ICON_CLOCK)
+        );
+        assert_eq!(
+            tag_display("$label:important", "Important", &["#9ca3af"]),
+            ("#2563EB".into(), TAG_ICON_NONE)
+        );
+        assert_eq!(
+            tag_display("$label:paid", "Paid", &["#ffffff"]),
+            ("#16A34A".into(), TAG_ICON_CHECK)
+        );
+        assert_eq!(
+            tag_display("$label:needs-action", "Needs Action", &["#112233"]),
+            ("#112233".into(), TAG_ICON_ALERT)
+        );
+        assert_eq!(
+            tag_display("$label:clients", "Clients", &["#6b7280"]),
+            ("#6b7280".into(), TAG_ICON_NONE)
+        );
+        assert!(!is_tag_color_override("#808080"));
+        assert!(is_tag_color_override("#112233"));
     }
 }

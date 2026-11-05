@@ -56,36 +56,50 @@ on `main` that are not in upstream `main`.
 
 What this fork adds:
 
+- **Application icon.** The Windows executable, installer, shortcut, taskbar,
+  window, tray, README logo, and the other packaged icons use the skyline
+  mark: three golden-brown towers on black. Every legacy color choice shows
+  that same artwork.
 - **Business tabs.** Pinned mail scopes sit after All accounts. A tab can
   show the accounts in selected profiles, mail that matches recipient or
   sender rules, or both. Each tab has its own name, icon, and color. The
-  color picker is in the tab editor; a tab with no chosen color keeps the
-  linked profile color.
+  color picker is in the tab editor. It paints the tab and the folder icons
+  on that tab. A tab with no chosen color keeps the linked profile color,
+  and the folders use that same color.
 - **Mail profiles, with color and a logo.** Profiles still group accounts.
   This fork stores a profile color and a logo, and uses them on the tab, in
   the sidebar, and as the company badge on a message row.
-- **Company Inbox.** A business tab opens on one Company Inbox covering
-  every mailbox on that tab, whether the tab is named accounts or profiles.
-  Sent, Drafts, Archive, Spam, Trash, and Starred are the same rows for the
-  whole tab. Folders that share a path merge into one tree; filing a message
-  uses that path on the message's own account and creates it there when it
-  is missing. Tags that share a `$label:` keyword appear once. Applying one
-  writes the keyword on each message's account, and a new tag or a color
-  chosen for it is stored on every company mailbox so it syncs. The company
-  sidebar is that folder tree plus those tags. Creating, renaming, or moving
-  a folder there does the same on every company mailbox. Deleting one is
-  confirmed, and it happens only when that folder is empty in every mailbox.
-  The separate accounts stay under a Mailboxes section that starts collapsed.
-  `inbox@` starts excluded. Every other address, including `hub@`, starts
-  included, because a hub mailbox holds its own mail. `companyViewExcluded`
-  in settings overrides that default in either direction.
+- **Company Inbox.** A business tab opens on one Company Inbox for that tab
+  only: the named accounts selected on the tab, and the profiles selected on
+  the tab. It does not merge mailboxes from other tabs. Sent, Drafts,
+  Archive, Spam, Trash, and Starred are the same rows for this tab. Folders
+  that share a path merge into one tree and use the tab color; filing a
+  message uses that path on the message's own account and creates it there
+  when it is missing. Tags that share a `$label:` keyword appear once.
+  Applying one writes the keyword on each message's account, and a new tag
+  or a color chosen for it is stored on every company mailbox so it syncs.
+  The company sidebar is Company Inbox, then that tab's named accounts, then
+  the folder tree and those tags. Creating, renaming, or moving a folder
+  there does the same on every company mailbox. Deleting one is confirmed,
+  and it happens only when that folder is empty in every mailbox. The
+  underlying mailboxes stay under a Mailboxes section that starts collapsed,
+  and that section lists only this tab's mailboxes. A mailbox explicitly
+  listed on a named account is claimed by that account. Company Inbox and
+  the other merged views leave it out of a tab that did not select the
+  account, so a personal account such as Tim Mentink stays out of the other
+  companies even when one of their profiles also contains that mailbox.
+  Listing it on a selected account keeps it. `inbox@` starts excluded. Every
+  other address, including `hub@`, starts included, because a hub mailbox
+  holds its own mail. `companyViewExcluded` in settings overrides that
+  default in either direction, after the claim rule.
 - **Named accounts.** Settings → Accounts groups selected mailboxes and
   receiving addresses under a name, icon, and color. A mailbox can belong to
   more than one named account. An account tied to a profile includes that
   profile's current mailboxes, including mailboxes added to the profile
-  later. Business tabs choose those named accounts. The same color picker
-  writes the named-account color and, when the account is linked to a
-  profile, the profile color and the per-mailbox marker colors.
+  later. Business tabs choose those named accounts, and each one is its own
+  sidebar row under Company Inbox. Opening the row shows only that account.
+  The same color picker writes the named-account color and, when the account
+  is linked to a profile, the profile color and the per-mailbox marker colors.
 - **Brand registry import.** Settings can import a brand-registry JSON file,
   and the app also reads `%APPDATA%/flectar-mail/brand-registry.json` when
   that file changes. Import replaces mail profiles and untouched default
@@ -106,7 +120,13 @@ What this fork adds:
   (the form used by server-side tag tools) becomes an account tag and stays
   in sync with that keyword. Adding or removing a non-automatic account tag
   writes the keyword back to the server. Other unknown keywords are left
-  alone.
+  alone. Standard tags pick up a default color and, for some, a small icon:
+  red with an exclamation for needs-action and urgent, red with a dollar
+  sign for overdue and unpaid, orange with a clock for due-soon, yellow with
+  a clock for waiting and follow-up, blue for important, and green with a
+  check for paid and done. Related tags share a color. A stored color that
+  is not a placeholder gray, black, white, or the old default blue still
+  wins. The icon stays optional and follows the keyword.
 - **Recipient matching for the registry's Tim tab.** Recipient patterns from
   the brand registry are applied to that tab, including Bcc. Matching is one
   lookup over exact addresses and globs, so a few hundred patterns do not

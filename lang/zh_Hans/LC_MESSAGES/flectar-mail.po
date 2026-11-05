@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-04 18:35+0000\n"
+"POT-Creation-Date: 2026-11-05 16:28+0000\n"
 "PO-Revision-Date: 2026-10-15 02:03+0000\n"
 "Last-Translator: Taivas Jumala <taivas_jumala@yafoss.org>\n"
 "Language-Team: Chinese (Simplified Han script) <https://translate.flectar."
@@ -27,17 +27,17 @@ msgstr ""
 msgid "Light"
 msgstr "浅色"
 
-#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2001
+#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2002
 msgid "Blue"
 msgstr "蓝色"
 
 #: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
-#: ui/views/mail-reading-pane.slint:2006
+#: ui/views/mail-reading-pane.slint:2007
 msgid "Green"
 msgstr "绿色"
 
 #: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
-#: ui/views/mail-reading-pane.slint:2002
+#: ui/views/mail-reading-pane.slint:2003
 msgid "Purple"
 msgstr "紫色"
 
@@ -1556,7 +1556,7 @@ msgstr "无法打开邮件编辑器：{}"
 msgid "Add an account to send mail."
 msgstr ""
 
-#: ui/app.slint:543 ui/components/sidebar.slint:538
+#: ui/app.slint:543 ui/components/sidebar.slint:540
 msgid "On this device"
 msgstr ""
 
@@ -1827,7 +1827,7 @@ msgid "Could not mark message as read: {}"
 msgstr "无法将邮件标记为已读：{}"
 
 #: ui/app.slint:616 ui/views/mail-reading-pane.slint:196
-#: ui/views/mail-reading-pane.slint:1279
+#: ui/views/mail-reading-pane.slint:1280
 msgid "Loading message…"
 msgstr "正在加载邮件…"
 
@@ -2413,7 +2413,7 @@ msgid "Remove icon"
 msgstr ""
 
 #: ui/components/business-tab-editor.slint:92
-#: ui/views/mail-reading-pane.slint:1991
+#: ui/views/mail-reading-pane.slint:1992
 msgid "Color"
 msgstr "颜色"
 
@@ -3393,7 +3393,7 @@ msgstr "删除全局标签"
 msgid "Delete label from {}"
 msgstr "删除 {} 中的标签"
 
-#: ui/components/sidebar.slint:119 ui/views/mail-list-pane.slint:1443
+#: ui/components/sidebar.slint:119 ui/views/mail-list-pane.slint:1444
 msgid "New email"
 msgstr "新建邮件"
 
@@ -3442,7 +3442,7 @@ msgstr "其他"
 msgid "Tags"
 msgstr ""
 
-#: ui/components/sidebar.slint:456 ui/components/sidebar.slint:658
+#: ui/components/sidebar.slint:456 ui/components/sidebar.slint:661
 msgid "Labels"
 msgstr "标签"
 
@@ -3450,36 +3450,36 @@ msgstr "标签"
 msgid "Global label {}"
 msgstr "全局标签 {}"
 
-#: ui/components/sidebar.slint:507
+#: ui/components/sidebar.slint:509
 msgid "Mailboxes"
 msgstr ""
 
-#: ui/components/sidebar.slint:525 ui/views/contacts-view.slint:221
+#: ui/components/sidebar.slint:527 ui/views/contacts-view.slint:221
 msgid "ACCOUNTS"
 msgstr "账户"
 
-#: ui/components/sidebar.slint:559
+#: ui/components/sidebar.slint:561
 msgid "Address inbox {}"
 msgstr ""
 
-#: ui/components/sidebar.slint:679
+#: ui/components/sidebar.slint:682
 msgid "{} label, {} account"
 msgstr "{} 标签，{} 账户"
 
-#: ui/components/sidebar.slint:721 ui/dialogs/folder-dialog.slint:29
+#: ui/components/sidebar.slint:726 ui/dialogs/folder-dialog.slint:29
 #: ui/views/files-view.slint:354 ui/views/files-view.slint:578
 msgid "New folder"
 msgstr "新建文件夹"
 
-#: ui/components/sidebar.slint:738
+#: ui/components/sidebar.slint:743
 msgid "New tag"
 msgstr ""
 
-#: ui/components/sidebar.slint:738 ui/dialogs/folder-dialog.slint:28
+#: ui/components/sidebar.slint:743 ui/dialogs/folder-dialog.slint:28
 msgid "New label"
 msgstr "新建标签"
 
-#: ui/components/sidebar.slint:758
+#: ui/components/sidebar.slint:763
 msgid "No folders found"
 msgstr "未找到文件夹"
 
@@ -3679,7 +3679,7 @@ msgid "Revert"
 msgstr "还原"
 
 #: ui/components/theme-editor.slint:785 ui/dialogs/folder-dialog.slint:146
-#: ui/views/mail-reading-pane.slint:2027
+#: ui/views/mail-reading-pane.slint:2028
 msgid "Save"
 msgstr "保存"
 
@@ -3951,7 +3951,7 @@ msgstr "在“{}”内"
 msgid "Move"
 msgstr ""
 
-#: ui/dialogs/folder-dialog.slint:144 ui/views/mail-reading-pane.slint:1976
+#: ui/dialogs/folder-dialog.slint:144 ui/views/mail-reading-pane.slint:1977
 msgid "Create label"
 msgstr "创建标签"
 
@@ -4581,7 +4581,7 @@ msgstr "保存设置"
 
 #: ui/dialogs/rendering-info-dialog.slint:25
 #: ui/views/mail-reading-pane.slint:343 ui/views/mail-reading-pane.slint:379
-#: ui/views/mail-reading-pane.slint:1895
+#: ui/views/mail-reading-pane.slint:1896
 msgid "About email rendering"
 msgstr "关于邮件渲染"
 
@@ -4653,7 +4653,7 @@ msgstr "无法计算存储用量，请重试。"
 msgid "Open Storage to calculate local usage."
 msgstr "请打开“存储”以计算本地用量。"
 
-#: ui/dialogs/settings-dialog.slint:268 ui/views/mail-reading-pane.slint:1249
+#: ui/dialogs/settings-dialog.slint:268 ui/views/mail-reading-pane.slint:1250
 msgid "Attachments"
 msgstr "附件"
 
@@ -5589,7 +5589,7 @@ msgid "Search mail"
 msgstr "搜索邮件"
 
 #. Local mail has no archive or spam.
-#: ui/dialogs/settings-dialog.slint:2397 ui/views/mail-list-pane.slint:1361
+#: ui/dialogs/settings-dialog.slint:2397 ui/views/mail-list-pane.slint:1362
 #: ui/views/mail-reading-pane.slint:365
 msgid "Archive"
 msgstr "归档"
@@ -5629,7 +5629,7 @@ msgstr ""
 msgid "Reading"
 msgstr ""
 
-#: ui/dialogs/settings-dialog.slint:2408 ui/views/mail-reading-pane.slint:1259
+#: ui/dialogs/settings-dialog.slint:2408 ui/views/mail-reading-pane.slint:1260
 msgid "Find in message"
 msgstr "在邮件中查找"
 
@@ -5637,7 +5637,7 @@ msgstr "在邮件中查找"
 msgid "Reset zoom"
 msgstr ""
 
-#: ui/dialogs/settings-dialog.slint:2412 ui/views/mail-reading-pane.slint:1588
+#: ui/dialogs/settings-dialog.slint:2412 ui/views/mail-reading-pane.slint:1589
 msgid "Caret browsing"
 msgstr "光标浏览"
 
@@ -6883,31 +6883,31 @@ msgstr "更多邮件操作"
 msgid "Open in new tabs"
 msgstr ""
 
-#: ui/views/mail-list-pane.slint:763 ui/views/mail-list-pane.slint:1355
+#: ui/views/mail-list-pane.slint:763 ui/views/mail-list-pane.slint:1356
 msgid "Open in new tab"
 msgstr "在新标签页打开"
 
-#: ui/views/mail-list-pane.slint:767 ui/views/mail-list-pane.slint:1358
+#: ui/views/mail-list-pane.slint:767 ui/views/mail-list-pane.slint:1359
 #: ui/views/mail-reading-pane.slint:364 ui/views/mail-reading-pane.slint:398
 msgid "Mark as read"
 msgstr "标记为已读"
 
-#: ui/views/mail-list-pane.slint:768 ui/views/mail-list-pane.slint:1358
+#: ui/views/mail-list-pane.slint:768 ui/views/mail-list-pane.slint:1359
 #: ui/views/mail-reading-pane.slint:364 ui/views/mail-reading-pane.slint:398
 msgid "Mark as unread"
 msgstr "标记为未读"
 
-#: ui/views/mail-list-pane.slint:769 ui/views/mail-list-pane.slint:1357
+#: ui/views/mail-list-pane.slint:769 ui/views/mail-list-pane.slint:1358
 #: ui/views/mail-reading-pane.slint:356 ui/views/mail-reading-pane.slint:390
 msgid "Star message"
 msgstr "加星标"
 
-#: ui/views/mail-list-pane.slint:770 ui/views/mail-list-pane.slint:1357
+#: ui/views/mail-list-pane.slint:770 ui/views/mail-list-pane.slint:1358
 #: ui/views/mail-reading-pane.slint:356 ui/views/mail-reading-pane.slint:390
 msgid "Remove star"
 msgstr "取消星标"
 
-#: ui/views/mail-list-pane.slint:771 ui/views/mail-list-pane.slint:1359
+#: ui/views/mail-list-pane.slint:771 ui/views/mail-list-pane.slint:1360
 msgid "Move to folder…"
 msgstr ""
 
@@ -6939,24 +6939,24 @@ msgstr "此会话中有 {} 封邮件"
 msgid "Account: {}"
 msgstr "账户：{}"
 
-#: ui/views/mail-list-pane.slint:1347
+#: ui/views/mail-list-pane.slint:1348
 msgid "Deselect {}"
 msgstr "取消选择 {}"
 
-#: ui/views/mail-list-pane.slint:1363 ui/views/mail-reading-pane.slint:332
+#: ui/views/mail-list-pane.slint:1364 ui/views/mail-reading-pane.slint:332
 #: ui/views/mail-reading-pane.slint:367 ui/views/mail-reading-pane.slint:399
 msgid "Delete permanently…"
 msgstr "永久删除…"
 
-#: ui/views/mail-list-pane.slint:1420 ui/views/onboarding-view.slint:139
+#: ui/views/mail-list-pane.slint:1421 ui/views/onboarding-view.slint:139
 msgid "Opening your mailbox…"
 msgstr "正在打开您的邮箱…"
 
-#: ui/views/mail-list-pane.slint:1420
+#: ui/views/mail-list-pane.slint:1421
 msgid "Nothing here"
 msgstr "这里没有内容"
 
-#: ui/views/mail-list-pane.slint:1421
+#: ui/views/mail-list-pane.slint:1422
 msgid "Try another folder or search term."
 msgstr "请尝试其他文件夹或搜索词。"
 
@@ -6992,7 +6992,7 @@ msgstr "发件人域名已通过 DMARC 和 DKIM 认证"
 msgid "to {}"
 msgstr "发送至 {}"
 
-#: ui/views/mail-reading-pane.slint:327 ui/views/mail-reading-pane.slint:1879
+#: ui/views/mail-reading-pane.slint:327 ui/views/mail-reading-pane.slint:1880
 msgid "Continue editing"
 msgstr "继续编辑"
 
@@ -7013,12 +7013,12 @@ msgid "View plain text"
 msgstr "查看纯文本"
 
 #: ui/views/mail-reading-pane.slint:331 ui/views/mail-reading-pane.slint:346
-#: ui/views/mail-reading-pane.slint:382 ui/views/mail-reading-pane.slint:1260
+#: ui/views/mail-reading-pane.slint:382 ui/views/mail-reading-pane.slint:1261
 msgid "Use message appearance"
 msgstr "使用消息外观"
 
 #: ui/views/mail-reading-pane.slint:331 ui/views/mail-reading-pane.slint:346
-#: ui/views/mail-reading-pane.slint:382 ui/views/mail-reading-pane.slint:1260
+#: ui/views/mail-reading-pane.slint:382 ui/views/mail-reading-pane.slint:1261
 msgid "Show original colors"
 msgstr "显示原始颜色"
 
@@ -7069,7 +7069,7 @@ msgstr "可用标签"
 msgid "Smart category"
 msgstr "智能分类"
 
-#: ui/views/mail-reading-pane.slint:965 ui/views/mail-reading-pane.slint:1976
+#: ui/views/mail-reading-pane.slint:965 ui/views/mail-reading-pane.slint:1977
 msgid "Edit label"
 msgstr "编辑标签"
 
@@ -7081,131 +7081,131 @@ msgstr "没有匹配的标签"
 msgid "Create label…"
 msgstr "创建标签…"
 
-#: ui/views/mail-reading-pane.slint:1261
+#: ui/views/mail-reading-pane.slint:1262
 msgid "Show original layout"
 msgstr "显示原始版式"
 
-#: ui/views/mail-reading-pane.slint:1261
+#: ui/views/mail-reading-pane.slint:1262
 msgid "Reader mode"
 msgstr "阅读模式"
 
-#: ui/views/mail-reading-pane.slint:1268
+#: ui/views/mail-reading-pane.slint:1269
 msgid "Previous match"
 msgstr "上一个匹配项"
 
-#: ui/views/mail-reading-pane.slint:1269
+#: ui/views/mail-reading-pane.slint:1270
 msgid "Next match"
 msgstr "下一个匹配项"
 
-#: ui/views/mail-reading-pane.slint:1270
+#: ui/views/mail-reading-pane.slint:1271
 msgid "Close find"
 msgstr "关闭查找"
 
-#: ui/views/mail-reading-pane.slint:1274
+#: ui/views/mail-reading-pane.slint:1275
 msgid "Some images could not be loaded."
 msgstr "部分图片无法加载。"
 
-#: ui/views/mail-reading-pane.slint:1275 ui/views/mail-reading-pane.slint:1586
+#: ui/views/mail-reading-pane.slint:1276 ui/views/mail-reading-pane.slint:1587
 msgid "Retry images"
 msgstr "重试加载图片"
 
-#: ui/views/mail-reading-pane.slint:1280
+#: ui/views/mail-reading-pane.slint:1281
 msgid "Reload message"
 msgstr "重新加载邮件"
 
-#: ui/views/mail-reading-pane.slint:1342
+#: ui/views/mail-reading-pane.slint:1343
 msgid "Remote images were blocked to protect your privacy."
 msgstr "为保护您的隐私，远程图片已被阻止。"
 
-#: ui/views/mail-reading-pane.slint:1351
+#: ui/views/mail-reading-pane.slint:1352
 msgid "Load images"
 msgstr "加载图片"
 
-#: ui/views/mail-reading-pane.slint:1389
+#: ui/views/mail-reading-pane.slint:1390
 msgid "Loading image…"
 msgstr "正在加载图片…"
 
-#: ui/views/mail-reading-pane.slint:1389
+#: ui/views/mail-reading-pane.slint:1390
 msgid "Blocked image"
 msgstr "已阻止的图片"
 
-#: ui/views/mail-reading-pane.slint:1389
+#: ui/views/mail-reading-pane.slint:1390
 msgid "Image exceeds limits"
 msgstr "图片超出限制"
 
-#: ui/views/mail-reading-pane.slint:1389
+#: ui/views/mail-reading-pane.slint:1390
 msgid "Image unavailable"
 msgstr "图片不可用"
 
-#: ui/views/mail-reading-pane.slint:1535
+#: ui/views/mail-reading-pane.slint:1536
 msgid "Show rendered email"
 msgstr "显示渲染后的邮件"
 
-#: ui/views/mail-reading-pane.slint:1558
+#: ui/views/mail-reading-pane.slint:1559
 msgid "Copy this HTML into your GitHub rendering issue."
 msgstr "请将此 HTML 复制到您的 GitHub 渲染问题反馈中。"
 
-#: ui/views/mail-reading-pane.slint:1575
+#: ui/views/mail-reading-pane.slint:1576
 msgid "Show email"
 msgstr "显示邮件"
 
-#: ui/views/mail-reading-pane.slint:1585
+#: ui/views/mail-reading-pane.slint:1586
 msgid "View original plain text"
 msgstr "查看原始纯文本"
 
-#: ui/views/mail-reading-pane.slint:1587
+#: ui/views/mail-reading-pane.slint:1588
 msgid "Copy formatted selection"
 msgstr "复制保留格式的选区"
 
-#: ui/views/mail-reading-pane.slint:1591
+#: ui/views/mail-reading-pane.slint:1592
 msgid "Copy selected text"
 msgstr "复制选中文本"
 
-#: ui/views/mail-reading-pane.slint:1601
+#: ui/views/mail-reading-pane.slint:1602
 msgid "Copy all email text"
 msgstr "复制全部邮件正文"
 
-#: ui/views/mail-reading-pane.slint:1611
+#: ui/views/mail-reading-pane.slint:1612
 msgid "Select all email text"
 msgstr "全选邮件正文"
 
-#: ui/views/mail-reading-pane.slint:1629
+#: ui/views/mail-reading-pane.slint:1630
 msgid "Link: {}"
 msgstr "链接：{}"
 
-#: ui/views/mail-reading-pane.slint:1818
+#: ui/views/mail-reading-pane.slint:1819
 msgid "Heading: {}"
 msgstr "标题：{}"
 
-#: ui/views/mail-reading-pane.slint:1940
+#: ui/views/mail-reading-pane.slint:1941
 msgid "No message selected"
 msgstr "未选择邮件"
 
-#: ui/views/mail-reading-pane.slint:1941
+#: ui/views/mail-reading-pane.slint:1942
 msgid "Choose an email to read it here."
 msgstr "选择一封邮件即可在此阅读。"
 
-#: ui/views/mail-reading-pane.slint:1983
+#: ui/views/mail-reading-pane.slint:1984
 msgid "Label name"
 msgstr "标签名称"
 
-#: ui/views/mail-reading-pane.slint:2003
+#: ui/views/mail-reading-pane.slint:2004
 msgid "Pink"
 msgstr "粉色"
 
-#: ui/views/mail-reading-pane.slint:2004
+#: ui/views/mail-reading-pane.slint:2005
 msgid "Red"
 msgstr "红色"
 
-#: ui/views/mail-reading-pane.slint:2005
+#: ui/views/mail-reading-pane.slint:2006
 msgid "Amber"
 msgstr "琥珀色"
 
-#: ui/views/mail-reading-pane.slint:2008
+#: ui/views/mail-reading-pane.slint:2009
 msgid "Slate"
 msgstr "石板色"
 
-#: ui/views/mail-reading-pane.slint:2013
+#: ui/views/mail-reading-pane.slint:2014
 msgid "Use across all accounts (local only)"
 msgstr "在所有账户中使用（仅本地）"
 

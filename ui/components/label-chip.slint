@@ -7,6 +7,8 @@ export component LabelChip inherits Rectangle {
     in property <bool> name-has-emoji: false;
     // Gmail labels are tags; other accounts file labels like folders.
     in property <bool> use-label-icon: false;
+    // 0 keeps the tag or folder glyph. 1 alert, 2 dollar, 3 check, 4 clock.
+    in property <int> icon-kind: 0;
     in property <color> label-color;
     in property <color> text-color;
     in property <color> chip-border-color;
@@ -31,8 +33,11 @@ export component LabelChip inherits Rectangle {
         y: (parent.height - self.height) / 2;
         width: 12px;
         height: 12px;
-        source: root.use-label-icon
-            ? @image-url("../icons/lucide/filled/tag.svg")
+        source: root.icon-kind == 1 ? @image-url("../icons/lucide/filled/alert.svg")
+            : root.icon-kind == 2 ? @image-url("../icons/tag/dollar.svg")
+            : root.icon-kind == 3 ? @image-url("../icons/lucide/outline/check.svg")
+            : root.icon-kind == 4 ? @image-url("../icons/tag/clock.svg")
+            : root.use-label-icon ? @image-url("../icons/lucide/filled/tag.svg")
             : @image-url("../icons/lucide/filled/file-directory.svg");
         colorize: root.label-color;
         image-fit: contain;

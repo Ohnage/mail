@@ -56,6 +56,31 @@ impl AccountPresentationSettings {
             .collect()
     }
 
+    fn mailbox_claims(&self) -> Vec<flectar_mail_core::company_view::MailboxClaim> {
+        self.inbox_accounts
+            .iter()
+            .map(|account| flectar_mail_core::company_view::MailboxClaim {
+                named_account_id: account.id,
+                mailbox_ids: account.account_ids.clone(),
+            })
+            .collect()
+    }
+
+    /// Mailboxes this tab's selected named accounts may show.
+    ///
+    /// A mailbox listed on a named account that the tab did not select is left out.
+    pub(super) fn drop_foreign_claims(
+        &self,
+        tab: &flectar_mail_core::models::BusinessTab,
+        mailboxes: Vec<i64>,
+    ) -> Vec<i64> {
+        flectar_mail_core::company_view::without_foreign_claims(
+            mailboxes,
+            &self.selected_inbox_accounts(tab),
+            &self.mailbox_claims(),
+        )
+    }
+
     pub(super) fn inbox_scope(&self, account: &InboxAccount) -> MailScope {
         let ids = self
             .inbox_members(account)
@@ -63,9 +88,10 @@ impl AccountPresentationSettings {
             .collect::<HashSet<_>>();
         MailScope {
             match_any: true,
-            or_account_ids: flectar_mail_core::inbox_accounts::mailbox_ids(
-                account,
-                &self.profiles,
+            or_account_ids: flectar_mail_core::company_view::without_foreign_claims(
+                flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles),
+                &[account.id],
+                &self.mailbox_claims(),
             ),
             address_inboxes: self
                 .address_views
@@ -249,5 +275,58 @@ mod tests {
             vec![1, 8, 9]
         );
         assert!(p.inbox_choice(&p.inbox_accounts[0]).detail.starts_with("3 mailboxes"));
+    }
+
+    #[test]
+    fn a_mailbox_claimed_elsewhere_stays_out_of_this_account_and_this_tab() {
+        use flectar_mail_core::models::{Account, AuthKind, MailProfile, MailProtocol, Provider};
+        let mut p = presentation();
+        p.inbox_accounts[0].name = "Company".into();
+        p.inbox_accounts[0].profile_id = Some("work".into());
+        p.inbox_accounts[0].account_ids = vec![4];
+        p.inbox_accounts[1].name = "Personal".into();
+        p.inbox_accounts[1].account_ids = vec![8];
+        p.profiles = vec![MailProfile {
+            id: "work".into(),
+            name: "Work".into(),
+            color: "#112233".into(),
+            account_ids: vec![4, 8],
+            logo: None,
+        }];
+        assert_eq!(
+            p.inbox_scope(&p.inbox_accounts[0]).or_account_ids,
+            vec![4]
+        );
+        p.inbox_accounts[0].account_ids = vec![4, 8];
+        assert_eq!(
+            p.inbox_scope(&p.inbox_accounts[0]).or_account_ids,
+            vec![4, 8]
+        );
+        p.inbox_accounts[0].account_ids = vec![4];
+        p.active_business_tab = Some("one".into());
+        let (sidebar, _, scope) = p.view_scope();
+        assert_eq!(sidebar, Some(vec![4, 8]));
+        assert_eq!(scope.or_account_ids, vec![4, 8]);
+        p.active_business_tab = Some("two".into());
+        let (sidebar, _, scope) = p.view_scope();
+        assert_eq!(sidebar, Some(vec![4]));
+        assert_eq!(scope.or_account_ids, vec![4]);
+        let accounts = [4, 8]
+            .into_iter()
+            .map(|id| Account {
+                id,
+                email: format!("box{id}@example.test"),
+                display_name: None,
+                avatar_url: None,
+                provider: Provider::Generic,
+                auth_kind: AuthKind::Password,
+                mail_protocol: MailProtocol::Imap,
+                sync_state: "idle".into(),
+                sync_error: None,
+                can_create_top_level_mailbox: true,
+                server_keeps_mail_days: None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(p.company_account_ids(&accounts), vec![4]);
     }
 }

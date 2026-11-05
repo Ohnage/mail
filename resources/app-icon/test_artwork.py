@@ -34,15 +34,14 @@ class ArtworkTests(unittest.TestCase):
         inner = ImageOps.contain(self.source, (limit, limit), Image.Resampling.LANCZOS)
         expected = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         expected.paste(inner, ((size - inner.width) // 2, (size - inner.height) // 2))
-        if ios:
-            background = Image.new("RGBA", expected.size, (0, 0, 0, 255))
-            return Image.alpha_composite(background, expected).convert("RGB")
-        return expected
+        background = Image.new("RGBA", expected.size, (0, 0, 0, 255))
+        expected = Image.alpha_composite(background, expected)
+        return expected.convert("RGB") if ios else expected
 
     def test_original_source_is_unmodified(self):
-        self.assertEqual(self.source.size, (1448, 1086))
+        self.assertEqual(self.source.size, (1254, 1254))
         self.assertEqual(hashlib.sha256((ROOT / "source/NewFlectarIcon.png").read_bytes()).hexdigest(),
-                         "485ca8a7067b496d70e82c3df44b2fe8f59a6dfced8cf8e7ce3ede833df50216")
+                         "e90b358583e953bee1590b2b529df9669e570cec1fbc14973a7dfc21b1bf429e")
         self.assertEqual(self.source.getchannel("A").getextrema(), (0, 255))
 
     def test_every_raster_preserves_complete_source_and_proportions(self):
@@ -58,8 +57,9 @@ class ArtworkTests(unittest.TestCase):
                 self.assertEqual(actual.size, (size, size))
                 self.assertEqual(actual.mode, "RGB" if ios else "RGBA")
                 self.assertEqual(actual.tobytes(), expected.tobytes())
+                self.assertEqual(actual.getpixel((0, 0))[:3], (0, 0, 0))
                 if not ios:
-                    self.assertEqual(actual.getpixel((0, 0))[3], 0)
+                    self.assertEqual(actual.getpixel((0, 0))[3], 255)
 
     def test_every_ico_frame_matches_source_containment(self):
         data = (ROOT / "flectar-mail.ico").read_bytes()
@@ -86,7 +86,7 @@ class ArtworkTests(unittest.TestCase):
         runtime = (generate.PROJECT / "src/app_icon.rs").read_text()
         self.assertEqual(set(recorded), {"svg", "512.png"})
         for digests in recorded.values():
-            self.assertEqual(len(digests), 5)
+            self.assertEqual(len(digests), 6)
             for digest in digests:
                 self.assertIn(f'"{digest}"', runtime)
 

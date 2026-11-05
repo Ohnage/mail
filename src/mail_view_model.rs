@@ -775,6 +775,7 @@ fn project_label_rows(
         })
         .filter(|label| query.is_empty() || label.name.to_lowercase().contains(&query))
         .filter_map(|label| {
+            let (color, icon_kind) = presented_label(label);
             Some(MailLabelRow {
                 id: i32::try_from(label.id).ok()?,
                 account_id: label
@@ -789,10 +790,11 @@ fn project_label_rows(
                 expanded: true,
                 can_create_children: false,
                 name_has_emoji: contains_emoji(&label.name),
-                color: label_color(&label.color),
+                color,
                 applied: applied.contains(&label.id),
                 is_auto: label.is_auto,
                 is_global: !label.is_auto && label.owner_account_id.is_none(),
+                icon_kind,
             })
         })
         .collect()
@@ -811,6 +813,7 @@ fn applied_label_rows(
         .iter()
         .filter(|label| applied.contains(&label.id))
         .filter_map(|label| {
+            let (color, icon_kind) = presented_label(label);
             Some(MailLabelRow {
                 id: i32::try_from(label.id).ok()?,
                 account_id: label
@@ -825,13 +828,26 @@ fn applied_label_rows(
                 expanded: true,
                 can_create_children: false,
                 name_has_emoji: contains_emoji(&label.name),
-                color: label_color(&label.color),
+                color,
                 applied: true,
                 is_auto: label.is_auto,
                 is_global: !label.is_auto && label.owner_account_id.is_none(),
+                icon_kind,
             })
         })
         .collect()
+}
+
+fn presented_label(label: &flectar_mail_core::models::Label) -> (slint::Color, i32) {
+    if label.is_auto {
+        return (label_color(&label.color), 0);
+    }
+    let (color, icon) = flectar_mail_core::company_view::tag_display(
+        &label.keyword,
+        &label.name,
+        &[&label.color],
+    );
+    (label_color(&color), icon)
 }
 
 fn label_color(value: &str) -> slint::Color {

@@ -697,6 +697,7 @@ impl AccountPresentationSettings {
             }
             None => self.accounts_in(&tab.profile_ids),
         };
+        let company_accounts = self.drop_foreign_claims(tab, company_accounts);
         let recipients = MailScope {
             recipient_patterns: tab.recipient_patterns.clone(),
             sender_addresses: tab.sender_addresses.clone(),
@@ -825,7 +826,7 @@ impl AccountPresentationSettings {
         }
         ids.sort_unstable();
         ids.dedup();
-        ids
+        self.drop_foreign_claims(tab, ids)
     }
 
     fn uses_named_tab(&self, tab: &flectar_mail_core::models::BusinessTab) -> bool {
@@ -858,7 +859,7 @@ impl AccountPresentationSettings {
             };
             flectar_mail_core::company_view::TabMailboxSources {
                 named_mailboxes: None,
-                profile_mailboxes,
+                profile_mailboxes: self.drop_foreign_claims(tab, profile_mailboxes),
             }
         };
         let explicit = self

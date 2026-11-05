@@ -319,6 +319,15 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
     );
     let mut rows = if business_tab {
         let company_ids = state.company_account_ids.clone().unwrap_or_default();
+        let tab = state.account_presentation.active_business().cloned();
+        let tab_heading = tab
+            .as_ref()
+            .map(|tab| tab.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "Company".into());
+        let folder_color = tab
+            .as_ref()
+            .map(|tab| state.account_presentation.business_tab_color(tab));
         let no_sections = HashSet::new();
         let no_folders = HashSet::new();
         let collapsed_sections = if filtering {
@@ -342,6 +351,8 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             &company_ids,
             &state.folder_unreads,
             state.inbox_count,
+            &tab_heading,
+            folder_color,
         );
         state.company_mailboxes = company_mailboxes;
         if filtering {
@@ -366,7 +377,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 .and_then(|local| i32::try_from(local.account_id).ok()),
         )
     };
-    let mut address_rows = state
+    let address_rows = state
         .account_presentation
         .visible_inbox_accounts()
         .into_iter()
@@ -420,17 +431,39 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             ) && row.mailbox.account_id <= 0
         });
     }
-    let rows = if business_tab {
-        rows
-    } else {
-        address_rows.append(&mut rows);
-        address_rows
-    };
+    let rows = place_named_account_rows(business_tab, rows, address_rows);
     // Model notifications can synchronously inspect application state.
     let model = Rc::clone(&state.sidebar_rows);
     let animation = Rc::clone(&state.sidebar_animation);
     drop(state);
     animation.reconcile(&model, rows, animate);
+}
+
+/// On a business tab the named accounts sit directly under Company Inbox.
+/// Elsewhere they stay at the top of the sidebar.
+fn place_named_account_rows(
+    business_tab: bool,
+    mut rows: Vec<SidebarRow>,
+    mut address_rows: Vec<SidebarRow>,
+) -> Vec<SidebarRow> {
+    if !business_tab {
+        address_rows.append(&mut rows);
+        return address_rows;
+    }
+    let mut merged = Vec::with_capacity(rows.len() + address_rows.len());
+    let mut placed = false;
+    for row in rows {
+        let inbox = row.kind == SidebarRowKind::UnifiedInbox && row.key.as_str() == "company-inbox";
+        merged.push(row);
+        if inbox {
+            merged.append(&mut address_rows);
+            placed = true;
+        }
+    }
+    if !placed {
+        merged.append(&mut address_rows);
+    }
+    merged
 }
 
 fn make_filtered_sidebar_rows(
@@ -739,13 +772,15 @@ fn make_company_sidebar_rows(
     company_ids: &[i64],
     folder_unreads: &HashMap<i64, i64>,
     inbox_count: usize,
+    heading_label: &str,
+    folder_color: Option<slint::Color>,
 ) -> (Vec<SidebarRow>, Vec<MailboxEntry>) {
     use SidebarRowKind as Kind;
     use flectar_mail_core::company_view::{FolderLeaf, TagCopy, merge_folders, merge_tags};
 
     let company = company_ids.iter().copied().collect::<HashSet<_>>();
     let mut heading = row(Kind::UnifiedHeading, "company-heading");
-    heading.mailbox.label = "COMPANY".into();
+    heading.mailbox.label = heading_label.into();
     let mut inbox = row(Kind::UnifiedInbox, "company-inbox");
     inbox.mailbox = MailboxRow {
         folder_id: -1,
@@ -888,6 +923,16 @@ fn make_company_sidebar_rows(
             let Some(id) = i32::try_from(member.label_id).ok() else {
                 continue;
             };
+            let stored = tag
+                .members
+                .iter()
+                .map(|member| member.color.as_str())
+                .collect::<Vec<_>>();
+            let (color, icon_kind) = flectar_mail_core::company_view::tag_display(
+                &tag.keyword,
+                &tag.name,
+                &stored,
+            );
             rows.push(SidebarRow {
                 key: format!("tab-tag:{}", tag.id).into(),
                 mailbox: MailboxRow {
@@ -902,7 +947,8 @@ fn make_company_sidebar_rows(
                     account_name: "Company".into(),
                     name: tag.name.clone().into(),
                     display_name: tag.name.clone().into(),
-                    color: label_swatch(&tag.color),
+                    color: label_swatch(&color),
+                    icon_kind,
                     ..Default::default()
                 },
                 ..row(Kind::AccountLabel, "")
@@ -920,12 +966,24 @@ fn make_company_sidebar_rows(
 
     rows.push(section(Kind::AccountsHeading, "mailboxes", collapsed));
     if !collapsed.contains("mailboxes") {
+        let scoped = mailboxes
+            .into_iter()
+            .filter(|mailbox| company.contains(&i64::from(mailbox.account_id)))
+            .collect::<Vec<_>>();
         rows.extend(account_rows(
-            mailboxes,
+            scoped,
             &labels,
             gmail_account_ids,
             collapsed,
         ));
+    }
+    if let Some(color) = folder_color {
+        for row in &mut rows {
+            if row.kind == Kind::Folder {
+                row.mailbox.color = color;
+                row.mailbox.has_custom_color = true;
+            }
+        }
     }
     (rows, company_mailboxes)
 }
@@ -1442,6 +1500,8 @@ mod tests {
             &[1],
             &HashMap::new(),
             0,
+            "Company",
+            None,
         );
         assert!(
             rows.iter()
@@ -1472,6 +1532,109 @@ mod tests {
                 .iter()
                 .any(|entry| entry.can_rename && entry.detail == "Clients")
         );
+    }
+
+    #[test]
+    fn company_sidebar_tints_folders_and_hides_other_tabs_mailboxes() {
+        let tint = slint::Color::from_rgb_u8(0x11, 0x22, 0x33);
+        let mailboxes = vec![
+            MailboxRow {
+                account_id: 1,
+                is_account: true,
+                label: "Here".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 1,
+                folder_id: 10,
+                is_selectable: true,
+                label: "Clients".into(),
+                detail: "Clients".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 2,
+                is_account: true,
+                label: "Elsewhere".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 2,
+                folder_id: 20,
+                is_selectable: true,
+                label: "Private".into(),
+                detail: "Private".into(),
+                ..Default::default()
+            },
+        ];
+        let (rows, _) = make_company_sidebar_rows(
+            mailboxes,
+            vec![],
+            vec![],
+            &[],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[1],
+            &HashMap::new(),
+            0,
+            "TM",
+            Some(tint),
+        );
+        assert_eq!(
+            rows.iter()
+                .find(|row| row.key.as_str() == "company-heading")
+                .unwrap()
+                .mailbox
+                .label
+                .as_str(),
+            "TM"
+        );
+        assert!(rows.iter().any(|row| {
+            row.kind == Kind::Folder
+                && row.mailbox.label.as_str() == "Clients"
+                && row.mailbox.has_custom_color
+                && row.mailbox.color == tint
+        }));
+        assert!(
+            rows.iter()
+                .filter(|row| row.kind == Kind::Folder)
+                .all(|row| row.mailbox.has_custom_color && row.mailbox.color == tint)
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|row| row.mailbox.label.as_str() == "Elsewhere"
+                    || row.mailbox.label.as_str() == "Private")
+        );
+    }
+
+    #[test]
+    fn named_accounts_follow_company_inbox_on_a_business_tab() {
+        let company = vec![
+            row(Kind::UnifiedHeading, "company-heading"),
+            row(Kind::UnifiedInbox, "company-inbox"),
+            row(Kind::UnifiedMailbox, "unified:Sent"),
+        ];
+        let named = vec![row(Kind::AddressInbox, "inbox-account:-7")];
+        let rows = place_named_account_rows(true, company, named);
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.key.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "company-heading",
+                "company-inbox",
+                "inbox-account:-7",
+                "unified:Sent",
+            ]
+        );
+        let plain = place_named_account_rows(
+            false,
+            vec![row(Kind::Account, "account:1")],
+            vec![row(Kind::AddressInbox, "inbox-account:-7")],
+        );
+        assert_eq!(plain[0].key.as_str(), "inbox-account:-7");
     }
 
     #[test]

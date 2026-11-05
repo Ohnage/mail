@@ -224,17 +224,19 @@ mod launcher {
         // Recognize only exact copies written by older releases. This lets
         // upgrades replace the former logo without overwriting a user's art.
         // See resources/app-icon/legacy-managed-sha256.json for provenance.
-        const LEGACY: [&str; 10] = [
+        const LEGACY: [&str; 12] = [
             "fcb37a3dfb6fd95212180edc46f53d0cf3efcc574b81f0f779d15db006281d93",
             "97cc02dea90b067ecbee5fbda4a9eae09b6f699ad629bf0139bb34992deba128",
             "7111b5d0ff84a61af71201fe256ad6ffe3f23d46d5cd618cf5e8139124ea15de",
             "9d0cfdf7cd02b89d6c38fafa86ad3429e382bffc73e6dd5cad22141ddd97696e",
             "b20d24ba619806bcfbf6ae3236398e24a3b583926e8c5bac8bf8dc22fb2d4b62",
+            "64709c62506e0eb8294b8d09a56e5295db6622d2eb0b980b95cbdacddf89fc4e",
             "0b44e16c8327b1e9f153d235040fbe79d3efad03a547d9fe2d44b132c59f5b55",
             "b2ea27324833e2834a5d8b0b25e3bd8f55567eeae7e85a9518be6dc4868a86b3",
             "e0d8b84b35e1a71a94ac31a5a4687d0275095724506454c69149cd978b26857e",
             "2e874d0c60f2e6269a5d9f0c02ef671c780f9bddf8bffe99fcab10f7080e4b4b",
             "8bf84b413d7649e5edbf04e4eaec20bb4fe7b888bf2f5fed8454713d04db2c69",
+            "13d19d9437ccf3283526fd0ae58aecf94b4cefbab2793f8a6b0335371fe59b65",
         ];
         let digest = format!("{:x}", Sha256::digest(contents));
         LEGACY.contains(&digest.as_str())

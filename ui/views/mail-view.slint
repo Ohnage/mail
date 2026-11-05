@@ -152,6 +152,8 @@ export component MailView inherits FocusScope {
     callback request_folder_delete(int, string);
     callback request_label_rename(int, string, color, string, bool);
     callback request_label_delete(int, string, string, bool, bool);
+    callback pin_sidebar_tag(int);
+    callback unpin_sidebar_tag(int);
     callback load_more();
     callback sync_mail();
     callback message_action(string);
@@ -343,6 +345,8 @@ export component MailView inherits FocusScope {
                 request-delete-label(id, name, account, global, has-children) => {
                     root.request_label_delete(id, name, account, global, has-children);
                 }
+                pin-sidebar-tag(id) => { root.pin_sidebar_tag(id); }
+                unpin-sidebar-tag(id) => { root.unpin_sidebar_tag(id); }
                 compose => { root.open_compose(); }
                 manage-accounts => {
                     root.settings_tab = "Accounts";
@@ -566,6 +570,8 @@ export component MailView inherits FocusScope {
                 request-delete-label(id, name, account, global, has-children) => {
                     root.request_label_delete(id, name, account, global, has-children);
                 }
+                pin-sidebar-tag(id) => { root.pin_sidebar_tag(id); }
+                unpin-sidebar-tag(id) => { root.unpin_sidebar_tag(id); }
                 compose => { root.open_compose(); }
                 manage-accounts => {
                     root.settings_tab = "Accounts";
@@ -828,6 +834,8 @@ export component MailView inherits FocusScope {
                 request-delete-label(id, name, account, global, has-children) => {
                     root.request_label_delete(id, name, account, global, has-children);
                 }
+                pin-sidebar-tag(id) => { root.pin_sidebar_tag(id); }
+                unpin-sidebar-tag(id) => { root.unpin_sidebar_tag(id); }
                 compose => {
                     root.folders-open = false;
                     root.open_compose();

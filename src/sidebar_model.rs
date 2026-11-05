@@ -353,6 +353,18 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             state.inbox_count,
             &tab_heading,
             folder_color,
+            state
+                .account_presentation
+                .pinned_sidebar_tags
+                .get(
+                    &state
+                        .account_presentation
+                        .active_business_tab
+                        .clone()
+                        .unwrap_or_default(),
+                )
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
         );
         state.company_mailboxes = company_mailboxes;
         if filtering {
@@ -758,6 +770,80 @@ fn label_swatch(value: &str) -> slint::Color {
         .unwrap_or_else(|| slint::Color::from_rgb_u8(107, 114, 128))
 }
 
+fn company_tag_copies(
+    source_labels: &[flectar_mail_core::models::Label],
+    company: &HashSet<i64>,
+) -> Vec<flectar_mail_core::company_view::TagCopy> {
+    source_labels
+        .iter()
+        .filter(|label| {
+            !label.is_auto
+                && label
+                    .owner_account_id
+                    .is_some_and(|account_id| company.contains(&account_id))
+                && !label.keyword.is_empty()
+        })
+        .map(|label| flectar_mail_core::company_view::TagCopy {
+            account_id: label.owner_account_id.unwrap_or_default(),
+            label_id: label.id,
+            keyword: label.keyword.clone(),
+            name: label.name.clone(),
+            color: label.color.clone(),
+        })
+        .collect()
+}
+
+fn pinned_tag_rows(
+    tags: &[flectar_mail_core::company_view::MergedTag],
+    pinned: &[String],
+) -> Vec<SidebarRow> {
+    use SidebarRowKind as Kind;
+    let mut rows = Vec::new();
+    for keyword in pinned {
+        let key = flectar_mail_core::company_view::tag_key(keyword);
+        let Some(tag) = tags.iter().find(|tag| {
+            flectar_mail_core::company_view::tag_key(&tag.keyword) == key
+        }) else {
+            continue;
+        };
+        let Some(member) = tag.members.first() else {
+            continue;
+        };
+        let Some(id) = i32::try_from(member.label_id).ok() else {
+            continue;
+        };
+        let stored = tag
+            .members
+            .iter()
+            .map(|member| member.color.as_str())
+            .collect::<Vec<_>>();
+        let (color, icon_kind) =
+            flectar_mail_core::company_view::tag_display(&tag.keyword, &tag.name, &stored);
+        rows.push(SidebarRow {
+            key: format!("pinned-tag:{}", tag.id).into(),
+            mailbox: MailboxRow {
+                account_id: -2,
+                scope: Scope::TabTag(tag.id).to_string().into(),
+                context: "Company".into(),
+                detail: "folder-pin".into(),
+                ..Default::default()
+            },
+            label: MailLabelRow {
+                id,
+                account_id: -2,
+                account_name: "Company".into(),
+                name: tag.name.clone().into(),
+                display_name: tag.name.clone().into(),
+                color: label_swatch(&color),
+                icon_kind,
+                ..Default::default()
+            },
+            ..row(Kind::AccountLabel, "")
+        });
+    }
+    rows
+}
+
 /// Company layout: one inbox, tab-wide special mailboxes, one folder tree,
 /// one tag list, then the per-account rows under a collapsed Mailboxes section.
 #[allow(clippy::too_many_arguments)]
@@ -774,9 +860,10 @@ fn make_company_sidebar_rows(
     inbox_count: usize,
     heading_label: &str,
     folder_color: Option<slint::Color>,
+    pinned_tags: &[String],
 ) -> (Vec<SidebarRow>, Vec<MailboxEntry>) {
     use SidebarRowKind as Kind;
-    use flectar_mail_core::company_view::{FolderLeaf, TagCopy, merge_folders, merge_tags};
+    use flectar_mail_core::company_view::{FolderLeaf, merge_folders, merge_tags};
 
     let company = company_ids.iter().copied().collect::<HashSet<_>>();
     let mut heading = row(Kind::UnifiedHeading, "company-heading");
@@ -801,6 +888,9 @@ fn make_company_sidebar_rows(
         mailbox,
         ..row(Kind::UnifiedMailbox, "")
     }));
+    let tag_copies = company_tag_copies(source_labels, &company);
+    let merged_tags = merge_tags(&tag_copies);
+    rows.extend(pinned_tag_rows(&merged_tags, pinned_tags));
     let leaves = mailboxes
         .iter()
         .filter(|mailbox| {
@@ -893,30 +983,13 @@ fn make_company_sidebar_rows(
         },
         ..row(Kind::NewFolder, "new-folder:company")
     });
-    let copies = source_labels
-        .iter()
-        .filter(|label| {
-            !label.is_auto
-                && label
-                    .owner_account_id
-                    .is_some_and(|account_id| company.contains(&account_id))
-                && !label.keyword.is_empty()
-        })
-        .map(|label| TagCopy {
-            account_id: label.owner_account_id.unwrap_or_default(),
-            label_id: label.id,
-            keyword: label.keyword.clone(),
-            name: label.name.clone(),
-            color: label.color.clone(),
-        })
-        .collect::<Vec<_>>();
     rows.push(section(
         Kind::GlobalLabelsSection,
         "company-tags",
         collapsed,
     ));
     if !collapsed.contains("company-tags") {
-        for tag in merge_tags(&copies) {
+        for tag in &merged_tags {
             let Some(member) = tag.members.first() else {
                 continue;
             };
@@ -933,12 +1006,21 @@ fn make_company_sidebar_rows(
                 &tag.name,
                 &stored,
             );
+            let pinned = pinned_tags.iter().any(|keyword| {
+                flectar_mail_core::company_view::tag_key(keyword)
+                    == flectar_mail_core::company_view::tag_key(&tag.keyword)
+            });
             rows.push(SidebarRow {
                 key: format!("tab-tag:{}", tag.id).into(),
                 mailbox: MailboxRow {
                     account_id: -2,
                     scope: Scope::TabTag(tag.id).to_string().into(),
                     context: "Company".into(),
+                    detail: if pinned {
+                        "tag-pinned".into()
+                    } else {
+                        Default::default()
+                    },
                     ..Default::default()
                 },
                 label: MailLabelRow {
@@ -1502,6 +1584,7 @@ mod tests {
             0,
             "Company",
             None,
+            &[],
         );
         assert!(
             rows.iter()
@@ -1580,6 +1663,7 @@ mod tests {
             0,
             "TM",
             Some(tint),
+            &[],
         );
         assert_eq!(
             rows.iter()
@@ -1978,6 +2062,60 @@ mod tests {
             vec![Event::Removed(1, 10_000), Event::Changed(0)]
         );
         assert_rows_equal(&model.iter().collect::<Vec<_>>(), &closed);
+    }
+
+    #[test]
+    fn pinned_tags_sit_under_starred_and_select_the_same_tag() {
+        use flectar_mail_core::models::Label;
+        let label = Label {
+            id: 7,
+            name: "Needs Action".into(),
+            color: "#6b7280".into(),
+            keyword: "$label:needs-action".into(),
+            position: 0,
+            owner_account_id: Some(1),
+            is_auto: false,
+        };
+        let unified = vec![MailboxRow {
+            label: "Starred".into(),
+            scope: "Unified Starred".into(),
+            ..Default::default()
+        }];
+        let (rows, _) = make_company_sidebar_rows(
+            Vec::new(),
+            unified,
+            Vec::new(),
+            &[label],
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[1],
+            &HashMap::new(),
+            0,
+            "Company",
+            None,
+            &["needs-action".into()],
+        );
+        let keys = rows
+            .iter()
+            .map(|row| row.key.to_string())
+            .collect::<Vec<_>>();
+        let starred = keys.iter().position(|key| key.contains("Starred")).unwrap();
+        let pinned = keys
+            .iter()
+            .position(|key| key.starts_with("pinned-tag:"))
+            .unwrap();
+        let tags = keys.iter().position(|key| key == "company-tags").unwrap();
+        assert!(starred < pinned && pinned < tags);
+        let pin = &rows[pinned];
+        let tag = rows
+            .iter()
+            .find(|row| row.key.starts_with("tab-tag:"))
+            .unwrap();
+        assert_eq!(pin.mailbox.scope, tag.mailbox.scope);
+        assert_eq!(pin.mailbox.detail.as_str(), "folder-pin");
+        assert_eq!(tag.mailbox.detail.as_str(), "tag-pinned");
+        assert_eq!(pin.label.name.as_str(), "Needs Action");
     }
 
     #[test]

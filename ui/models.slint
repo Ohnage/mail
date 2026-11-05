@@ -86,6 +86,19 @@ export enum SidebarRowKind {
     new-folder, new-label, address-inbox,
 }
 
+export struct LabelRuleRow {
+    index: int,
+    summary: string,
+}
+
+export struct LabelRuleChoiceRow {
+    keyword: string,
+    name: string,
+    trigger: bool,
+    remove: bool,
+    add: bool,
+}
+
 export struct SidebarRow {
     key: string,
     kind: SidebarRowKind,

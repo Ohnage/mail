@@ -13,9 +13,12 @@ export component LabelChip inherits Rectangle {
     in property <color> text-color;
     in property <color> chip-border-color;
     in property <bool> compact: false;
+    // The reading pane sets this so a hover control can take the label off.
+    in property <bool> removable: false;
+    callback remove();
     // The width that shows the whole name, and the least that still shows
-    // its start.
-    out property <length> natural-width: chip-name.x + chip-name.preferred-width + (root.compact ? 4px : 5px);
+    // its start. Removable chips keep room for the hover control.
+    out property <length> natural-width: chip-name.x + chip-name.preferred-width + (root.removable ? 16px : 0px) + (root.compact ? 4px : 5px);
     out property <length> least-width: min(root.natural-width, chip-name.x + 2.5rem + (root.compact ? 4px : 5px));
 
     min-width: root.natural-width;
@@ -45,7 +48,7 @@ export component LabelChip inherits Rectangle {
     }
     chip-name := Text {
         x: root.compact ? 21px : 23px;
-        width: parent.width - self.x - 4px;
+        width: parent.width - self.x - (root.removable ? 16px : 4px);
         height: parent.height;
         text: root.name;
         color: root.text-color;
@@ -54,5 +57,39 @@ export component LabelChip inherits Rectangle {
         font-family: root.name-has-emoji ? "Noto Emoji" : "";
         overflow: elide;
         vertical-alignment: center;
+    }
+
+    chip-hit := TouchArea {
+        width: parent.width;
+        height: parent.height;
+        enabled: root.removable;
+        mouse-cursor: pointer;
+    }
+
+    if root.removable && chip-hit.has-hover : Rectangle {
+        x: parent.width - 16px;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: root.label-color;
+
+        Image {
+            x: 1px;
+            y: 1px;
+            width: 12px;
+            height: 12px;
+            source: @image-url("../icons/lucide/outline/x.svg");
+            colorize: root.text-color;
+            image-fit: contain;
+            accessible-role: none;
+        }
+
+        TouchArea {
+            clicked => { root.remove(); }
+            mouse-cursor: pointer;
+            accessible-role: button;
+            accessible-label: @tr("Remove label {}", root.name);
+        }
     }
 }

@@ -5194,6 +5194,105 @@ mod search_pagination_adapter_tests {
             "Company Inbox without a tab mailbox set matches nothing"
         );
     }
+
+    #[tokio::test]
+    async fn starred_count_and_list_follow_the_open_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = CoreMailSource::start(
+            Paths::for_tests(dir.path()),
+            Arc::new(DevelopmentFileCredentialStore::new(
+                dir.path().join("credentials.json"),
+            )),
+            Arc::new(flectar_mail_core::oauth::redirect::LoopbackRedirectBroker::default()),
+        )
+        .await
+        .unwrap();
+        source
+            .core
+            .db
+            .write(|conn| {
+                for account in [1_i64, 2] {
+                    conn.execute(
+                        &format!(
+                            "INSERT INTO accounts (id,email,provider,auth_kind,username,incoming_host,incoming_port,smtp_host,smtp_port,created_at,mail_protocol,settings_json)
+                             VALUES ({account},'box{account}@example.test','generic','password','fixture','imap.example.test',993,'smtp.example.test',465,0,'imap','{{\"connection\":{{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}}}')"
+                        ),
+                        [],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO folders (id,account_id,path,role) VALUES (?1,?1,'INBOX','inbox')",
+                        [account],
+                    )?;
+                }
+                // Read and starred, inside the open tab.
+                conn.execute(
+                    "INSERT INTO threads (id,account_id,subject_norm,last_message_at,message_count,unread_count,starred_count)
+                     VALUES (1,1,'starred',1,1,0,1)",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO messages (id,account_id,thread_id,folder_id,uid,subject,from_addr,date,is_read,is_starred,body_state)
+                     VALUES (1,1,1,1,1,'Starred note','sender@example.test',1,1,1,'cached')",
+                    [],
+                )?;
+                // Unread and not starred, inside the open tab.
+                conn.execute(
+                    "INSERT INTO threads (id,account_id,subject_norm,last_message_at,message_count,unread_count,starred_count)
+                     VALUES (2,1,'plain',2,1,1,0)",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO messages (id,account_id,thread_id,folder_id,uid,subject,from_addr,date,is_read,is_starred,body_state)
+                     VALUES (2,1,2,1,2,'Plain note','sender@example.test',2,0,0,'cached')",
+                    [],
+                )?;
+                // Starred mail that belongs to another account.
+                conn.execute(
+                    "INSERT INTO threads (id,account_id,subject_norm,last_message_at,message_count,unread_count,starred_count)
+                     VALUES (3,2,'other',3,1,0,1)",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO messages (id,account_id,thread_id,folder_id,uid,subject,from_addr,date,is_read,is_starred,body_state)
+                     VALUES (3,2,3,2,3,'Other star','sender@example.test',3,1,1,'cached')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        source.set_view_scope(
+            Some(vec![1]),
+            Some(vec![1]),
+            flectar_mail_core::recipient_match::MailScope::default(),
+            false,
+            Some(vec![1]),
+        );
+        let metadata = source
+            .load_mail_metadata(Scope::Unified(StandardMailbox::Starred))
+            .await
+            .unwrap();
+        let starred = metadata
+            .unified_mailboxes
+            .iter()
+            .find(|mailbox| mailbox.scope == Some(Scope::Unified(StandardMailbox::Starred)))
+            .unwrap();
+        assert_eq!(starred.count, "1");
+        let page = source
+            .load_page(
+                Scope::Unified(StandardMailbox::Starred),
+                "",
+                None,
+                25,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(page.messages.len(), 1);
+        assert_eq!(page.messages[0].account_id, 1);
+        assert!(page.messages[0].starred);
+        assert_eq!(page.messages[0].subject, "Starred note");
+    }
 }
 
 #[cfg(test)]

@@ -378,7 +378,8 @@ pub const TAG_ICON_CHECK: i32 = 3;
 /// Clock, for due-soon and waiting tags.
 pub const TAG_ICON_CLOCK: i32 = 4;
 
-fn tag_key(value: &str) -> String {
+/// Lowercase keyword with `$label:` removed and spaces or underscores as hyphens.
+pub fn tag_key(value: &str) -> String {
     let value = value.trim().to_ascii_lowercase();
     let value = value.strip_prefix("$label:").unwrap_or(&value);
     value
@@ -388,6 +389,64 @@ fn tag_key(value: &str) -> String {
             _ => character,
         })
         .collect()
+}
+
+/// Labels to add and remove after `added_keyword` is applied.
+///
+/// Keywords are compared with [`tag_key`]. A rule fired by an added label can
+/// add further labels, which fire their own rules. The label that started the
+/// cascade is never removed, and a loop cannot add the same keyword twice.
+/// A keyword that one rule removes is not added by another rule in the same
+/// cascade. Keywords already on the message are not added again.
+pub fn label_rule_changes(
+    rules: &[crate::models::LabelRule],
+    added_keyword: &str,
+    present: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let trigger = tag_key(added_keyword);
+    if trigger.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let present = present
+        .iter()
+        .map(|value| tag_key(value))
+        .collect::<HashSet<_>>();
+    let mut add = Vec::new();
+    let mut remove = Vec::new();
+    let mut seen = HashSet::from([trigger.clone()]);
+    let mut queue = vec![trigger.clone()];
+    while let Some(key) = queue.pop() {
+        for rule in rules {
+            if tag_key(&rule.when_added) != key {
+                continue;
+            }
+            for target in &rule.remove {
+                let target = tag_key(target);
+                if target.is_empty()
+                    || target == trigger
+                    || remove.iter().any(|item| item == &target)
+                {
+                    continue;
+                }
+                remove.push(target);
+            }
+            for target in &rule.add {
+                let target = tag_key(target);
+                if target.is_empty()
+                    || seen.contains(&target)
+                    || present.contains(&target)
+                    || remove.iter().any(|item| item == &target)
+                {
+                    continue;
+                }
+                seen.insert(target.clone());
+                add.push(target.clone());
+                queue.push(target);
+            }
+        }
+    }
+    add.retain(|target| !remove.iter().any(|item| item == target));
+    (add, remove)
 }
 
 fn normalized_hex(value: &str) -> Option<String> {
@@ -739,5 +798,46 @@ mod tests {
         );
         assert!(!is_tag_color_override("#808080"));
         assert!(is_tag_color_override("#112233"));
+    }
+
+    #[test]
+    fn paying_a_bill_clears_the_open_bill_labels_and_can_add_another() {
+        use crate::models::LabelRule;
+        let rules = vec![
+            LabelRule {
+                when_added: "Paid".into(),
+                remove: vec!["Needs Action".into(), "Overdue".into(), "unpaid".into()],
+                add: Vec::new(),
+            },
+            LabelRule {
+                when_added: "$label:paid".into(),
+                remove: Vec::new(),
+                add: vec!["done".into()],
+            },
+        ];
+        let (add, remove) =
+            label_rule_changes(&rules, "$label:paid", &["$label:needs-action".into()]);
+        assert_eq!(add, vec!["done"]);
+        assert_eq!(remove, vec!["needs-action", "overdue", "unpaid"]);
+    }
+
+    #[test]
+    fn label_rules_do_not_loop_or_remove_the_label_just_added() {
+        use crate::models::LabelRule;
+        let rules = vec![
+            LabelRule {
+                when_added: "a".into(),
+                remove: Vec::new(),
+                add: vec!["b".into()],
+            },
+            LabelRule {
+                when_added: "b".into(),
+                remove: vec!["a".into()],
+                add: vec!["a".into(), "c".into()],
+            },
+        ];
+        let (add, remove) = label_rule_changes(&rules, "a", &[]);
+        assert_eq!(add, vec!["b", "c"]);
+        assert!(remove.is_empty());
     }
 }

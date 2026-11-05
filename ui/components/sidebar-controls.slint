@@ -82,6 +82,8 @@ export component SidebarItem inherits SidebarRowSurface {
     in property <bool> label-manageable: false;
     in property <bool> label-can-create-child: false;
     in property <bool> label-is-global: false;
+    in property <bool> tag-pin-menu: false;
+    in property <bool> tag-pinned: false;
     in property <string> label-account-name: "";
     in property <bool> mail-drop-enabled: false;
     in property <bool> mail-drop-copies: false;
@@ -103,6 +105,8 @@ export component SidebarItem inherits SidebarRowSurface {
     callback new-child-label(int, int, string, string);
     callback rename-label(int, string, color, string, bool);
     callback delete-label(int, string, string, bool, bool);
+    callback pin-tag(int);
+    callback unpin-tag(int);
 
     height: root.visible ? root.row-height : 0px;
     idle-background: root.sidebar-background;
@@ -260,6 +264,14 @@ export component SidebarItem inherits SidebarRowSurface {
                 activated => { root.new-child-label(root.account-id, root.label-id, root.label-path, root.label-account-name); }
             }
 
+            if root.tag-pin-menu : MenuItem {
+                title: root.tag-pinned ? @tr("Remove from folders list") : @tr("Add to folders list");
+                activated => {
+                    if root.tag-pinned { root.unpin-tag(root.label-id); }
+                    else { root.pin-tag(root.label-id); }
+                }
+            }
+
             MenuItem {
                 title: root.label-is-global ? @tr("Rename global label") : @tr("Rename label in {}", root.label-account-name);
                 activated => { root.rename-label(root.label-id, root.label-path, root.editable-color, root.label-account-name, root.label-is-global); }
@@ -277,6 +289,14 @@ export component SidebarItem inherits SidebarRowSurface {
         width: parent.width - 22px;
         height: parent.height;
         Menu {
+            if root.tag-pin-menu : MenuItem {
+                title: root.tag-pinned ? @tr("Remove from folders list") : @tr("Add to folders list");
+                activated => {
+                    if root.tag-pinned { root.unpin-tag(root.label-id); }
+                    else { root.pin-tag(root.label-id); }
+                }
+            }
+
             MenuItem {
                 title: root.label-is-global ? @tr("Rename global label") : @tr("Rename label in {}", root.label-account-name);
                 activated => { root.rename-label(root.label-id, root.label-path, root.editable-color, root.label-account-name, root.label-is-global); }
@@ -285,6 +305,18 @@ export component SidebarItem inherits SidebarRowSurface {
             MenuItem {
                 title: root.label-is-global ? @tr("Delete global label") : @tr("Delete label from {}", root.label-account-name);
                 activated => { root.delete-label(root.label-id, root.label-path, root.label-account-name, root.label-is-global, root.has-children); }
+            }
+        }
+    }
+
+    if root.interactive && root.tag-pin-menu && !root.label-manageable : ContextMenuArea {
+        x: 22px;
+        width: parent.width - 22px;
+        height: parent.height;
+        Menu {
+            MenuItem {
+                title: @tr("Remove from folders list");
+                activated => { root.unpin-tag(root.label-id); }
             }
         }
     }

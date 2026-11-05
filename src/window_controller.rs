@@ -347,9 +347,23 @@ pub(super) fn register_window_preference_callbacks(
     {
         let launch_at_login = LaunchAtLogin::register(app, runtime);
         let app_weak = app.as_weak();
+        let state_for_rules = Rc::clone(state);
         app.on_settings_shown(move || {
             if let Some(app) = app_weak.upgrade() {
                 launch_at_login.refresh(&app, false);
+                super::settings_controller::publish_label_rules(&app, &state_for_rules.borrow());
+                app.set_label_rule_editor_open(false);
+            }
+        });
+    }
+    #[cfg(not(desktop))]
+    {
+        let app_weak = app.as_weak();
+        let state_for_rules = Rc::clone(state);
+        app.on_settings_shown(move || {
+            if let Some(app) = app_weak.upgrade() {
+                super::settings_controller::publish_label_rules(&app, &state_for_rules.borrow());
+                app.set_label_rule_editor_open(false);
             }
         });
     }

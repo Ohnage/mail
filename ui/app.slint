@@ -20,7 +20,7 @@ export { AppTheme, MotionSettings, ThemeUtilities } from "design-system.slint";
 import { AppTheme, LayoutMetrics } from "design-system.slint";
 import { Button } from "components/button.slint";
 import { LoadingSkeletonBlock } from "components/loading-skeleton.slint";
-import { AccountRow, BusinessTabRow, InboxViewChoiceRow, InboxViewKind, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
+import { AccountRow, BusinessTabRow, InboxViewChoiceRow, InboxViewKind, CalendarAgendaRow, CalendarAgendaFilterRow, CalendarDay, CalendarEventRow, CalendarSourceRow, CalendarWeekDay, ComposeAttachment, ComposeContact, ComposeEditorTile, ContactSidebarRow, ContactRow, ContactSyncState, ContactValueRow, EmailLink, EmailRow, EmailTemplateRow, EmailTile, LocalizedMessage, LabelRuleChoiceRow, LabelRuleRow, MailListEntry, MailProfileRow, ProfileMemberRow, SidebarRow, MailLabelRow, StorageUsageRow, ThreadMessageRow } from "models.slint";
 export { EmailReader, ReaderCaret, ReaderImage, ReaderItem, MailDragApi } from "models.slint";
 export { MailListNavigation, MailNavigationTarget } from "models.slint";
 export { ThreadMessageRow, StorageUsageRow } from "models.slint";
@@ -270,6 +270,8 @@ export global I18n {
         if (key == "Download location saved.") { return @tr("Download location saved."); }
         if (key == "Download location is saved once an account is set up.") { return @tr("Download location is saved once an account is set up."); }
         if (key == "Could not save the download location: {}") { return @tr("Could not save the download location: {}", argument); }
+        if (key == "Could not save settings: {}") { return @tr("Could not save settings: {}", argument); }
+        if (key == "Settings are saved once an account is set up.") { return @tr("Settings are saved once an account is set up."); }
         if (key == "Choose download location") { return @tr("Choose download location"); }
         if (key == "Could not save custom theme: {}") { return @tr("Could not save custom theme: {}", argument); }
         if (key == "Language updated for this session.") { return @tr("Language updated for this session."); }
@@ -661,6 +663,12 @@ export component AppWindow inherits Window {
     callback save_mail_label(int, int, string, color, bool, int);
     callback delete_mail_label(int);
     callback search_mail_labels(string);
+    callback pin_sidebar_tag(int);
+    callback unpin_sidebar_tag(int);
+    callback begin_label_rule();
+    callback toggle_label_rule_choice(int, string);
+    callback save_label_rule();
+    callback delete_label_rule(int);
     callback compose_message_action(string);
     callback close_preview();
     callback print_message();
@@ -822,6 +830,9 @@ export component AppWindow inherits Window {
     in property <[SidebarRow]> sidebar_rows: [];
     in-out property <string> folder_filter_query: "";
     in property <[MailLabelRow]> mail_labels: [];
+    in property <[LabelRuleRow]> label_rules: [];
+    in property <[LabelRuleChoiceRow]> label_rule_choices: [];
+    in-out property <bool> label_rule_editor_open: false;
     in property <[MailLabelRow]> mail_label_results: [];
     in property <int> selected_mail_label_count: 0;
     in property <bool> selected_account_uses_labels: false;
@@ -1660,6 +1671,8 @@ export component AppWindow inherits Window {
             request_label_delete(id, name, account, global, has-descendants) => {
                 root.open-label-delete(id, name, account, global, has-descendants);
             }
+            pin_sidebar_tag(id) => { root.pin_sidebar_tag(id); }
+            unpin_sidebar_tag(id) => { root.unpin_sidebar_tag(id); }
             load_more => { root.load_more(); }
             sync_mail => { root.sync_mail(); }
             message_action(action) => {
@@ -2009,6 +2022,13 @@ export component AppWindow inherits Window {
             title-color: root.title-color;
             settings_open <=> root.settings_open;
             settings_tab <=> root.settings_tab;
+            label_rules: root.label_rules;
+            label_rule_choices: root.label_rule_choices;
+            label_rule_editor_open <=> root.label_rule_editor_open;
+            begin_label_rule => { root.begin_label_rule(); }
+            toggle_label_rule_choice(index, field) => { root.toggle_label_rule_choice(index, field); }
+            save_label_rule => { root.save_label_rule(); }
+            delete_label_rule(index) => { root.delete_label_rule(index); }
             theme_mode <=> root.theme_mode;
             show_avatars <=> root.show_avatars;
             show_tabs <=> root.show_tabs;

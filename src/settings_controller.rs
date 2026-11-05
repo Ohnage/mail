@@ -57,12 +57,316 @@ fn save_download_directory(
     }
 }
 
+fn label_display_name(key: &str, labels: &[flectar_mail_core::models::Label]) -> String {
+    let key = flectar_mail_core::company_view::tag_key(key);
+    labels
+        .iter()
+        .find(|label| {
+            flectar_mail_core::company_view::tag_key(&label.keyword) == key
+                || flectar_mail_core::company_view::tag_key(&label.name) == key
+        })
+        .map(|label| label.name.clone())
+        .unwrap_or(key)
+}
+
+fn label_rule_summary(
+    rule: &flectar_mail_core::models::LabelRule,
+    labels: &[flectar_mail_core::models::Label],
+) -> String {
+    let when = label_display_name(&rule.when_added, labels);
+    let mut summary = format!("When {when} is added");
+    if !rule.remove.is_empty() {
+        let names = rule
+            .remove
+            .iter()
+            .map(|key| label_display_name(key, labels))
+            .collect::<Vec<_>>()
+            .join(", ");
+        summary.push_str(&format!(", remove {names}"));
+    }
+    if !rule.add.is_empty() {
+        let names = rule
+            .add
+            .iter()
+            .map(|key| label_display_name(key, labels))
+            .collect::<Vec<_>>()
+            .join(", ");
+        summary.push_str(&format!(", add {names}"));
+    }
+    summary
+}
+
+pub(super) fn publish_label_rules(app: &AppWindow, state: &InboxState) {
+    let rows = state
+        .account_presentation
+        .label_rules
+        .iter()
+        .enumerate()
+        .map(|(index, rule)| LabelRuleRow {
+            index: i32::try_from(index).unwrap_or(0),
+            summary: label_rule_summary(rule, &state.labels).into(),
+        })
+        .collect::<Vec<_>>();
+    app.set_label_rules(ModelRc::new(VecModel::from(rows)));
+}
+
+fn label_rule_choice_rows(state: &InboxState) -> Vec<LabelRuleChoiceRow> {
+    let mut seen = HashSet::new();
+    let mut rows = Vec::new();
+    for label in &state.labels {
+        let key = {
+            let from_keyword = flectar_mail_core::company_view::tag_key(&label.keyword);
+            if from_keyword.is_empty() {
+                flectar_mail_core::company_view::tag_key(&label.name)
+            } else {
+                from_keyword
+            }
+        };
+        if key.is_empty() || !seen.insert(key.clone()) {
+            continue;
+        }
+        rows.push(LabelRuleChoiceRow {
+            keyword: key.into(),
+            name: label.name.clone().into(),
+            trigger: false,
+            remove: false,
+            add: false,
+        });
+    }
+    rows.sort_by(|left, right| left.name.as_str().cmp(right.name.as_str()));
+    rows
+}
+
+fn choice_rows(app: &AppWindow) -> Vec<LabelRuleChoiceRow> {
+    let model = app.get_label_rule_choices();
+    (0..model.row_count())
+        .filter_map(|index| model.row_data(index))
+        .collect()
+}
+
+fn normalized_choice_keys(rows: &[LabelRuleChoiceRow]) -> Option<flectar_mail_core::models::LabelRule> {
+    let trigger = rows.iter().find(|row| row.trigger)?;
+    let when = flectar_mail_core::company_view::tag_key(trigger.keyword.as_str());
+    if when.is_empty() {
+        return None;
+    }
+    let remove = rows
+        .iter()
+        .filter(|row| row.remove && row.keyword.as_str() != when)
+        .map(|row| flectar_mail_core::company_view::tag_key(row.keyword.as_str()))
+        .filter(|key| !key.is_empty())
+        .collect::<Vec<_>>();
+    let add = rows
+        .iter()
+        .filter(|row| row.add && !row.remove && row.keyword.as_str() != when)
+        .map(|row| flectar_mail_core::company_view::tag_key(row.keyword.as_str()))
+        .filter(|key| !key.is_empty())
+        .collect::<Vec<_>>();
+    if remove.is_empty() && add.is_empty() {
+        return None;
+    }
+    Some(flectar_mail_core::models::LabelRule {
+        when_added: when,
+        remove,
+        add,
+    })
+}
+
+fn save_settings_snapshot(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    runtime: &tokio::runtime::Runtime,
+    update: impl FnOnce(&mut flectar_mail_core::models::Settings),
+) -> bool {
+    let Some(core) = state.borrow().core.clone() else {
+        app.set_sync_status(UiMessage::plain("Settings are saved once an account is set up."));
+        return false;
+    };
+    let saved = runtime.block_on(async {
+        let mut settings = core.load_settings().await?;
+        update(&mut settings);
+        core.save_settings(settings.clone()).await?;
+        Ok::<_, String>(settings)
+    });
+    match saved {
+        Ok(settings) => {
+            apply_account_presentation_settings(app, state, runtime, &settings);
+            true
+        }
+        Err(error) => {
+            app.set_sync_status(UiMessage::detail("Could not save settings: {}", error));
+            false
+        }
+    }
+}
+
 pub(super) fn register_settings_preference_callbacks(
     app: &AppWindow,
     state: &Rc<RefCell<InboxState>>,
     runtime: &Rc<tokio::runtime::Runtime>,
 ) {
     register_branding_callbacks(app, state, runtime);
+
+    let app_weak = app.as_weak();
+    let state_for_rules = Rc::clone(state);
+    app.on_begin_label_rule(move || {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let rows = label_rule_choice_rows(&state_for_rules.borrow());
+        app.set_label_rule_choices(ModelRc::new(VecModel::from(rows)));
+        app.set_label_rule_editor_open(true);
+    });
+
+    let app_weak = app.as_weak();
+    app.on_toggle_label_rule_choice(move |index, field| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let mut rows = choice_rows(&app);
+        let index = usize::try_from(index).unwrap_or(usize::MAX);
+        if index >= rows.len() {
+            return;
+        }
+        match field.as_str() {
+            "trigger" => {
+                let enable = !rows[index].trigger;
+                for choice in &mut rows {
+                    choice.trigger = false;
+                }
+                rows[index].trigger = enable;
+            }
+            "remove" => rows[index].remove = !rows[index].remove,
+            "add" => rows[index].add = !rows[index].add,
+            _ => {}
+        }
+        app.set_label_rule_choices(ModelRc::new(VecModel::from(rows)));
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_save_rule = Rc::clone(state);
+    let runtime_for_save_rule = Rc::clone(runtime);
+    app.on_save_label_rule(move || {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let Some(rule) = normalized_choice_keys(&choice_rows(&app)) else {
+            return;
+        };
+        let key = flectar_mail_core::company_view::tag_key(&rule.when_added);
+        let saved = save_settings_snapshot(
+            &app,
+            &state_for_save_rule,
+            &runtime_for_save_rule,
+            |settings| {
+                settings
+                    .label_rules
+                    .retain(|existing| flectar_mail_core::company_view::tag_key(&existing.when_added) != key);
+                settings.label_rules.push(rule.clone());
+            },
+        );
+        if saved {
+            publish_label_rules(&app, &state_for_save_rule.borrow());
+            app.set_label_rule_editor_open(false);
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_delete_rule = Rc::clone(state);
+    let runtime_for_delete_rule = Rc::clone(runtime);
+    app.on_delete_label_rule(move |index| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let saved = save_settings_snapshot(
+            &app,
+            &state_for_delete_rule,
+            &runtime_for_delete_rule,
+            |settings| {
+                let index = usize::try_from(index).unwrap_or(usize::MAX);
+                if index < settings.label_rules.len() {
+                    settings.label_rules.remove(index);
+                }
+            },
+        );
+        if saved {
+            publish_label_rules(&app, &state_for_delete_rule.borrow());
+        }
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_pin = Rc::clone(state);
+    let runtime_for_pin = Rc::clone(runtime);
+    app.on_pin_sidebar_tag(move |label_id| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let state_ref = state_for_pin.borrow();
+        let Some(label) = state_ref
+            .labels
+            .iter()
+            .find(|label| label.id == i64::from(label_id))
+        else {
+            return;
+        };
+        let key = {
+            let from_keyword = flectar_mail_core::company_view::tag_key(&label.keyword);
+            if from_keyword.is_empty() {
+                flectar_mail_core::company_view::tag_key(&label.name)
+            } else {
+                from_keyword
+            }
+        };
+        if key.is_empty() {
+            return;
+        }
+        let tab = state_ref
+            .account_presentation
+            .active_business_tab
+            .clone()
+            .unwrap_or_default();
+        drop(state_ref);
+        save_settings_snapshot(&app, &state_for_pin, &runtime_for_pin, |settings| {
+            let pins = settings.pinned_sidebar_tags.entry(tab).or_default();
+            if !pins.iter().any(|pinned| pinned == &key) {
+                pins.push(key);
+            }
+        });
+    });
+
+    let app_weak = app.as_weak();
+    let state_for_unpin = Rc::clone(state);
+    let runtime_for_unpin = Rc::clone(runtime);
+    app.on_unpin_sidebar_tag(move |label_id| {
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let state_ref = state_for_unpin.borrow();
+        let Some(label) = state_ref
+            .labels
+            .iter()
+            .find(|label| label.id == i64::from(label_id))
+        else {
+            return;
+        };
+        let key = flectar_mail_core::company_view::tag_key(&label.keyword);
+        let name_key = flectar_mail_core::company_view::tag_key(&label.name);
+        let tab = state_ref
+            .account_presentation
+            .active_business_tab
+            .clone()
+            .unwrap_or_default();
+        drop(state_ref);
+        save_settings_snapshot(&app, &state_for_unpin, &runtime_for_unpin, |settings| {
+            if let Some(pins) = settings.pinned_sidebar_tags.get_mut(&tab) {
+                pins.retain(|pinned| {
+                    let pinned = flectar_mail_core::company_view::tag_key(pinned);
+                    pinned != key && pinned != name_key
+                });
+            }
+        });
+    });
+
     let app_weak = app.as_weak();
     let state_for_notifications = Rc::clone(state);
     let runtime_for_notifications = Rc::clone(runtime);

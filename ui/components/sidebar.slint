@@ -80,6 +80,8 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
     callback request-empty-trash(int);
     callback request-rename-label(int, string, color, string, bool);
     callback request-delete-label(int, string, string, bool, bool);
+    callback pin-sidebar-tag(int);
+    callback unpin-sidebar-tag(int);
 
     surface-color: root.background-color;
     clip: true;
@@ -681,7 +683,8 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         label-path: entry.label.name;
                         accessible-name: @tr("{} label, {} account", entry.label.name, entry.label.account_name);
                         label-has-emoji: entry.label.name_has_emoji;
-                        left-padding: SidebarStyle.icon-left + SidebarStyle.branch-indent
+                        left-padding: entry.mailbox.detail == "folder-pin" ? SidebarStyle.icon-left
+                            : SidebarStyle.icon-left + SidebarStyle.branch-indent
                             + entry.label.depth * SidebarStyle.branch-indent;
                         label-id: entry.label.id;
                         has-children: entry.label.has_children;
@@ -690,7 +693,9 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         editable-color: entry.label.color;
                         scope: self.label-scope;
                         account-id: entry.label.account_id;
-                        label-manageable: true;
+                        label-manageable: entry.mailbox.detail != "folder-pin";
+                        tag-pin-menu: entry.label.account_id == -2;
+                        tag-pinned: entry.mailbox.detail == "folder-pin" || entry.mailbox.detail == "tag-pinned";
                         label-can-create-child: entry.label.can_create_children;
                         label-account-name: entry.label.account_name;
                         mail-drop-enabled: true;
@@ -716,6 +721,8 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         delete-label(id, name, account, global, has-children) => {
                             root.request-delete-label(id, name, account, global, has-children);
                         }
+                        pin-tag(id) => { root.pin-sidebar-tag(id); }
+                        unpin-tag(id) => { root.unpin-sidebar-tag(id); }
                     }
 
                     if entry.kind == SidebarRowKind.new-folder: SidebarItem {

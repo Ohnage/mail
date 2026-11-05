@@ -410,6 +410,10 @@ pub(super) fn enqueue(
     if operations.is_empty() {
         return Err("no message is selected".into());
     }
+    let operations = {
+        let state = state.borrow();
+        expand_label_rules(&state, operations)
+    };
     if operations.len() > 10_000 {
         return Err("select at most 10000 messages per action".into());
     }

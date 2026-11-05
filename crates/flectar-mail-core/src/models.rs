@@ -1583,9 +1583,10 @@ pub struct UnreadCounts {
 }
 
 /// The badges rendered by the native mailbox sidebar for one account.
-/// Inbox and Starred count unread threads; Drafts counts all draft threads.
-/// Keeping this projection small lets the native shell refresh every account
-/// with one grouped SQLite query after a mail mutation.
+/// Inbox counts unread threads. Starred counts every starred thread, read or
+/// not, the same set the Starred mailbox lists. Drafts counts all draft
+/// threads. Keeping this projection small lets the native shell refresh every
+/// account with one grouped SQLite query after a mail mutation.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct MailboxBadgeCounts {
@@ -2234,6 +2235,27 @@ pub struct Settings {
     /// Previous profiles and tabs, kept when a registry import replaces them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brand_registry_backup: Option<BrandRegistryBackup>,
+    /// When a label is added, add and remove other labels. Keywords are
+    /// normalized tag keys: lowercase, `$label:` stripped, spaces and
+    /// underscores written as hyphens.
+    #[serde(default)]
+    pub label_rules: Vec<LabelRule>,
+    /// Tag keywords pinned under Starred, keyed by business tab id. An empty
+    /// key is the list used when no business tab is open.
+    #[serde(default)]
+    pub pinned_sidebar_tags: std::collections::HashMap<String, Vec<String>>,
+}
+
+/// One label-automation rule. `when_added`, `remove`, and `add` are normalized
+/// tag keywords (`company_view::tag_key`), not per-account label ids.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelRule {
+    pub when_added: String,
+    #[serde(default)]
+    pub remove: Vec<String>,
+    #[serde(default)]
+    pub add: Vec<String>,
 }
 
 /// A named, rich-HTML signature belonging to one account.
@@ -2432,6 +2454,8 @@ impl Default for Settings {
             active_business_tab: None,
             brand_registry_digest: String::new(),
             brand_registry_backup: None,
+            label_rules: Vec::new(),
+            pinned_sidebar_tags: std::collections::HashMap::new(),
         }
     }
 }

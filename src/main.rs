@@ -517,6 +517,8 @@ struct AccountPresentationSettings {
     account_short_names: HashMap<String, String>,
     account_icons: HashMap<String, String>,
     company_view_excluded: HashMap<String, bool>,
+    label_rules: Vec<flectar_mail_core::models::LabelRule>,
+    pinned_sidebar_tags: HashMap<String, Vec<String>>,
     account_icon_images: HashMap<String, slint::Image>,
     tab_icons: HashMap<String, slint::Image>,
     profile_logos: HashMap<String, slint::Image>,
@@ -540,6 +542,8 @@ impl AccountPresentationSettings {
             account_short_names: settings.account_short_names.clone(),
             account_icons: settings.account_icons.clone(),
             company_view_excluded: settings.company_view_excluded.clone(),
+            label_rules: settings.label_rules.clone(),
+            pinned_sidebar_tags: settings.pinned_sidebar_tags.clone(),
             account_icon_images: HashMap::new(),
             tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
@@ -1488,6 +1492,108 @@ fn resolve_mail_drop(
             .map(|(target, destination)| (item.message_id, target, destination))
         })
         .collect()
+}
+
+fn added_label_keyword(state: &InboxState, operation: &mail_work::Operation) -> Option<(String, bool)> {
+    match operation {
+        mail_work::Operation::Label(label_id, add) => state
+            .labels
+            .iter()
+            .find(|label| label.id == *label_id)
+            .map(|label| (label.keyword.clone(), *add)),
+        mail_work::Operation::Keyword { keyword, add, .. } => Some((keyword.clone(), *add)),
+        mail_work::Operation::Drop(MailDropDestination::Label(label_id)) => state
+            .labels
+            .iter()
+            .find(|label| label.id == *label_id)
+            .map(|label| (label.keyword.clone(), true)),
+        mail_work::Operation::Drop(MailDropDestination::Keyword { keyword, add, .. }) => {
+            Some((keyword.clone(), *add))
+        }
+        _ => None,
+    }
+}
+
+fn keyword_label_operation(
+    state: &InboxState,
+    account_id: i64,
+    key: &str,
+    add: bool,
+) -> mail_work::Operation {
+    let matches = |label: &flectar_mail_core::models::Label| {
+        flectar_mail_core::company_view::tag_key(&label.keyword) == key
+            || flectar_mail_core::company_view::tag_key(&label.name) == key
+    };
+    let label = state
+        .labels
+        .iter()
+        .find(|label| label.owner_account_id == Some(account_id) && matches(label))
+        .or_else(|| state.labels.iter().find(|label| matches(label)));
+    mail_work::Operation::Keyword {
+        keyword: label
+            .map(|label| label.keyword.clone())
+            .filter(|keyword| !keyword.is_empty())
+            .unwrap_or_else(|| format!("$label:{key}")),
+        name: label
+            .map(|label| label.name.clone())
+            .unwrap_or_else(|| key.to_owned()),
+        color: label
+            .map(|label| label.color.clone())
+            .filter(|color| !color.is_empty())
+            .unwrap_or_else(|| "#6b7280".to_owned()),
+        add,
+    }
+}
+
+/// Follow a user-driven label add with the saved label rules.
+fn expand_label_rules(
+    state: &InboxState,
+    operations: Vec<(i32, MailTarget, mail_work::Operation)>,
+) -> Vec<(i32, MailTarget, mail_work::Operation)> {
+    let rules = &state.account_presentation.label_rules;
+    if rules.is_empty() {
+        return operations;
+    }
+    let mut expanded = operations.clone();
+    for (id, target, operation) in &operations {
+        let Some((keyword, add)) = added_label_keyword(state, operation) else {
+            continue;
+        };
+        if !add || keyword.is_empty() {
+            continue;
+        }
+        let Some(message) = state.messages.iter().find(|message| message.id == *id) else {
+            continue;
+        };
+        let present = message
+            .labels
+            .iter()
+            .filter_map(|label_id| {
+                state
+                    .labels
+                    .iter()
+                    .find(|label| label.id == *label_id)
+                    .map(|label| label.keyword.clone())
+            })
+            .collect::<Vec<_>>();
+        let (adds, removes) =
+            flectar_mail_core::company_view::label_rule_changes(rules, &keyword, &present);
+        for key in removes {
+            expanded.push((
+                *id,
+                *target,
+                keyword_label_operation(state, message.account_id, &key, false),
+            ));
+        }
+        for key in adds {
+            expanded.push((
+                *id,
+                *target,
+                keyword_label_operation(state, message.account_id, &key, true),
+            ));
+        }
+    }
+    expanded
 }
 
 fn perform_mail_drop(

@@ -312,13 +312,15 @@ pub fn mailbox_badge_counts_filtered(
         }
     }
 
+    // Starred lists every starred item, including mail the reader has already
+    // opened. The badge uses that same predicate.
     let starred_base = if messages {
         "SELECT m.account_id, COUNT(*) FROM messages m
-         WHERE m.is_read = 0 AND m.is_draft = 0 AND m.is_starred = 1 AND m.thread_id IS NOT NULL
+         WHERE m.is_draft = 0 AND m.is_starred = 1 AND m.thread_id IS NOT NULL
          GROUP BY m.account_id"
     } else {
         "SELECT t.account_id, COUNT(*) FROM threads t
-         WHERE t.unread_count > 0 AND t.starred_count > 0
+         WHERE t.starred_count > 0
          GROUP BY t.account_id"
     };
     let (starred_sql, starred_binds) = scoped_badge_sql(starred_base, scope, messages);
@@ -568,8 +570,35 @@ mod tests {
             .unwrap();
         let badges = mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap();
         assert_eq!(badges[0].inbox, 0);
-        assert_eq!(badges[0].starred, 0);
+        assert_eq!(
+            badges[0].starred, 1,
+            "reading a starred thread keeps it starred"
+        );
         assert_eq!(badges[0].drafts, 1);
+    }
+
+    #[test]
+    fn starred_badges_count_read_mail_in_both_groupings() {
+        let conn = test_db();
+        seed_thread(&conn, 1, 0, false);
+        conn.execute(
+            "UPDATE threads SET starred_count = 1, unread_count = 0 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages SET is_starred = 1, is_read = 1 WHERE thread_id = 1",
+            [],
+        )
+        .unwrap();
+        seed_thread(&conn, 2, 1, false);
+
+        let conversations = mailbox_badge_counts(&conn, MailGrouping::Conversations).unwrap();
+        let messages = mailbox_badge_counts(&conn, MailGrouping::Messages).unwrap();
+        assert_eq!(conversations[0].inbox, 1);
+        assert_eq!(conversations[0].starred, 1);
+        assert_eq!(messages[0].inbox, 1);
+        assert_eq!(messages[0].starred, 1);
     }
 
     #[test]

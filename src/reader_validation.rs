@@ -198,7 +198,7 @@ fn automatic_selection_hydrates_and_reader_controls_are_responsive_and_keyboard_
         });
     };
     // Icon controls must remain keyboard operable after replacing native buttons.
-    pointer(721.0, 263.0);
+    pointer(721.0, 295.0);
     assert_eq!(
         app.get_email_scroll_y(),
         0.0,
@@ -235,12 +235,12 @@ fn automatic_selection_hydrates_and_reader_controls_are_responsive_and_keyboard_
         key(slint::platform::Key::Control.into(), false);
     };
     let copy_zoom = || {
-        pointer(820.0, 263.0);
+        pointer(820.0, 295.0);
         shortcut("a");
         shortcut("c");
         clipboard.borrow().clone()
     };
-    pointer(820.0, 263.0);
+    pointer(820.0, 295.0);
     shortcut("a");
     key("21%".into(), true);
     key("21%".into(), false);
@@ -253,17 +253,17 @@ fn automatic_selection_hydrates_and_reader_controls_are_responsive_and_keyboard_
         "50%",
         "typed values must show the applied clamp"
     );
-    pointer(874.0, 263.0);
+    pointer(874.0, 295.0);
     draw("zoom-in", 1280, 900);
     assert_eq!(copy_zoom(), "60%");
-    pointer(721.0, 263.0);
+    pointer(721.0, 295.0);
     draw("zoom-out", 1280, 900);
     assert_eq!(copy_zoom(), "50%");
     // Fit may leave zoom unchanged; it must still discard an unsubmitted draft.
     shortcut("a");
     key("21%".into(), true);
     key("21%".into(), false);
-    pointer(919.0, 263.0);
+    pointer(919.0, 295.0);
     draw("zoom-fit", 1280, 900);
     assert_eq!(
         copy_zoom(),
@@ -272,7 +272,7 @@ fn automatic_selection_hydrates_and_reader_controls_are_responsive_and_keyboard_
             (app.global::<EmailReader>().get_zoom() * 100.0).round()
         )
     );
-    pointer(764.0, 263.0);
+    pointer(764.0, 295.0);
     draw("zoom-reset", 1280, 900);
     assert_eq!(copy_zoom(), "100%");
     shortcut("a");
@@ -283,7 +283,7 @@ fn automatic_selection_hydrates_and_reader_controls_are_responsive_and_keyboard_
     draw("zoom-invalid", 1280, 900);
     assert_eq!(copy_zoom(), "100%");
     draw("desktop-tooltip", 1280, 900);
-    pointer(750.0, 431.0);
+    pointer(750.0, 463.0);
     key(slint::platform::Key::Control.into(), true);
     key("a".into(), true);
     key("a".into(), false);

@@ -7,7 +7,7 @@ import { MessageColors } from "../message-colors.slint";
 import { MailPorts, MailSecurityFields } from "../components/mail-security-fields.slint";
 import { OAuthBrowserHelp } from "../components/oauth-browser-help.slint";
 import { HorizontalBox, ScrollView, VerticalBox } from "std-widgets.slint";
-import { AccountRow, BusinessTabRow, CalendarConnectionRow, MailProfileRow, ProfileMemberRow, StorageUsageRow } from "../models.slint";
+import { AccountRow, BusinessTabRow, CalendarConnectionRow, LabelRuleChoiceRow, LabelRuleRow, MailProfileRow, ProfileMemberRow, StorageUsageRow } from "../models.slint";
 import { AccountCalendars } from "../components/account-calendars.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Button } from "../components/button.slint";
@@ -477,6 +477,13 @@ export component SettingsDialog inherits Rectangle {
     in property <color> title-color;
     in-out property <bool> settings_open: false;
     in-out property <string> settings_tab: "General";
+    in property <[LabelRuleRow]> label_rules: [];
+    in property <[LabelRuleChoiceRow]> label_rule_choices: [];
+    in-out property <bool> label_rule_editor_open: false;
+    callback begin_label_rule();
+    callback toggle_label_rule_choice(int, string);
+    callback save_label_rule();
+    callback delete_label_rule(int);
     in-out property <string> theme_mode: "system";
     in-out property <bool> show_avatars: true;
     in-out property <bool> show_tabs: true;
@@ -1083,6 +1090,198 @@ export component SettingsDialog inherits Rectangle {
                                         description-color: root.secondary-text;
                                         selected(index, value) => {
                                             MessageColors.choose(index == 1 ? "light" : index == 2 ? "dark" : "system");
+                                        }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                height: max(root.compact ? 180px : 148px, self.preferred-height);
+                                background: root.surface;
+                                border-radius: 8px;
+                                border-width: 1px;
+                                border-color: root.border-subtle;
+                                VerticalBox {
+                                    padding: 16px;
+                                    spacing: 8px;
+                                    Text {
+                                        text: @tr("Label rules");
+                                        color: root.title-color;
+                                        font-size: TypeScale.subtitle;
+                                        font-weight: 600;
+                                    }
+                                    Text {
+                                        text: @tr("When a label is added, add or remove the other labels you choose.");
+                                        color: root.secondary-text;
+                                        font-size: TypeScale.secondary;
+                                        wrap: word-wrap;
+                                    }
+                                    for rule in root.label_rules : HorizontalBox {
+                                        spacing: 8px;
+                                        alignment: start;
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: rule.summary;
+                                            color: root.body-text;
+                                            font-size: TypeScale.body;
+                                            wrap: word-wrap;
+                                            vertical-alignment: center;
+                                        }
+                                        Text {
+                                            text: @tr("Delete rule");
+                                            color: root.accent;
+                                            font-size: TypeScale.secondary;
+                                            vertical-alignment: center;
+                                            TouchArea {
+                                                clicked => { root.delete_label_rule(rule.index); }
+                                                accessible-role: button;
+                                                accessible-label: @tr("Delete rule");
+                                            }
+                                        }
+                                    }
+                                    if !root.label_rule_editor_open : Text {
+                                        text: @tr("Add rule");
+                                        color: root.accent;
+                                        font-size: TypeScale.body;
+                                        font-weight: 600;
+                                        TouchArea {
+                                            clicked => { root.begin_label_rule(); }
+                                            accessible-role: button;
+                                            accessible-label: @tr("Add rule");
+                                        }
+                                    }
+                                    if root.label_rule_editor_open : VerticalBox {
+                                        spacing: 6px;
+                                        if root.label_rule_choices.length == 0 : Text {
+                                            text: @tr("No labels yet");
+                                            color: root.secondary-text;
+                                            font-size: TypeScale.secondary;
+                                        }
+                                        HorizontalBox {
+                                            spacing: 8px;
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: @tr("Label");
+                                                color: root.muted-text;
+                                                font-size: TypeScale.caption;
+                                            }
+                                            Text {
+                                                width: 72px;
+                                                text: @tr("When added");
+                                                color: root.muted-text;
+                                                font-size: TypeScale.caption;
+                                                horizontal-alignment: center;
+                                            }
+                                            Text {
+                                                width: 64px;
+                                                text: @tr("Remove");
+                                                color: root.muted-text;
+                                                font-size: TypeScale.caption;
+                                                horizontal-alignment: center;
+                                            }
+                                            Text {
+                                                width: 48px;
+                                                text: @tr("Add");
+                                                color: root.muted-text;
+                                                font-size: TypeScale.caption;
+                                                horizontal-alignment: center;
+                                            }
+                                        }
+                                        for choice[index] in root.label_rule_choices : HorizontalBox {
+                                            spacing: 8px;
+                                            alignment: center;
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: choice.name;
+                                                color: root.body-text;
+                                                font-size: TypeScale.body;
+                                                overflow: elide;
+                                                vertical-alignment: center;
+                                            }
+                                            Rectangle {
+                                                width: 72px;
+                                                height: 22px;
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    border-radius: 8px;
+                                                    border-width: choice.trigger ? 5px : 1px;
+                                                    border-color: choice.trigger ? root.accent : root.border-subtle;
+                                                }
+                                                TouchArea {
+                                                    clicked => { root.toggle_label_rule_choice(index, "trigger"); }
+                                                    accessible-role: radio-button;
+                                                    accessible-label: @tr("When added");
+                                                    accessible-checked: choice.trigger;
+                                                }
+                                            }
+                                            Rectangle {
+                                                width: 64px;
+                                                height: 22px;
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    border-radius: 3px;
+                                                    border-width: 1px;
+                                                    border-color: choice.remove ? root.accent : root.border-subtle;
+                                                    background: choice.remove ? root.accent : transparent;
+                                                }
+                                                TouchArea {
+                                                    clicked => { root.toggle_label_rule_choice(index, "remove"); }
+                                                    accessible-role: checkbox;
+                                                    accessible-label: @tr("Remove");
+                                                    accessible-checked: choice.remove;
+                                                }
+                                            }
+                                            Rectangle {
+                                                width: 48px;
+                                                height: 22px;
+                                                Rectangle {
+                                                    width: 16px;
+                                                    height: 16px;
+                                                    x: (parent.width - self.width) / 2;
+                                                    y: (parent.height - self.height) / 2;
+                                                    border-radius: 3px;
+                                                    border-width: 1px;
+                                                    border-color: choice.add ? root.accent : root.border-subtle;
+                                                    background: choice.add ? root.accent : transparent;
+                                                }
+                                                TouchArea {
+                                                    clicked => { root.toggle_label_rule_choice(index, "add"); }
+                                                    accessible-role: checkbox;
+                                                    accessible-label: @tr("Add");
+                                                    accessible-checked: choice.add;
+                                                }
+                                            }
+                                        }
+                                        HorizontalBox {
+                                            spacing: 16px;
+                                            alignment: start;
+                                            Text {
+                                                text: @tr("Save rule");
+                                                color: root.accent;
+                                                font-size: TypeScale.body;
+                                                font-weight: 600;
+                                                TouchArea {
+                                                    clicked => { root.save_label_rule(); }
+                                                    accessible-role: button;
+                                                    accessible-label: @tr("Save rule");
+                                                }
+                                            }
+                                            Text {
+                                                text: @tr("Cancel");
+                                                color: root.secondary-text;
+                                                font-size: TypeScale.body;
+                                                TouchArea {
+                                                    clicked => { root.label_rule_editor_open = false; }
+                                                    accessible-role: button;
+                                                    accessible-label: @tr("Cancel");
+                                                }
+                                            }
                                         }
                                     }
                                 }

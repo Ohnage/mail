@@ -2158,7 +2158,7 @@ mod tests {
 
         let (sidebar, query, scope) = presentation.view_scope();
         assert_eq!(sidebar, Some(vec![2, 4, 9]));
-        assert!(query.is_none());
+        assert_eq!(query, Some(vec![2, 4, 9]));
         assert_eq!(scope.or_account_ids, vec![2, 4, 9]);
         assert_eq!(
             SidebarLayout::for_account_count(sidebar.unwrap().len()),

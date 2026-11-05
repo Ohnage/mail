@@ -1061,11 +1061,16 @@ impl CoreMailSource {
         let mut listed_accounts = account_filter
             .filter(|_| resolved.account_id.is_none() && !matches!(scope, Scope::AddressInbox(_)))
             .map(|accounts| accounts.to_vec());
-        if on_company_list && let Some(accounts) = company_ids.clone() {
-            // Company rows list the tab's company mailboxes. Hub mail is
-            // included unless `companyViewExcluded` says otherwise. The
-            // account set is the AND, so an address rule cannot hide it.
-            listed_accounts = Some(accounts);
+        if on_company_list {
+            // Company Inbox, merged folders, tab tags, and the unified rows
+            // on a business tab list that tab's mailboxes. `None` would be
+            // every account. An empty set lists nothing. Hub mail stays in
+            // unless `companyViewExcluded` says otherwise.
+            if let Some(accounts) = company_ids.clone() {
+                listed_accounts = Some(accounts);
+            } else if !matches!(scope, Scope::Unified(_)) {
+                listed_accounts = Some(Vec::new());
+            }
         }
         let account_id = resolved.account_id.filter(|_| listed_accounts.is_none());
         let scope_filter = self.scope_filter(scope).await?;
@@ -4994,6 +4999,200 @@ mod search_pagination_adapter_tests {
             .await
             .unwrap();
         assert_eq!(listed(&all), vec![12, 11, 3, 2, 1]);
+    }
+
+    #[tokio::test]
+    async fn company_inbox_lists_the_tab_mailboxes_and_not_every_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = CoreMailSource::start(
+            Paths::for_tests(dir.path()),
+            Arc::new(DevelopmentFileCredentialStore::new(
+                dir.path().join("credentials.json"),
+            )),
+            Arc::new(flectar_mail_core::oauth::redirect::LoopbackRedirectBroker::default()),
+        )
+        .await
+        .unwrap();
+        // 4 and 8 belong to the open tab. 5 is that tab's `inbox@` mailbox,
+        // which stays out of Company Inbox. 99 belongs to no selected account.
+        let rows = [
+            (4_i64, "box4@example.test"),
+            (5, "inbox@example.test"),
+            (8, "box8@example.test"),
+            (99, "box99@example.test"),
+        ];
+        source
+            .core
+            .db
+            .write(move |conn| {
+                for (account, email) in rows {
+                    conn.execute(
+                        &format!(
+                            "INSERT INTO accounts (id,email,provider,auth_kind,username,incoming_host,incoming_port,smtp_host,smtp_port,created_at,mail_protocol,settings_json)
+                             VALUES ({account},'{email}','generic','password','fixture','imap.example.test',993,'smtp.example.test',465,0,'imap','{{\"connection\":{{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}}}')"
+                        ),
+                        [],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO folders (id,account_id,path,role) VALUES (?1,?1,'INBOX','inbox')",
+                        [account],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO folders (id,account_id,path,role) VALUES (?1,?2,'Sent','sent')",
+                        [account + 100, account],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO threads (id,account_id,subject_norm,last_message_at,message_count,unread_count)
+                         VALUES (?1,?1,'needle',?1,1,1)",
+                        [account],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO messages (id,account_id,thread_id,folder_id,uid,subject,from_addr,date,is_read,body_state)
+                         VALUES (?1,?1,?1,?1,?1,'Needle','sender@example.test',?1,0,'cached')",
+                        [account],
+                    )?;
+                    flectar_mail_core::db::repo::search::index_message(conn, account)?;
+                }
+                for account in [4_i64, 99] {
+                    let id = account + 1000;
+                    conn.execute(
+                        "INSERT INTO threads (id,account_id,subject_norm,last_message_at,message_count,unread_count)
+                         VALUES (?1,?2,'posted',?1,1,0)",
+                        [id, account],
+                    )?;
+                    conn.execute(
+                        "INSERT INTO messages (id,account_id,thread_id,folder_id,uid,subject,from_addr,date,is_read,body_state)
+                         VALUES (?1,?2,?1,?3,?1,'Posted','sender@example.test',?1,1,'cached')",
+                        [id, account, account + 100],
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let mut presentation = crate::AccountPresentationSettings {
+            inbox_accounts: vec![
+                flectar_mail_core::models::InboxAccount {
+                    id: -1,
+                    name: "Company".into(),
+                    icon: None,
+                    color: None,
+                    account_ids: vec![4],
+                    address_view_ids: Vec::new(),
+                    automatic_profile: None,
+                    profile_id: Some("work".into()),
+                },
+                flectar_mail_core::models::InboxAccount {
+                    id: -2,
+                    name: "Personal".into(),
+                    icon: None,
+                    color: None,
+                    account_ids: vec![8],
+                    address_view_ids: Vec::new(),
+                    automatic_profile: None,
+                    profile_id: None,
+                },
+            ],
+            profiles: vec![MailProfile {
+                id: "work".into(),
+                name: "Work".into(),
+                color: "#112233".into(),
+                account_ids: vec![4, 5, 8],
+                logo: None,
+            }],
+            business_tabs: serde_json::from_value(serde_json::json!([
+                {"id":"company","name":"Company","profileIds":["work"],"scope":"profiles"},
+                {"id":"personal","name":"Personal","profileIds":[],"scope":"profiles"}
+            ]))
+            .unwrap(),
+            active_business_tab: Some("company".into()),
+            ..Default::default()
+        };
+        presentation
+            .business_tab_accounts
+            .insert("company".into(), vec![-1]);
+        presentation
+            .business_tab_accounts
+            .insert("personal".into(), vec![-2]);
+        let connected = source.load_accounts().await.unwrap();
+        let company = presentation.company_account_ids(&connected);
+        assert_eq!(
+            company,
+            vec![4, 8],
+            "the open tab's mailboxes, including one another named account also lists"
+        );
+        assert_ne!(
+            company,
+            connected.iter().map(|account| account.id).collect::<Vec<_>>(),
+            "Company Inbox is not the global account set"
+        );
+        let (sidebar, query, scope) = presentation.view_scope();
+        assert_eq!(query.as_deref(), Some(&[4, 5, 8][..]));
+        source.set_view_scope(sidebar, query, scope, false, Some(company));
+
+        let accounts_of = |page: &MailPage| {
+            page.messages
+                .iter()
+                .map(|message| message.account_id)
+                .collect::<Vec<_>>()
+        };
+        let inbox = source
+            .load_page(Scope::CompanyInbox, "", None, 25, false)
+            .await
+            .unwrap();
+        assert_eq!(accounts_of(&inbox), vec![8, 4]);
+        let search = source
+            .load_page(Scope::CompanyInbox, "needle", None, 25, false)
+            .await
+            .unwrap();
+        assert_eq!(accounts_of(&search), vec![8, 4]);
+        let sent = source
+            .load_page(
+                Scope::Unified(StandardMailbox::Sent),
+                "",
+                None,
+                25,
+                false,
+            )
+            .await
+            .unwrap();
+        assert_eq!(accounts_of(&sent), vec![4]);
+        assert_eq!(
+            source
+                .load_mail_metadata(Scope::CompanyInbox)
+                .await
+                .unwrap()
+                .inbox_count,
+            2
+        );
+
+        presentation.active_business_tab = Some("personal".into());
+        let personal = presentation.company_account_ids(&connected);
+        assert_eq!(personal, vec![8]);
+        let (sidebar, query, scope) = presentation.view_scope();
+        source.set_view_scope(sidebar, query, scope, false, Some(personal));
+        let personal_inbox = source
+            .load_page(Scope::CompanyInbox, "", None, 25, false)
+            .await
+            .unwrap();
+        assert_eq!(accounts_of(&personal_inbox), vec![8]);
+
+        source.set_view_scope(
+            None,
+            None,
+            flectar_mail_core::recipient_match::MailScope::default(),
+            false,
+            None,
+        );
+        let unscoped = source
+            .load_page(Scope::CompanyInbox, "", None, 25, false)
+            .await
+            .unwrap();
+        assert!(
+            unscoped.messages.is_empty(),
+            "Company Inbox without a tab mailbox set matches nothing"
+        );
     }
 }
 

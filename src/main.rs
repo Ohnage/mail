@@ -678,15 +678,11 @@ impl AccountPresentationSettings {
                 && tab.address_view_ids.is_none()
                 && matches!(tab.resolved_scope(), "profiles" | "any" | "recipients"))
         {
-            // Sidebar and folder loading follow the chosen named accounts'
-            // mailboxes. An empty list hid Inbox, Sent, and every folder.
-            // The query stays open so address rules can still match; the
-            // scope limits which of those mailboxes' messages are listed.
-            return (
-                Some(self.named_tab_mailbox_ids(tab)),
-                None,
-                self.named_tab_scope(tab),
-            );
+            // Sidebar, folder loading, and the message query all follow the
+            // chosen named accounts' mailboxes. `None` would list every
+            // account. An empty list lists nothing.
+            let mailboxes = self.named_tab_mailbox_ids(tab);
+            return (Some(mailboxes.clone()), Some(mailboxes), self.named_tab_scope(tab));
         }
         let company_accounts = match &tab.account_ids {
             Some(ids) => {
@@ -697,7 +693,6 @@ impl AccountPresentationSettings {
             }
             None => self.accounts_in(&tab.profile_ids),
         };
-        let company_accounts = self.drop_foreign_claims(tab, company_accounts);
         let recipients = MailScope {
             recipient_patterns: tab.recipient_patterns.clone(),
             sender_addresses: tab.sender_addresses.clone(),
@@ -813,6 +808,10 @@ impl AccountPresentationSettings {
     }
 
     /// Mailboxes belonging to the named accounts selected for this tab.
+    ///
+    /// This is the same set the named-account rows describe: each selected
+    /// account's own mailboxes plus the mailboxes of a profile it is linked
+    /// to. A mailbox another named account also lists still belongs here.
     fn named_tab_mailbox_ids(&self, tab: &flectar_mail_core::models::BusinessTab) -> Vec<i64> {
         let selected = self.selected_inbox_accounts(tab);
         let mut ids = Vec::new();
@@ -826,7 +825,7 @@ impl AccountPresentationSettings {
         }
         ids.sort_unstable();
         ids.dedup();
-        self.drop_foreign_claims(tab, ids)
+        ids
     }
 
     fn uses_named_tab(&self, tab: &flectar_mail_core::models::BusinessTab) -> bool {
@@ -859,7 +858,7 @@ impl AccountPresentationSettings {
             };
             flectar_mail_core::company_view::TabMailboxSources {
                 named_mailboxes: None,
-                profile_mailboxes: self.drop_foreign_claims(tab, profile_mailboxes),
+                profile_mailboxes,
             }
         };
         let explicit = self

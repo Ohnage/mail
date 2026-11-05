@@ -83,15 +83,15 @@ What this fork adds:
   there does the same on every company mailbox. Deleting one is confirmed,
   and it happens only when that folder is empty in every mailbox. The
   underlying mailboxes stay under a Mailboxes section that starts collapsed,
-  and that section lists only this tab's mailboxes. A mailbox explicitly
-  listed on a named account is claimed by that account. Company Inbox and
-  the other merged views leave it out of a tab that did not select the
-  account, so a personal account such as Tim Mentink stays out of the other
-  companies even when one of their profiles also contains that mailbox.
-  Listing it on a selected account keeps it. `inbox@` starts excluded. Every
-  other address, including `hub@`, starts included, because a hub mailbox
-  holds its own mail. `companyViewExcluded` in settings overrides that
-  default in either direction, after the claim rule.
+  and that section lists only this tab's mailboxes. Company Inbox, search,
+  the unified rows, merged folders, and tab tags all use that same mailbox
+  set: every mailbox of the named accounts selected on the open tab, including
+  a mailbox another named account also lists. A mailbox none of those
+  accounts covers stays out, so the view is never every account on the
+  profile. `inbox@` starts excluded. Every other address, including `hub@`,
+  starts included, because a hub mailbox holds its own mail.
+  `companyViewExcluded` in settings overrides that default in either
+  direction.
 - **Named accounts.** Settings → Accounts groups selected mailboxes and
   receiving addresses under a name, icon, and color. A mailbox can belong to
   more than one named account. An account tied to a profile includes that

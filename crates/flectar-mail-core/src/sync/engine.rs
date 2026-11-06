@@ -50,10 +50,11 @@ const BACKGROUND_BODY_PLAN_PAGES: usize = 2;
 static BACKGROUND_BODY_PLAN_BUDGET: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
     std::sync::OnceLock::new();
 
-/// How many accounts may run a network sync at once. A profile with hundreds
-/// of mailboxes otherwise opens every connection together, and the local
-/// database then cannot answer the mailbox the user just opened.
-const ACCOUNT_SYNC_SLOTS: usize = 4;
+/// How many accounts may run a header sync at once. Body prefetch does not
+/// take a slot. Sixteen pipelines keep a few hundred accounts moving without
+/// opening a connection for every mailbox. WAL readers stay available while a
+/// page commits.
+const ACCOUNT_SYNC_SLOTS: usize = 16;
 
 pub(crate) async fn reserve_account_sync() -> tokio::sync::OwnedSemaphorePermit {
     static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
@@ -64,6 +65,73 @@ pub(crate) async fn reserve_account_sync() -> tokio::sync::OwnedSemaphorePermit 
         .acquire_owned()
         .await
         .expect("account sync slots stay open")
+}
+
+/// One line per header or body batch, in the tracing log and in
+/// `{data_dir}/sync.log`, so a Windows install can be timed from
+/// `%APPDATA%\flectar-mail\sync.log`.
+pub(crate) fn log_sync_batch(
+    data_dir: &std::path::Path,
+    kind: &str,
+    account_id: i64,
+    messages: usize,
+    elapsed: std::time::Duration,
+) {
+    if messages == 0 {
+        return;
+    }
+    let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+    let per_second = messages as f64 / elapsed.as_secs_f64().max(0.001);
+    match kind {
+        "jmap header" => tracing::info!(
+            account_id,
+            messages,
+            elapsed_ms,
+            messages_per_second = per_second,
+            "jmap header batch"
+        ),
+        "jmap body" => tracing::info!(
+            account_id,
+            messages,
+            elapsed_ms,
+            messages_per_second = per_second,
+            "jmap body batch"
+        ),
+        "gmail body" => tracing::info!(
+            account_id,
+            messages,
+            elapsed_ms,
+            messages_per_second = per_second,
+            "gmail body batch"
+        ),
+        _ => tracing::info!(
+            account_id,
+            messages,
+            elapsed_ms,
+            messages_per_second = per_second,
+            "sync batch"
+        ),
+    }
+    let line = format!(
+        "{} {kind} batch account_id={account_id} messages={messages} elapsed_ms={elapsed_ms} messages_per_second={per_second:.1}\n",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+    );
+    static LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let path = data_dir.join("sync.log");
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) => {
+            tracing::debug!(%error, "could not append the sync log");
+            return;
+        }
+    };
+    use std::io::Write;
+    let _ = file.write_all(line.as_bytes());
 }
 
 async fn reserve_background_plan_page() -> tokio::sync::OwnedSemaphorePermit {

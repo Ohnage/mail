@@ -1,19 +1,29 @@
 //! Background download of message text for Gmail and JMAP.
 //!
-//! Those protocols used to fetch a body only when the message was opened, so a
-//! mailbox full of cached headers still showed a loading wait on every open.
-//! This loop stores the newest uncached messages first, a few accounts at a
-//! time. IMAP already has its own body pool. Opening a message whose text is
-//! cached reads SQLite and does not ask the server again.
+//! Headers are stored by each account's sync first. This loop then fills
+//! bodies for rows already on disk, newest first. JMAP asks for a few hundred
+//! messages in one `Email/get` (`bodyValues`). Gmail still fetches one message
+//! at a time, a few at once, and only when no JMAP bodies are waiting.
+//! Opening a cached message reads SQLite and does not ask the server again.
+//! The progress banner is the UI's own two-second poll of the saved counts;
+//! this loop reports a batch, not each message.
 
 use super::engine::SyncCtx;
 use crate::db::repo;
 use crate::models::{MailHistory, now_ms};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-const PAGE: i64 = 8;
+/// Newest uncached rows pulled in one pass. One JMAP account turns this into
+/// a handful of `Email/get` calls.
+const PAGE: i64 = 500;
+/// Accounts whose bodies are fetched at the same time. Each JMAP account uses
+/// one connection and writes one transaction per batch.
+const ACCOUNTS_AT_ONCE: usize = 4;
+/// Gmail has no multi-get for message bodies. Keep a page small and a few
+/// requests in flight so it cannot stall the JMAP accounts behind it.
+const GMAIL_PAGE: usize = 32;
+const GMAIL_CONCURRENCY: usize = 4;
 const IDLE: std::time::Duration = std::time::Duration::from_secs(20);
-const BETWEEN_PAGES: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub(crate) fn spawn(ctx: SyncCtx) {
     tokio::spawn(async move {
@@ -25,15 +35,18 @@ pub(crate) fn spawn(ctx: SyncCtx) {
                     0
                 }
             };
-            let pause = if cached == 0 { IDLE } else { BETWEEN_PAGES };
-            tokio::time::sleep(pause).await;
+            if cached == 0 {
+                tokio::time::sleep(IDLE).await;
+            } else {
+                tokio::task::yield_now().await;
+            }
         }
     });
 }
 
 async fn download_page(ctx: &SyncCtx) -> crate::error::Result<u64> {
     let now = now_ms();
-    let page = ctx
+    let mut page = ctx
         .db
         .read(move |conn| {
             repo::messages::newest_uncached_remote_bodies(
@@ -50,6 +63,13 @@ async fn download_page(ctx: &SyncCtx) -> crate::error::Result<u64> {
     if page.is_empty() {
         return Ok(0);
     }
+    // Headers are already local. Finish JMAP bodies before spending the page
+    // on Gmail's one-request-per-message API.
+    if page.iter().any(|row| !row.gmail) {
+        page.retain(|row| !row.gmail);
+    } else {
+        page.truncate(GMAIL_PAGE);
+    }
 
     let mut by_account: HashMap<i64, Vec<repo::messages::UncachedRemoteBody>> = HashMap::new();
     let mut order = Vec::new();
@@ -61,11 +81,9 @@ async fn download_page(ctx: &SyncCtx) -> crate::error::Result<u64> {
     }
 
     let mut cached = 0u64;
-    // Two accounts at a time. A broken account records its own retry and does
-    // not stop the other one, or the next page.
-    for pair in order.chunks(2) {
+    for group in order.chunks(ACCOUNTS_AT_ONCE) {
         let mut jobs = tokio::task::JoinSet::new();
-        for account_id in pair.iter().copied() {
+        for account_id in group.iter().copied() {
             let Some(rows) = by_account.remove(&account_id) else {
                 continue;
             };
@@ -96,19 +114,79 @@ async fn download_account(
         return Ok(0);
     };
     let gmail = rows.first().is_some_and(|row| row.gmail);
+    let cached = if gmail {
+        download_gmail(ctx, account_id, &config, rows).await?
+    } else {
+        download_jmap(ctx, account_id, &config, rows).await?
+    };
+    if cached > 0 {
+        emit_progress(ctx, account_id).await;
+    }
+    Ok(cached)
+}
+
+async fn download_jmap(
+    ctx: &SyncCtx,
+    account_id: i64,
+    config: &crate::models::AccountConfig,
+    rows: Vec<repo::messages::UncachedRemoteBody>,
+) -> crate::error::Result<u64> {
+    let ids = rows.iter().map(|row| row.message_id).collect::<Vec<_>>();
     let mut cached = 0u64;
-    if gmail {
-        for row in &rows {
-            let message_id = row.message_id;
-            let claimed = ctx
-                .db
-                .write(move |conn| repo::messages::begin_body_fetch(conn, message_id))
-                .await
-                .unwrap_or(false);
-            if !claimed {
-                continue;
+    for (message_id, result) in crate::jmap::sync::cache_message_bodies(ctx, config, &ids).await {
+        match result {
+            Ok(()) => cached += 1,
+            Err(error) => {
+                tracing::warn!(
+                    account_id,
+                    message_id,
+                    error = %error,
+                    "JMAP body was not saved"
+                );
+                record_failure(ctx, message_id, &error).await;
             }
-            match super::gmail::cache_message_body(ctx, &config, &row.remote_id).await {
+        }
+    }
+    Ok(cached)
+}
+
+async fn download_gmail(
+    ctx: &SyncCtx,
+    account_id: i64,
+    config: &crate::models::AccountConfig,
+    rows: Vec<repo::messages::UncachedRemoteBody>,
+) -> crate::error::Result<u64> {
+    let ids = rows.iter().map(|row| row.message_id).collect::<Vec<_>>();
+    let claimed = ctx
+        .db
+        .write(move |conn| repo::messages::begin_body_fetches(conn, &ids))
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let pending = rows
+        .into_iter()
+        .filter(|row| claimed.contains(&row.message_id))
+        .collect::<Vec<_>>();
+    let started = std::time::Instant::now();
+    let mut cached = 0u64;
+    for group in pending.chunks(GMAIL_CONCURRENCY) {
+        let mut jobs = tokio::task::JoinSet::new();
+        for row in group {
+            let ctx = ctx.clone();
+            let config = config.clone();
+            let message_id = row.message_id;
+            let remote_id = row.remote_id.clone();
+            jobs.spawn(async move {
+                let saved = super::gmail::cache_message_body(&ctx, &config, &remote_id).await;
+                (message_id, saved)
+            });
+        }
+        while let Some(joined) = jobs.join_next().await {
+            let Ok((message_id, saved)) = joined else {
+                continue;
+            };
+            match saved {
                 Ok(()) => cached += 1,
                 Err(error) => {
                     tracing::warn!(
@@ -125,55 +203,44 @@ async fn download_account(
                 }
             }
         }
-    } else {
-        let ids = rows.iter().map(|row| row.message_id).collect::<Vec<_>>();
-        for (message_id, result) in
-            crate::jmap::sync::cache_message_bodies(ctx, &config, &ids).await
-        {
-            match result {
-                Ok(()) => cached += 1,
-                Err(error) => {
-                    tracing::warn!(
-                        account_id,
-                        message_id,
-                        error = %error,
-                        "JMAP body was not saved"
-                    );
-                    record_failure(ctx, message_id, &error).await;
-                }
-            }
-        }
     }
-    if cached > 0 {
-        let now = now_ms();
-        let progress = ctx
-            .db
-            .read(move |conn| {
-                repo::messages::body_cache_progress(
-                    conn,
-                    Some(&[account_id]),
-                    MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0),
-                    MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0),
-                    MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0),
-                    MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0),
-                )
-            })
-            .await
-            .ok();
-        if let Some(progress) = progress {
-            ctx.bus.emit(crate::events::CoreEvent::SyncProgress(
-                crate::events::SyncProgress {
-                    account_id,
-                    folder: String::new(),
-                    phase: "bodies".into(),
-                    done: u64::try_from(progress.done).unwrap_or(0),
-                    total: u64::try_from(progress.done.saturating_add(progress.pending))
-                        .unwrap_or(0),
-                },
-            ));
-        }
-    }
+    crate::sync::engine::log_sync_batch(
+        &ctx.paths.data_dir,
+        "gmail body",
+        account_id,
+        usize::try_from(cached).unwrap_or(0),
+        started.elapsed(),
+    );
     Ok(cached)
+}
+
+async fn emit_progress(ctx: &SyncCtx, account_id: i64) {
+    let now = now_ms();
+    let progress = ctx
+        .db
+        .read(move |conn| {
+            repo::messages::body_cache_progress(
+                conn,
+                Some(&[account_id]),
+                MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0),
+            )
+        })
+        .await
+        .ok();
+    if let Some(progress) = progress {
+        ctx.bus.emit(crate::events::CoreEvent::SyncProgress(
+            crate::events::SyncProgress {
+                account_id,
+                folder: String::new(),
+                phase: "bodies".into(),
+                done: u64::try_from(progress.done).unwrap_or(0),
+                total: u64::try_from(progress.done.saturating_add(progress.pending)).unwrap_or(0),
+            },
+        ));
+    }
 }
 
 async fn record_failure(ctx: &SyncCtx, message_id: i64, detail: &str) {

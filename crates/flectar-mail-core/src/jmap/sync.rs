@@ -841,6 +841,8 @@ async fn sync_emails(ctx: &SyncCtx, config: &AccountConfig, c: &ConnectedClient)
         ids: &ids,
         position: 0,
         size: max_objects_in_get(c),
+        account_id,
+        data_dir: &ctx.paths.data_dir,
     };
     let mut fetched = pages.next(c).await?;
     while let Some((emails, not_found)) = fetched.take() {
@@ -867,6 +869,8 @@ struct HeaderPages<'a> {
     ids: &'a [String],
     position: usize,
     size: usize,
+    account_id: i64,
+    data_dir: &'a std::path::Path,
 }
 
 impl HeaderPages<'_> {
@@ -877,9 +881,18 @@ impl HeaderPages<'_> {
     async fn next(&mut self, c: &ConnectedClient) -> Result<Option<(Vec<Email>, Vec<String>)>> {
         while self.position < self.ids.len() {
             let end = self.ids.len().min(self.position + self.size);
+            let started = std::time::Instant::now();
             match fetch_headers(c, &self.ids[self.position..end]).await {
                 Ok(page) => {
+                    let count = page.0.len();
                     self.position = end;
+                    crate::sync::engine::log_sync_batch(
+                        self.data_dir,
+                        "jmap header",
+                        self.account_id,
+                        count,
+                        started.elapsed(),
+                    );
                     return Ok(Some(page));
                 }
                 Err(error) if client::is_timeout(&error) && end - self.position > 1 => {
@@ -2718,38 +2731,317 @@ async fn body_session<'a>(
     Ok(session.as_ref().expect("the session was connected above"))
 }
 
-/// Download these JMAP messages on one connection. A message that is already
-/// cached or already being fetched is skipped. One failure does not stop the
-/// rest; the connection is opened again for the next message.
+/// How many messages one body `Email/get` asks for. The session's
+/// `maxObjectsInGet` can lower this. Text and HTML come back in that same
+/// call (`bodyValues`), so a backfill does not download one blob per message.
+const BODY_GET_BATCH: usize = 200;
+/// Cap each returned body. A huge message is truncated by the server and
+/// still stored, so one batch stays a single response.
+const MAX_BODY_VALUE_BYTES: usize = 256 * 1024;
+
+#[derive(Clone)]
+struct BodyTarget {
+    message_id: i64,
+    remote_id: String,
+    thread_id: i64,
+}
+
+struct PreparedBody {
+    message_id: i64,
+    thread_id: i64,
+    text: Option<String>,
+    html: Option<String>,
+    has_attachments: bool,
+    snippet: Option<String>,
+}
+
+/// Store text and HTML for these JMAP messages with batched `Email/get`
+/// calls. A message that is already cached or already being fetched is
+/// skipped. One failed batch does not stop the rest. Opening a message whose
+/// text is already stored reads SQLite; the raw blob is still fetched on
+/// demand when a part needs it.
 pub(crate) async fn cache_message_bodies(
     ctx: &crate::sync::engine::SyncCtx,
     config: &AccountConfig,
     message_ids: &[i64],
 ) -> Vec<(i64, std::result::Result<(), String>)> {
-    let mut session = None;
-    let mut results = Vec::new();
-    for message_id in message_ids.iter().copied() {
-        let claimed = ctx
-            .db
-            .write(move |conn| repo::messages::begin_body_fetch(conn, message_id))
-            .await
-            .unwrap_or(false);
-        if !claimed {
-            continue;
+    let requested = message_ids.to_vec();
+    let targets = match ctx
+        .db
+        .read(move |conn| body_targets(conn, &requested))
+        .await
+    {
+        Ok(targets) => targets,
+        Err(error) => {
+            return message_ids
+                .iter()
+                .copied()
+                .map(|id| (id, Err(error.to_string())))
+                .collect();
         }
-        match fetch_body(ctx, config, &mut session, message_id).await {
-            Ok(()) => results.push((message_id, Ok(()))),
+    };
+    let ids = targets
+        .iter()
+        .map(|target| target.message_id)
+        .collect::<Vec<_>>();
+    let claimed = ctx
+        .db
+        .write(move |conn| repo::messages::begin_body_fetches(conn, &ids))
+        .await
+        .unwrap_or_default();
+    let claimed = claimed.into_iter().collect::<HashSet<_>>();
+    let targets = targets
+        .into_iter()
+        .filter(|target| claimed.contains(&target.message_id))
+        .collect::<Vec<_>>();
+    if targets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut session = None;
+    let mut pending: std::collections::VecDeque<Vec<BodyTarget>> = targets
+        .chunks(BODY_GET_BATCH)
+        .map(<[BodyTarget]>::to_vec)
+        .collect();
+    let mut results = Vec::new();
+    while let Some(chunk) = pending.pop_front() {
+        let remote_ids = chunk
+            .iter()
+            .map(|target| target.remote_id.clone())
+            .collect::<Vec<_>>();
+        let started = std::time::Instant::now();
+        let fetched = {
+            let connected = match body_session(ctx, config, &mut session).await {
+                Ok(connected) => connected,
+                Err(error) => {
+                    fail_body_batch(ctx, &chunk, &error.to_string(), &mut results).await;
+                    session = None;
+                    continue;
+                }
+            };
+            let limit = max_objects_in_get(connected).min(chunk.len());
+            if limit < chunk.len() {
+                let mut rest = chunk;
+                let later = rest.split_off(limit);
+                pending.push_front(later);
+                pending.push_front(rest);
+                continue;
+            }
+            fetch_body_values(connected, &remote_ids).await
+        };
+        match fetched {
+            Ok(emails) => {
+                let stored = store_body_values(ctx, config.id, &chunk, emails).await;
+                let elapsed = started.elapsed();
+                match stored {
+                    Ok((saved, missing)) => {
+                        crate::sync::engine::log_sync_batch(
+                            &ctx.paths.data_dir,
+                            "jmap body",
+                            config.id,
+                            saved.len(),
+                            elapsed,
+                        );
+                        for id in saved {
+                            results.push((id, Ok(())));
+                        }
+                        for id in missing {
+                            results.push((
+                                id,
+                                Err("the server no longer has this message".to_owned()),
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        fail_body_batch(ctx, &chunk, &error.to_string(), &mut results).await;
+                    }
+                }
+            }
+            Err(error) if client::is_timeout(&error) && chunk.len() > 1 => {
+                let mut rest = chunk;
+                let later = rest.split_off(rest.len() / 2);
+                pending.push_front(later);
+                pending.push_front(rest);
+            }
             Err(error) => {
                 session = None;
-                let _ = ctx
-                    .db
-                    .write(move |conn| repo::messages::cancel_body_fetch(conn, message_id))
-                    .await;
-                results.push((message_id, Err(error.to_string())));
+                let message = client::map_error(error).to_string();
+                fail_body_batch(ctx, &chunk, &message, &mut results).await;
             }
         }
     }
     results
+}
+
+fn body_targets(conn: &rusqlite::Connection, ids: &[i64]) -> Result<Vec<BodyTarget>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT id, jmap_id, thread_id FROM messages
+         WHERE jmap_id IS NOT NULL AND id IN ({marks})"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter()), |row| {
+            Ok(BodyTarget {
+                message_id: row.get(0)?,
+                remote_id: row.get(1)?,
+                thread_id: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+async fn fetch_body_values(c: &ConnectedClient, ids: &[String]) -> jmap_client::Result<Vec<Email>> {
+    let mut request = c.request();
+    request
+        .get_email()
+        .account_id(&c.account_id)
+        .ids(ids.iter().cloned())
+        .properties([
+            EmailProperty::Id,
+            EmailProperty::TextBody,
+            EmailProperty::HtmlBody,
+            EmailProperty::BodyValues,
+            EmailProperty::Preview,
+            EmailProperty::HasAttachment,
+        ])
+        .arguments()
+        .body_properties([BodyProperty::PartId, BodyProperty::Type])
+        .fetch_text_body_values(true)
+        .fetch_html_body_values(true)
+        .max_body_value_bytes(MAX_BODY_VALUE_BYTES);
+    let mut response: EmailGetResponse = c.send_single(request).await?;
+    Ok(response.take_list())
+}
+
+/// One transaction for the batch. Messages the server left out are released
+/// so a later pass can try them. Returns the stored ids and the ones the
+/// server did not return.
+async fn store_body_values(
+    ctx: &SyncCtx,
+    account_id: i64,
+    chunk: &[BodyTarget],
+    emails: Vec<Email>,
+) -> Result<(Vec<i64>, Vec<i64>)> {
+    let mut by_id = HashMap::new();
+    for email in emails {
+        if let Some(id) = email.id().map(str::to_owned) {
+            by_id.insert(id, email);
+        }
+    }
+    // Decode and sanitize before the write so the transaction is only the
+    // insert, the search rows, and one commit.
+    let mut prepared = Vec::new();
+    let mut missing = Vec::new();
+    for target in chunk {
+        let Some(email) = by_id.get(&target.remote_id) else {
+            missing.push(target.message_id);
+            continue;
+        };
+        let text = joined_body(email, email.text_body());
+        let html =
+            joined_body(email, email.html_body()).map(|html| crate::mime::sanitize_html(&html));
+        let snippet = email
+            .preview()
+            .filter(|preview| !preview.is_empty())
+            .map(str::to_owned)
+            .or_else(|| text.as_deref().map(crate::mime::make_snippet));
+        prepared.push(PreparedBody {
+            message_id: target.message_id,
+            thread_id: target.thread_id,
+            text,
+            html,
+            has_attachments: email.has_attachment(),
+            snippet,
+        });
+    }
+    let (saved, thread_ids, missing) = ctx
+        .db
+        .write(move |conn| {
+            let tx = conn.transaction()?;
+            let mut saved = Vec::new();
+            let mut threads = HashSet::new();
+            for body in &prepared {
+                repo::messages::store_body(
+                    &tx,
+                    body.message_id,
+                    body.text.as_deref(),
+                    body.html.as_deref(),
+                    None,
+                    body.has_attachments,
+                    body.snippet.as_deref(),
+                )?;
+                repo::search::index_message(&tx, body.message_id)?;
+                if body.thread_id > 0 {
+                    threads.insert(body.thread_id);
+                }
+                saved.push(body.message_id);
+            }
+            repo::messages::cancel_body_fetches(&tx, &missing)?;
+            for thread_id in &threads {
+                repo::threads::recompute(&tx, *thread_id)?;
+            }
+            tx.commit()?;
+            Ok((saved, threads.into_iter().collect::<Vec<_>>(), missing))
+        })
+        .await?;
+    if !thread_ids.is_empty() {
+        ctx.bus.emit(CoreEvent::MailUpdated { thread_ids });
+    }
+    if !missing.is_empty() {
+        tracing::debug!(
+            account_id,
+            missing = missing.len(),
+            "JMAP body batch left messages for a later pass"
+        );
+    }
+    Ok((saved, missing))
+}
+
+fn joined_body(
+    email: &Email,
+    parts: Option<&[jmap_client::email::EmailBodyPart]>,
+) -> Option<String> {
+    let mut out = String::new();
+    for part in parts.unwrap_or_default() {
+        let Some(id) = part.part_id() else {
+            continue;
+        };
+        let Some(value) = email.body_value(id) else {
+            continue;
+        };
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(value.value());
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+async fn fail_body_batch(
+    ctx: &SyncCtx,
+    chunk: &[BodyTarget],
+    error: &str,
+    results: &mut Vec<(i64, std::result::Result<(), String>)>,
+) {
+    let ids = chunk
+        .iter()
+        .map(|target| target.message_id)
+        .collect::<Vec<_>>();
+    let cancel = ids.clone();
+    let _ = ctx
+        .db
+        .write(move |conn| repo::messages::cancel_body_fetches(conn, &cancel))
+        .await;
+    for id in ids {
+        results.push((id, Err(error.to_owned())));
+    }
 }
 
 async fn fetch_body(

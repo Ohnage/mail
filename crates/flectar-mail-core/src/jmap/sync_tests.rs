@@ -241,8 +241,9 @@ impl MockJmap {
             if stream.read_line(&mut line).await.unwrap_or(0) == 0 {
                 return;
             }
-            let get = line.starts_with("GET ");
-            let download = line.starts_with("GET /download/");
+            let request_line = line.clone();
+            let get = request_line.starts_with("GET ");
+            let download = request_line.starts_with("GET /download/");
             let mut length = 0;
             loop {
                 line.clear();
@@ -264,6 +265,12 @@ impl MockJmap {
             }
             let mut status = "200 OK";
             let mut hold = Duration::ZERO;
+            if download {
+                calls.lock().unwrap().push((
+                    "Blob/download".to_owned(),
+                    json!({ "line": request_line.trim() }),
+                ));
+            }
             let response = if download {
                 "From: sender@mail.example\r\nSubject: Conversation\r\n\r\nBody\r\n".to_owned()
             } else if get {
@@ -361,12 +368,40 @@ impl MockJmap {
                 }) {
                     return Err(json!({"type": "serverFail"}));
                 }
+                let fetch_text =
+                    args.get("fetchTextBodyValues").and_then(Value::as_bool) == Some(true);
+                let fetch_html =
+                    args.get("fetchHTMLBodyValues").and_then(Value::as_bool) == Some(true);
                 let mut list = Vec::new();
                 let mut not_found = Vec::new();
                 for id in ids {
                     match self.emails.iter().find(|email| &email["id"] == id) {
                         Some(email) if !self.missing.iter().any(|missing| id == missing) => {
-                            list.push(email)
+                            let mut email = email.clone();
+                            if fetch_text || fetch_html {
+                                let label = id.as_str().unwrap_or("");
+                                let mut bodies = json!({});
+                                if fetch_text {
+                                    email["textBody"] =
+                                        json!([{ "partId": "t", "type": "text/plain" }]);
+                                    bodies["t"] = json!({
+                                        "value": format!("Plain {label}"),
+                                        "isEncodingProblem": false,
+                                        "isTruncated": false
+                                    });
+                                }
+                                if fetch_html {
+                                    email["htmlBody"] =
+                                        json!([{ "partId": "h", "type": "text/html" }]);
+                                    bodies["h"] = json!({
+                                        "value": format!("<p>{label}</p>"),
+                                        "isEncodingProblem": false,
+                                        "isTruncated": false
+                                    });
+                                }
+                                email["bodyValues"] = bodies;
+                            }
+                            list.push(email);
                         }
                         _ => not_found.push(id),
                     }
@@ -1448,6 +1483,9 @@ async fn one_connection_carries_every_request_of_a_session() {
     // The state request, the query and six header pages.
     assert_eq!(mock.calls("Email/get").len(), 7);
     assert_eq!(mock.connections.load(Ordering::SeqCst), connected + 1);
+    let log = std::fs::read_to_string(ctx.paths.data_dir.join("sync.log")).unwrap();
+    assert!(log.contains("jmap header batch"));
+    assert!(log.contains("messages_per_second="));
     mock.task.abort();
 }
 
@@ -1575,5 +1613,129 @@ async fn submission_uses_the_server_sent_role_and_creates_a_missing_drafts_mailb
         })
         .await
         .unwrap();
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn body_prefetch_uses_one_email_get_per_batch() {
+    let (_dir, ctx, mut config) = fixture().await;
+    let count = BODY_GET_BATCH + 50;
+    let mock = MockJmap {
+        emails: (0..count)
+            .map(|n| email(&format!("email-{n}"), &format!("thread-{n}")))
+            .collect(),
+        max_objects_in_get: 1_000,
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+    config.jmap_url = mock.connected.base_url.clone();
+    credentials::store_async(
+        ctx.credentials.clone(),
+        config.id,
+        Slot::Password,
+        "example-password".into(),
+    )
+    .await
+    .unwrap();
+    ctx.db
+        .write(move |conn| {
+            for n in 0..count {
+                let (_thread, message) = crate::db::testutil::seed_message(
+                    conn,
+                    "sender@mail.example",
+                    "Conversation",
+                    false,
+                );
+                repo::messages::set_jmap_remote(
+                    conn,
+                    message,
+                    &format!("email-{n}"),
+                    Some(&format!("blob-email-{n}")),
+                )?;
+            }
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let ids = ctx
+        .db
+        .read(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id FROM messages WHERE jmap_id IS NOT NULL ORDER BY jmap_id")?;
+            Ok(stmt
+                .query_map([], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(ids.len(), count);
+
+    let started = std::time::Instant::now();
+    let results = cache_message_bodies(&ctx, &config, &ids).await;
+    let elapsed = started.elapsed();
+    // A local mock has no server read time. This guards the client and the
+    // database: one blob download per message cannot finish 250 bodies this fast.
+    assert!(
+        elapsed.as_millis() < 5_000,
+        "body prefetch took {elapsed:?}"
+    );
+
+    assert_eq!(results.len(), count);
+    assert!(results.iter().all(|(_, result)| result.is_ok()));
+    let mut sizes = mock
+        .calls("Email/get")
+        .iter()
+        .map(|call| {
+            assert_eq!(call["fetchTextBodyValues"], true);
+            assert_eq!(call["fetchHTMLBodyValues"], true);
+            assert!(
+                call["properties"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|property| property == "bodyValues")
+            );
+            call["ids"].as_array().unwrap().len()
+        })
+        .collect::<Vec<_>>();
+    sizes.sort_unstable();
+    assert_eq!(sizes, vec![50, BODY_GET_BATCH]);
+    assert!(mock.calls("Blob/download").is_empty());
+
+    ctx.db
+        .read(move |conn| {
+            let cached: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE body_state = 'cached'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(cached, count as i64);
+            let text: String = conn.query_row(
+                "SELECT text_body FROM message_bodies b
+                 JOIN messages m ON m.id = b.message_id
+                 WHERE m.jmap_id = 'email-0'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(text, "Plain email-0");
+            let html: String = conn.query_row(
+                "SELECT html_body FROM message_bodies b
+                 JOIN messages m ON m.id = b.message_id
+                 WHERE m.jmap_id = 'email-0'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(html, "<p>email-0</p>");
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let log = std::fs::read_to_string(ctx.paths.data_dir.join("sync.log")).unwrap();
+    assert!(log.contains("jmap body batch"));
+    assert!(log.contains(&format!("messages={BODY_GET_BATCH}")));
+    assert!(log.contains("messages_per_second="));
     mock.task.abort();
 }

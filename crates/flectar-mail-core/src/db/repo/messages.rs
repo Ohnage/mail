@@ -749,6 +749,27 @@ pub fn begin_body_fetch(conn: &Connection, id: i64) -> Result<bool> {
     )? != 0)
 }
 
+/// Claim every still-uncached id in one write. Ids already fetching or cached
+/// are left out of the returned list.
+pub fn begin_body_fetches(conn: &Connection, ids: &[i64]) -> Result<Vec<i64>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let marks = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "UPDATE messages SET body_state = 'fetching'
+         WHERE body_state = 'none' AND id IN ({marks})
+         RETURNING id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let claimed = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter()), |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(claimed)
+}
+
 /// Release a body-fetch claim only if it has not completed in the meantime.
 pub fn cancel_body_fetch(conn: &Connection, id: i64) -> Result<()> {
     conn.execute(
@@ -756,6 +777,22 @@ pub fn cancel_body_fetch(conn: &Connection, id: i64) -> Result<()> {
          WHERE id = ?1 AND body_state = 'fetching'",
         [id],
     )?;
+    Ok(())
+}
+
+/// Release every claim in `ids` that is still in flight, in one write.
+pub fn cancel_body_fetches(conn: &Connection, ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let marks = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "UPDATE messages SET body_state = 'none'
+         WHERE body_state = 'fetching' AND id IN ({marks})"
+    );
+    conn.execute(&sql, rusqlite::params_from_iter(ids.iter()))?;
     Ok(())
 }
 

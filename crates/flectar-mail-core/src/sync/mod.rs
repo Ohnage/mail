@@ -2,6 +2,7 @@ pub(crate) mod body_backfill;
 pub mod engine;
 pub mod folder_map;
 pub mod gmail;
+pub(crate) mod gmail_pace;
 pub(crate) mod ingest;
 pub(crate) mod local;
 pub(crate) mod pop3;

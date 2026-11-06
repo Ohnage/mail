@@ -221,7 +221,21 @@ export component EmailComposer inherits Rectangle {
             request-close => { root.request-close(); }
         }
 
+        SettingsSelectRow {
+            visible: AccountMailPreferences.composer-group-names.length > 0;
+            compact: root.compact;
+            title: @tr("Group");
+            description: "";
+            choices: AccountMailPreferences.composer-group-names;
+            selected-index: AccountMailPreferences.composer-group-index;
+            title-color: root.title-color; description-color: root.secondary-color;
+            selected(index, value) => {
+                AccountMailPreferences.composer-group-changed(index);
+            }
+        }
+
         ComposerFromRow {
+            visible: AccountMailPreferences.composer-group-names.length == 0;
             accounts: root.accounts;
             selected-account-id <=> root.selected-account-id;
             from-label <=> root.from-label;

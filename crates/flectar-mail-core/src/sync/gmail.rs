@@ -119,6 +119,27 @@ impl GmailApi {
         Ok(Self { http, ctx, account })
     }
 
+    /// Wait until this account's shared Gmail budget allows `units`.
+    /// JMAP accounts never reach this.
+    async fn pace(&self, units: u32) {
+        loop {
+            let wait = super::gmail_pace::reserve_delay_ms(self.account.id, units, now_ms());
+            if wait <= 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(
+                u64::try_from(wait).unwrap_or(u64::MAX),
+            ))
+            .await;
+        }
+    }
+
+    fn observe_quota(&self, error: &CoreError) {
+        if let Some(notice) = super::gmail_pace::quota_notice(&error.to_string(), None, now_ms()) {
+            super::gmail_pace::note_account_quota(self.account.id, now_ms(), notice);
+        }
+    }
+
     async fn token(&self) -> Result<String> {
         self.ctx
             .tokens
@@ -127,7 +148,13 @@ impl GmailApi {
     }
 
     async fn get_json(&self, url: &str) -> Result<Value> {
+        let units = if url.contains("/messages/") || url.contains("/threads/") {
+            super::gmail_pace::MESSAGES_GET_UNITS
+        } else {
+            5
+        };
         for attempt in 0..2 {
+            self.pace(units).await;
             let token = self.token().await?;
             let response = self
                 .http
@@ -141,6 +168,9 @@ impl GmailApi {
                 self.ctx.tokens.invalidate(self.account.id).await;
                 continue;
             }
+            if let Err(error) = &result {
+                self.observe_quota(error);
+            }
             return result;
         }
         Err(CoreError::NeedsReauth)
@@ -148,6 +178,7 @@ impl GmailApi {
 
     async fn post_json(&self, url: &str, body: &Value) -> Result<Value> {
         for attempt in 0..2 {
+            self.pace(5).await;
             let token = self.token().await?;
             let response = self
                 .http
@@ -162,6 +193,9 @@ impl GmailApi {
                 self.ctx.tokens.invalidate(self.account.id).await;
                 continue;
             }
+            if let Err(error) = &result {
+                self.observe_quota(error);
+            }
             return result;
         }
         Err(CoreError::NeedsReauth)
@@ -169,6 +203,7 @@ impl GmailApi {
 
     async fn put_json(&self, url: &str, body: &Value) -> Result<Value> {
         for attempt in 0..2 {
+            self.pace(5).await;
             let token = self.token().await?;
             let response = self
                 .http
@@ -183,6 +218,9 @@ impl GmailApi {
                 self.ctx.tokens.invalidate(self.account.id).await;
                 continue;
             }
+            if let Err(error) = &result {
+                self.observe_quota(error);
+            }
             return result;
         }
         Err(CoreError::NeedsReauth)
@@ -190,6 +228,7 @@ impl GmailApi {
 
     async fn delete_json(&self, url: &str) -> Result<Value> {
         for attempt in 0..2 {
+            self.pace(5).await;
             let token = self.token().await?;
             let response = self
                 .http
@@ -202,6 +241,9 @@ impl GmailApi {
             if attempt == 0 && matches!(&result, Err(CoreError::NeedsReauth)) {
                 self.ctx.tokens.invalidate(self.account.id).await;
                 continue;
+            }
+            if let Err(error) = &result {
+                self.observe_quota(error);
             }
             return result;
         }
@@ -345,7 +387,10 @@ impl GmailApi {
         }
         let boundary = format!("flectar_{:016x}_{}", rand::random::<u64>(), now_ms());
         let body = build_batch_body(ids, &boundary);
+        let units = super::gmail_pace::MESSAGES_GET_UNITS
+            .saturating_mul(u32::try_from(ids.len()).unwrap_or(u32::MAX));
         for attempt in 0..2 {
+            self.pace(units).await;
             let token = self.token().await?;
             let response = self
                 .http
@@ -379,6 +424,9 @@ impl GmailApi {
             if attempt == 0 && matches!(&result, Err(CoreError::NeedsReauth)) {
                 self.ctx.tokens.invalidate(self.account.id).await;
                 continue;
+            }
+            if let Err(error) = &result {
+                self.observe_quota(error);
             }
             return result;
         }
@@ -771,6 +819,13 @@ fn network_error(error: reqwest::Error) -> CoreError {
 
 async fn google_json(response: reqwest::Response) -> Result<Value> {
     let status = response.status();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     let body = http_body::text(response, MAX_GMAIL_JSON_BODY_BYTES, "Gmail JSON response").await?;
     if status.is_success() {
         if status == StatusCode::NO_CONTENT || body.trim().is_empty() {
@@ -789,7 +844,7 @@ async fn google_json(response: reqwest::Response) -> Result<Value> {
         .and_then(Value::as_str)
         .unwrap_or_else(|| status.canonical_reason().unwrap_or("Gmail request failed"));
     if status == StatusCode::TOO_MANY_REQUESTS || google_quota_reason(reason) {
-        return Err(CoreError::Network(format!("Gmail rate limited: {message}")));
+        return Err(quota_error(message, retry_after.as_deref()));
     }
     if status == StatusCode::UNAUTHORIZED
         || (status == StatusCode::FORBIDDEN
@@ -807,6 +862,15 @@ async fn google_json(response: reqwest::Response) -> Result<Value> {
         return Err(CoreError::Network(format!("Gmail {status}: {message}")));
     }
     Err(CoreError::Other(format!("Gmail {status}: {message}")))
+}
+
+fn quota_error(message: &str, retry_after: Option<&str>) -> CoreError {
+    match retry_after.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => {
+            CoreError::Network(format!("Gmail rate limited: {message} retry-after={value}"))
+        }
+        None => CoreError::Network(format!("Gmail rate limited: {message}")),
+    }
 }
 
 fn google_quota_reason(reason: &str) -> bool {
@@ -899,9 +963,16 @@ fn parse_batch_response(body: &str, boundary: &str, expected_parts: usize) -> Re
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .unwrap_or_else(|| status.to_string());
+            let retry_after = headers.lines().find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.trim()
+                    .eq_ignore_ascii_case("retry-after")
+                    .then(|| value.trim())
+                    .filter(|value| !value.is_empty())
+            });
             return Err(
                 if status == StatusCode::TOO_MANY_REQUESTS || google_quota_reason(reason) {
-                    CoreError::Network(format!("Gmail batch rate limited: {message}"))
+                    quota_error(&format!("batch {message}"), retry_after)
                 } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
                     CoreError::NeedsReauth
                 } else if status.is_server_error() {
@@ -3970,8 +4041,18 @@ async fn run_actor(
                 for waiter in waiters.drain(..) {
                     let _ = waiter.send(Err(message.clone()));
                 }
-                let delay = Duration::from_secs(backoff);
-                backoff = (backoff * 2).min(300);
+                let delay = if let Some(notice) =
+                    super::gmail_pace::quota_notice(&message, None, now_ms())
+                {
+                    let until = super::gmail_pace::pause_until_ms(now_ms(), notice);
+                    Duration::from_millis(
+                        u64::try_from((until - now_ms()).max(0)).unwrap_or(60_000),
+                    )
+                } else {
+                    let delay = Duration::from_secs(backoff);
+                    backoff = (backoff * 2).min(300);
+                    delay
+                };
                 (delay, false)
             }
         };
@@ -4208,6 +4289,14 @@ mod tests {
             parse_batch_response(body, "response", 1),
             Err(CoreError::Network(_))
         ));
+        let paced = concat!(
+            "--response\r\nContent-Type: application/http\r\n\r\n",
+            "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 120\r\nContent-Type: application/json\r\n\r\n",
+            "{\"error\":{\"message\":\"Units per minute per user\",\"errors\":[{\"reason\":\"userRateLimitExceeded\"}]}}\r\n",
+            "--response--\r\n"
+        );
+        let error = parse_batch_response(paced, "response", 1).unwrap_err();
+        assert!(error.to_string().contains("retry-after=120"), "{error}");
     }
 
     #[test]

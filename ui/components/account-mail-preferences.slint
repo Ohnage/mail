@@ -74,6 +74,9 @@ export global AccountMailPreferences {
     callback key-action(string);
     callback composer-reset;
     callback composer-account-changed(int);
+    callback composer-group-changed(int);
+    in-out property <[string]> composer-group-names;
+    in-out property <int> composer-group-index: 0;
     callback composer-signature(int);
     in-out property <[string]> composer-signature-names;
     in-out property <int> composer-signature-index: 0;

@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-06 20:14+0000\n"
+"POT-Creation-Date: 2026-11-06 22:24+0000\n"
 "PO-Revision-Date: 2026-10-14 08:37+0000\n"
 "Last-Translator: Cyril Hansen <cyril.hansen@gmail.com>\n"
 "Language-Team: French <https://translate.flectar.com/projects/flectar-mail/"
@@ -1915,7 +1915,9 @@ msgstr "Échec de la rédaction du message : {}"
 
 #: ui/app.slint:575
 msgid "Compose failed: {}. The message is still in this window."
-msgstr "Échec de la rédaction du message : {}. Le message est toujours dans cette fenêtre."
+msgstr ""
+"Échec de la rédaction du message : {}. Le message est toujours dans cette "
+"fenêtre."
 
 #: ui/app.slint:576
 #, fuzzy
@@ -2301,75 +2303,75 @@ msgstr ""
 msgid "Add CalDAV calendar"
 msgstr ""
 
-#: ui/components/account-mail-preferences.slint:128
+#: ui/components/account-mail-preferences.slint:131
 #, fuzzy
 msgid "Server allows any address at this domain"
 msgstr "Le serveur autorise toutes les adresses de ce domaine"
 
-#: ui/components/account-mail-preferences.slint:131
+#: ui/components/account-mail-preferences.slint:134
 #, fuzzy
 msgid "Awaiting verification by the provider; cannot be selected yet"
 msgstr ""
 "Vérification par le fournisseur en attente ; sélection impossible pour le "
 "moment"
 
-#: ui/components/account-mail-preferences.slint:134
+#: ui/components/account-mail-preferences.slint:137
 #, fuzzy
 msgid "The server refused the last message from this address: {}"
 msgstr ""
 "Le serveur a refusé le dernier message envoyé depuis cette adresse : {}"
 
-#: ui/components/account-mail-preferences.slint:134
+#: ui/components/account-mail-preferences.slint:137
 #, fuzzy
 msgid "The server refused the last message from this address"
 msgstr "Le serveur a refusé le dernier message envoyé depuis cette adresse"
 
-#: ui/components/account-mail-preferences.slint:137
+#: ui/components/account-mail-preferences.slint:140
 #, fuzzy
 msgid "Sign-in address · replies go to {}"
 msgstr "Adresse de connexion · réponses envoyées à {}"
 
-#: ui/components/account-mail-preferences.slint:137
+#: ui/components/account-mail-preferences.slint:140
 #, fuzzy
 msgid "Sign-in address"
 msgstr "Adresse de connexion"
 
-#: ui/components/account-mail-preferences.slint:141
+#: ui/components/account-mail-preferences.slint:144
 #, fuzzy
 msgid "Added by you · accepted by the server · replies go to {}"
 msgstr "Ajoutée par vous · acceptée par le serveur · réponses envoyées à {}"
 
-#: ui/components/account-mail-preferences.slint:141
+#: ui/components/account-mail-preferences.slint:144
 #, fuzzy
 msgid "Added by you · accepted by the server"
 msgstr "Ajoutée par vous · acceptée par le serveur"
 
-#: ui/components/account-mail-preferences.slint:143
+#: ui/components/account-mail-preferences.slint:146
 #, fuzzy
 msgid "Added by you · not used yet · replies go to {}"
 msgstr "Ajoutée par vous · pas encore utilisée · réponses envoyées à {}"
 
-#: ui/components/account-mail-preferences.slint:143
+#: ui/components/account-mail-preferences.slint:146
 #, fuzzy
 msgid "Added by you · not used yet"
 msgstr "Ajoutée par vous · pas encore utilisée"
 
-#: ui/components/account-mail-preferences.slint:145
+#: ui/components/account-mail-preferences.slint:148
 #, fuzzy
 msgid "Provided by the server · replies go to {}"
 msgstr "Fournie par le serveur · réponses envoyées à {}"
 
-#: ui/components/account-mail-preferences.slint:145
+#: ui/components/account-mail-preferences.slint:148
 #, fuzzy
 msgid "Provided by the server"
 msgstr "Fournie par le serveur"
 
-#: ui/components/account-mail-preferences.slint:149
+#: ui/components/account-mail-preferences.slint:152
 #, fuzzy
 msgid "Sender identities, signatures & OpenPGP"
 msgstr "Identités d’expéditeur, signatures et OpenPGP"
 
-#: ui/components/account-mail-preferences.slint:150
+#: ui/components/account-mail-preferences.slint:153
 #, fuzzy
 msgid ""
 "Choose an account to manage its sender identity, signature, and message "
@@ -2378,53 +2380,53 @@ msgstr ""
 "Choisissez un compte pour gérer l’identité d’expéditeur, la signature et la "
 "protection des messages."
 
-#: ui/components/account-mail-preferences.slint:161
+#: ui/components/account-mail-preferences.slint:164
 msgid "Signatures"
 msgstr "Signatures"
 
-#: ui/components/account-mail-preferences.slint:162
+#: ui/components/account-mail-preferences.slint:165
 #, fuzzy
 msgid "OpenPGP"
 msgstr "OpenPGP"
 
-#: ui/components/account-mail-preferences.slint:167
+#: ui/components/account-mail-preferences.slint:170
 #, fuzzy
 msgid "Default sender identity"
 msgstr "Identité d’expéditeur par défaut"
 
-#: ui/components/account-mail-preferences.slint:167
+#: ui/components/account-mail-preferences.slint:170
 #, fuzzy
 msgid "Preselected for new messages. Your sign-in address is unchanged."
 msgstr ""
 "Présélectionnée pour les nouveaux messages. Votre adresse de connexion ne "
 "change pas."
 
-#: ui/components/account-mail-preferences.slint:179
+#: ui/components/account-mail-preferences.slint:182
 #, fuzzy
 msgid "Save sender default"
 msgstr "Enregistrer l’expéditeur par défaut"
 
-#: ui/components/account-mail-preferences.slint:180
+#: ui/components/account-mail-preferences.slint:183
 #, fuzzy
 msgid "Refresh sender identities"
 msgstr "Actualiser les identités d’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:185
+#: ui/components/account-mail-preferences.slint:188
 msgid "Search addresses"
 msgstr ""
 
-#: ui/components/account-mail-preferences.slint:207
+#: ui/components/account-mail-preferences.slint:210
 #, fuzzy
 msgid "Edit"
 msgstr "Modifier"
 
-#: ui/components/account-mail-preferences.slint:208
+#: ui/components/account-mail-preferences.slint:211
 #: ui/dialogs/settings-dialog.slint:1177 ui/views/contacts-view.slint:608
 #, fuzzy
 msgid "Remove"
 msgstr "Retirer"
 
-#: ui/components/account-mail-preferences.slint:213
+#: ui/components/account-mail-preferences.slint:216
 #, fuzzy
 msgid ""
 "Gmail decides which addresses you can send from. Add an address in Gmail "
@@ -2434,17 +2436,17 @@ msgstr ""
 "adresse dans les paramètres Gmail, sous Comptes › Envoyer des e-mails en "
 "tant que, puis actualisez les identités d’expéditeur."
 
-#: ui/components/account-mail-preferences.slint:216
+#: ui/components/account-mail-preferences.slint:219
 #, fuzzy
 msgid "Edit sender address"
 msgstr "Modifier l’adresse d’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:216
+#: ui/components/account-mail-preferences.slint:219
 #, fuzzy
 msgid "Add a sender address"
 msgstr "Ajouter une adresse d’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:220
+#: ui/components/account-mail-preferences.slint:223
 #, fuzzy
 msgid ""
 "Your server lets you send from any address at the domains shown as "
@@ -2454,7 +2456,7 @@ msgstr ""
 "des domaines indiqués par des caractères génériques. Ajoutez les adresses "
 "que vous souhaitez utiliser."
 
-#: ui/components/account-mail-preferences.slint:221
+#: ui/components/account-mail-preferences.slint:224
 #, fuzzy
 msgid ""
 "Add an alias or another address your mail server lets you send from. The "
@@ -2465,48 +2467,48 @@ msgstr ""
 "Le serveur décide lors de l’envoi ; Flectar indique s’il a accepté le "
 "dernier message."
 
-#: ui/components/account-mail-preferences.slint:223
+#: ui/components/account-mail-preferences.slint:226
 #: ui/dialogs/settings-dialog.slint:3162 ui/views/onboarding-view.slint:267
 #, fuzzy
 msgid "Email address"
 msgstr "Adresse e-mail"
 
-#: ui/components/account-mail-preferences.slint:223
+#: ui/components/account-mail-preferences.slint:226
 #, fuzzy
 msgid "alias@example.com"
 msgstr "alias@example.com"
 
-#: ui/components/account-mail-preferences.slint:224
+#: ui/components/account-mail-preferences.slint:227
 #, fuzzy
 msgid "Sender name"
 msgstr "Nom de l’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:224
+#: ui/components/account-mail-preferences.slint:227
 #, fuzzy
 msgid "Name shown to recipients (optional)"
 msgstr "Nom affiché aux destinataires (facultatif)"
 
-#: ui/components/account-mail-preferences.slint:225
+#: ui/components/account-mail-preferences.slint:228
 #, fuzzy
 msgid "Reply-to address"
 msgstr "Adresse de réponse"
 
-#: ui/components/account-mail-preferences.slint:225
+#: ui/components/account-mail-preferences.slint:228
 #, fuzzy
 msgid "Where replies should go (optional)"
 msgstr "Adresse à laquelle envoyer les réponses (facultatif)"
 
-#: ui/components/account-mail-preferences.slint:229
+#: ui/components/account-mail-preferences.slint:232
 #, fuzzy
 msgid "Save sender address"
 msgstr "Enregistrer l’adresse d’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:229
+#: ui/components/account-mail-preferences.slint:232
 #, fuzzy
 msgid "Add sender address"
 msgstr "Ajouter l’adresse d’expéditeur"
 
-#: ui/components/account-mail-preferences.slint:230
+#: ui/components/account-mail-preferences.slint:233
 #: ui/dialogs/folder-dialog.slint:138 ui/dialogs/oauth-setup-dialog.slint:126
 #: ui/dialogs/settings-dialog.slint:1282 ui/dialogs/settings-dialog.slint:2438
 #: ui/dialogs/settings-dialog.slint:3238 ui/views/contacts-view.slint:604
@@ -2515,32 +2517,32 @@ msgstr "Ajouter l’adresse d’expéditeur"
 msgid "Cancel"
 msgstr "Annuler"
 
-#: ui/components/account-mail-preferences.slint:235
+#: ui/components/account-mail-preferences.slint:238
 #, fuzzy
 msgid "Edit signature"
 msgstr "Modifier la signature"
 
-#: ui/components/account-mail-preferences.slint:235
+#: ui/components/account-mail-preferences.slint:238
 #, fuzzy
 msgid "Saved separately for each account."
 msgstr "Enregistrée séparément pour chaque compte."
 
-#: ui/components/account-mail-preferences.slint:240
+#: ui/components/account-mail-preferences.slint:243
 #, fuzzy
 msgid "New signature"
 msgstr "Nouvelle signature"
 
-#: ui/components/account-mail-preferences.slint:241
+#: ui/components/account-mail-preferences.slint:244
 #, fuzzy
 msgid "Signature name"
 msgstr "Nom de la signature"
 
-#: ui/components/account-mail-preferences.slint:241
+#: ui/components/account-mail-preferences.slint:244
 #, fuzzy
 msgid "Signature name, for example Work"
 msgstr "Nom de la signature, par exemple Professionnel"
 
-#: ui/components/account-mail-preferences.slint:242
+#: ui/components/account-mail-preferences.slint:245
 #, fuzzy
 msgid ""
 "Your name\n"
@@ -2551,7 +2553,7 @@ msgstr ""
 "Fonction · Entreprise\n"
 "Téléphone · Site web"
 
-#: ui/components/account-mail-preferences.slint:243
+#: ui/components/account-mail-preferences.slint:246
 #, fuzzy
 msgid ""
 "Plain text works in every email client. You can format the inserted "
@@ -2560,43 +2562,43 @@ msgstr ""
 "Le texte brut fonctionne dans tous les clients de messagerie. Vous pouvez "
 "mettre en forme la signature insérée dans l’éditeur de message."
 
-#: ui/components/account-mail-preferences.slint:245
+#: ui/components/account-mail-preferences.slint:248
 #, fuzzy
 msgid "Save signature"
 msgstr "Enregistrer la signature"
 
-#: ui/components/account-mail-preferences.slint:246
+#: ui/components/account-mail-preferences.slint:249
 #: ui/views/contacts-view.slint:608
 #, fuzzy
 msgid "Delete"
 msgstr "Supprimer"
 
-#: ui/components/account-mail-preferences.slint:249
+#: ui/components/account-mail-preferences.slint:252
 #, fuzzy
 msgid "New messages"
 msgstr "Nouveaux messages"
 
-#: ui/components/account-mail-preferences.slint:249
+#: ui/components/account-mail-preferences.slint:252
 #, fuzzy
 msgid "Signature inserted when you start a message."
 msgstr "Signature insérée à la création d’un message."
 
-#: ui/components/account-mail-preferences.slint:255
+#: ui/components/account-mail-preferences.slint:258
 #, fuzzy
 msgid "Replies & forwards"
 msgstr "Réponses et transferts"
 
-#: ui/components/account-mail-preferences.slint:255
+#: ui/components/account-mail-preferences.slint:258
 #, fuzzy
 msgid "Placed above the quoted message."
 msgstr "Placée au-dessus du message cité."
 
-#: ui/components/account-mail-preferences.slint:260
+#: ui/components/account-mail-preferences.slint:263
 #, fuzzy
 msgid "Save signature defaults"
 msgstr "Enregistrer les signatures par défaut"
 
-#: ui/components/account-mail-preferences.slint:264
+#: ui/components/account-mail-preferences.slint:267
 #, fuzzy
 msgid ""
 "OpenPGP protects message bodies and attachments. Digital signatures let "
@@ -2605,7 +2607,7 @@ msgstr ""
 "OpenPGP protège le corps des messages et les pièces jointes. Les signatures "
 "numériques permettent aux destinataires de vérifier l’identité du signataire."
 
-#: ui/components/account-mail-preferences.slint:265
+#: ui/components/account-mail-preferences.slint:268
 #, fuzzy
 msgid ""
 "Uses installed GnuPG 2.x and its secure key storage. Passphrases are entered "
@@ -2614,7 +2616,7 @@ msgstr ""
 "Utilise GnuPG 2.x installé et son stockage sécurisé des clés. Les phrases "
 "secrètes sont saisies dans la boîte de déverrouillage de GnuPG."
 
-#: ui/components/account-mail-preferences.slint:265
+#: ui/components/account-mail-preferences.slint:268
 #, fuzzy
 msgid ""
 "OpenPGP is unavailable on this mobile build. Protected accounts cannot send "
@@ -2623,12 +2625,12 @@ msgstr ""
 "OpenPGP n’est pas disponible dans cette version mobile. Les comptes protégés "
 "ne peuvent pas envoyer de messages sans moteur de chiffrement compatible."
 
-#: ui/components/account-mail-preferences.slint:266
+#: ui/components/account-mail-preferences.slint:269
 #, fuzzy
 msgid "Create a new key"
 msgstr "Créer une clé"
 
-#: ui/components/account-mail-preferences.slint:267
+#: ui/components/account-mail-preferences.slint:270
 #, fuzzy
 msgid ""
 "New keys expire in two years. GnuPG asks you to protect the private key with "
@@ -2637,44 +2639,44 @@ msgstr ""
 "Les nouvelles clés expirent au bout de deux ans. GnuPG vous demande de "
 "protéger la clé privée par une phrase secrète."
 
-#: ui/components/account-mail-preferences.slint:268
+#: ui/components/account-mail-preferences.slint:271
 #, fuzzy
 msgid "Your full OpenPGP fingerprint"
 msgstr "Empreinte OpenPGP complète"
 
-#: ui/components/account-mail-preferences.slint:268
+#: ui/components/account-mail-preferences.slint:271
 #, fuzzy
 msgid "Your full OpenPGP key fingerprint"
 msgstr "Empreinte complète de votre clé OpenPGP"
 
-#: ui/components/account-mail-preferences.slint:270
+#: ui/components/account-mail-preferences.slint:273
 #, fuzzy
 msgid "Digitally sign messages"
 msgstr "Signer numériquement les messages"
 
-#: ui/components/account-mail-preferences.slint:270
+#: ui/components/account-mail-preferences.slint:273
 #, fuzzy
 msgid "Proves possession of your private key; does not encrypt the message."
 msgstr "Prouve la possession de votre clé privée ; ne chiffre pas le message."
 
-#: ui/components/account-mail-preferences.slint:275
+#: ui/components/account-mail-preferences.slint:278
 #, fuzzy
 msgid "Require encryption"
 msgstr "Exiger le chiffrement"
 
-#: ui/components/account-mail-preferences.slint:275
+#: ui/components/account-mail-preferences.slint:278
 #, fuzzy
 msgid "Blocks sending unless every recipient has a verified, usable key."
 msgstr ""
 "Bloque l’envoi si chaque destinataire ne dispose pas d’une clé vérifiée et "
 "utilisable."
 
-#: ui/components/account-mail-preferences.slint:279
+#: ui/components/account-mail-preferences.slint:282
 #, fuzzy
 msgid "Verified recipient keys"
 msgstr "Clés vérifiées des destinataires"
 
-#: ui/components/account-mail-preferences.slint:280
+#: ui/components/account-mail-preferences.slint:283
 #, fuzzy
 msgid ""
 "Compare fingerprints with recipients through a separate trusted channel, "
@@ -2685,37 +2687,37 @@ msgstr ""
 "puis saisissez une ligne adresse=empreinte pour chacun. L’importation d’une "
 "clé ne suffit pas à la vérifier."
 
-#: ui/components/account-mail-preferences.slint:281
+#: ui/components/account-mail-preferences.slint:284
 #, fuzzy
 msgid "person@example.org=FULL_FINGERPRINT"
 msgstr "personne@example.org=EMPREINTE_COMPLÈTE"
 
-#: ui/components/account-mail-preferences.slint:282
+#: ui/components/account-mail-preferences.slint:285
 #, fuzzy
 msgid "Save OpenPGP settings"
 msgstr "Enregistrer les paramètres OpenPGP"
 
-#: ui/components/account-mail-preferences.slint:284
+#: ui/components/account-mail-preferences.slint:287
 #, fuzzy
 msgid "Import key"
 msgstr "Importer une clé"
 
-#: ui/components/account-mail-preferences.slint:285
+#: ui/components/account-mail-preferences.slint:288
 #, fuzzy
 msgid "Export public key"
 msgstr "Exporter la clé publique"
 
-#: ui/components/account-mail-preferences.slint:286
+#: ui/components/account-mail-preferences.slint:289
 #, fuzzy
 msgid "Show keys"
 msgstr "Afficher les clés"
 
-#: ui/components/account-mail-preferences.slint:294
+#: ui/components/account-mail-preferences.slint:297
 #, fuzzy
 msgid "Open message file (.eml)"
 msgstr "Ouvrir un fichier de message (.eml)"
 
-#: ui/components/account-mail-preferences.slint:296
+#: ui/components/account-mail-preferences.slint:299
 #, fuzzy
 msgid ""
 "Manage expiry, revocation and private-key backups in GnuPG. Only public keys "
@@ -2724,7 +2726,7 @@ msgstr ""
 "Gérez l’expiration, la révocation et les sauvegardes des clés privées dans "
 "GnuPG. Seules les clés publiques sont exportées ici."
 
-#: ui/components/account-mail-preferences.slint:297
+#: ui/components/account-mail-preferences.slint:300
 #, fuzzy
 msgid ""
 "Subjects and addresses remain visible. Protected drafts stay on this device. "
@@ -2735,17 +2737,17 @@ msgstr ""
 "sur cet appareil. Les brouillons déjà présents sur le serveur ne sont pas "
 "protégés rétroactivement. Les certificats S/MIME ne sont pas pris en charge."
 
-#: ui/components/account-mail-preferences.slint:300
+#: ui/components/account-mail-preferences.slint:303
 #, fuzzy
 msgid "Working…"
 msgstr "Traitement en cours…"
 
-#: ui/components/account-mail-preferences.slint:312
+#: ui/components/account-mail-preferences.slint:315
 #, fuzzy
 msgid "OpenPGP message"
 msgstr "Message OpenPGP"
 
-#: ui/components/account-mail-preferences.slint:315
+#: ui/components/account-mail-preferences.slint:318
 #, fuzzy
 msgid ""
 "Decrypted content is shown as text, without remote content. It is not added "
@@ -2754,12 +2756,12 @@ msgstr ""
 "Le contenu déchiffré est affiché en texte, sans contenu distant. Il n’est ni "
 "indexé pour la recherche ni enregistré dans la base des messages."
 
-#: ui/components/account-mail-preferences.slint:316
+#: ui/components/account-mail-preferences.slint:319
 #, fuzzy
 msgid "Export decrypted message"
 msgstr "Exporter le message déchiffré"
 
-#: ui/components/account-mail-preferences.slint:317
+#: ui/components/account-mail-preferences.slint:320
 #: ui/dialogs/settings-dialog.slint:3138 ui/views/files-view.slint:505
 #: ui/views/files-view.slint:695 ui/window-chrome.slint:201
 #, fuzzy
@@ -3527,22 +3529,26 @@ msgstr "Page {} sur {}"
 msgid "Next page"
 msgstr "Page suivante"
 
-#: ui/components/email-composer.slint:244
+#: ui/components/email-composer.slint:227
+msgid "Group"
+msgstr ""
+
+#: ui/components/email-composer.slint:258
 #, fuzzy
 msgid "From"
 msgstr "De"
 
-#: ui/components/email-composer.slint:245
+#: ui/components/email-composer.slint:259
 #, fuzzy
 msgid "Verified sender identity"
 msgstr "Identité d’expéditeur vérifiée"
 
-#: ui/components/email-composer.slint:271
+#: ui/components/email-composer.slint:285
 #, fuzzy
 msgid "Signature"
 msgstr "Signature"
 
-#: ui/components/email-composer.slint:365
+#: ui/components/email-composer.slint:379
 #, fuzzy
 msgid "Write your message…"
 msgstr "Rédigez votre message…"

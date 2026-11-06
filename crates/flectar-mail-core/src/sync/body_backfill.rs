@@ -204,6 +204,13 @@ async fn download_gmail(
     config: &crate::models::AccountConfig,
     rows: Vec<repo::messages::UncachedRemoteBody>,
 ) -> crate::error::Result<u64> {
+    if super::gmail_pace::shared()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .paused(account_id, now_ms())
+    {
+        return Ok(0);
+    }
     let ids = rows.iter().map(|row| row.message_id).collect::<Vec<_>>();
     let claimed = ctx
         .db
@@ -220,7 +227,18 @@ async fn download_gmail(
     let mut cached = 0u64;
     let mut failed = 0usize;
     let mut sample = String::new();
+    let mut quota = false;
     for group in pending.chunks(GMAIL_CONCURRENCY) {
+        if quota {
+            for row in group {
+                let message_id = row.message_id;
+                let _ = ctx
+                    .db
+                    .write(move |conn| repo::messages::cancel_body_fetch(conn, message_id))
+                    .await;
+            }
+            continue;
+        }
         let mut jobs = tokio::task::JoinSet::new();
         for row in group {
             let ctx = ctx.clone();
@@ -257,6 +275,9 @@ async fn download_gmail(
                     // The message row stays. A 404 postpones this id; it does
                     // not delete mail or mark the body cached.
                     record_failure(ctx, message_id, &detail).await;
+                    if super::gmail_pace::is_quota_message(&detail) {
+                        quota = true;
+                    }
                 }
             }
         }
@@ -336,6 +357,13 @@ async fn record_failure(ctx: &SyncCtx, message_id: i64, detail: &str) {
 /// do not sit at the head of the newest page every minute. The row is kept,
 /// and opening the message can still fetch it immediately.
 pub(crate) fn body_retry_delay_ms(attempts: i64, detail: &str) -> i64 {
+    if super::gmail_pace::is_quota_message(detail) {
+        let notice = super::gmail_pace::quota_notice(detail, None, 0);
+        return notice
+            .map(|notice| super::gmail_pace::pause_until_ms(0, notice))
+            .unwrap_or(60_000)
+            .max(60_000);
+    }
     if repo::sync_failures::is_provider_missing(detail) {
         if attempts <= 0 {
             15 * 60_000
@@ -365,6 +393,17 @@ mod tests {
         assert_eq!(
             body_retry_delay_ms(0, "the server no longer has this message"),
             15 * 60_000
+        );
+        assert_eq!(
+            body_retry_delay_ms(0, "Gmail rate limited: Units per minute per user"),
+            60_000
+        );
+        assert_eq!(
+            body_retry_delay_ms(
+                0,
+                "Gmail rate limited: Units per minute per user retry-after=120"
+            ),
+            120_000
         );
     }
 }

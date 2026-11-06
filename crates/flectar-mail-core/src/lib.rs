@@ -10,6 +10,7 @@ pub mod caldav;
 pub mod calendar;
 pub mod carddav;
 pub mod company_view;
+pub mod compose_senders;
 pub mod config;
 pub mod db;
 pub mod embed;

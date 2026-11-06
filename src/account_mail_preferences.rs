@@ -2,9 +2,11 @@
 use super::*;
 use flectar_mail_core::{
     Core,
+    compose_senders::{self, ComposeAccount, ComposeGroup},
     mail_security::{MailSecurity, OpenedMessage},
     models::{
-        AccountConfig, SenderIdentity, SenderIdentitySource, Settings, Signature, SignatureDefaults,
+        AccountConfig, MailProtocol, SenderIdentity, SenderIdentitySource, Settings, Signature,
+        SignatureDefaults,
     },
     sender_identities::{ManualIdentityPolicy, manual_identity_policy},
 };
@@ -155,6 +157,138 @@ fn publish_sender_matches(
     }
     *matched_emails.borrow_mut() = emails;
     labels
+}
+
+fn tim_mailbox_ids(settings: &Settings) -> Vec<i64> {
+    let mut ids = Vec::new();
+    for account in &settings.inbox_accounts {
+        let tim = account.profile_id.as_deref() == Some("tim-personal")
+            || account.name.eq_ignore_ascii_case("Tim Mentink");
+        if tim {
+            ids.extend(account.account_ids.iter().copied());
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+async fn load_compose_groups(core: &Core) -> Result<(Vec<ComposeGroup>, Option<String>), String> {
+    let (settings, configs) = preferences(core).await?;
+    let mut accounts = Vec::new();
+    for config in configs {
+        if config.mail_protocol == MailProtocol::Local || config.email.trim().is_empty() {
+            continue;
+        }
+        let Ok(identities) = core.list_sender_identities(config.id).await else {
+            continue;
+        };
+        accounts.push(ComposeAccount {
+            id: config.id,
+            email: config.email,
+            profile_id: None,
+            identities,
+        });
+    }
+    let tim_ids = tim_mailbox_ids(&settings);
+    let groups = compose_senders::compose_groups(
+        &settings.business_tabs,
+        &settings.address_views,
+        &settings.address_rules,
+        &accounts,
+        &settings.mail_profiles,
+        &tim_ids,
+    );
+    Ok((groups, settings.active_business_tab))
+}
+
+fn publish_group_senders(
+    app: &AppWindow,
+    group: &ComposeGroup,
+    requested: &str,
+    picker: &IdentityChoices,
+) {
+    let ui = app.global::<AccountMailPreferences>();
+    let choices = group
+        .senders
+        .iter()
+        .map(|sender| SenderIdentityChoice {
+            email: sender.email.clone().into(),
+            label: match sender.display_name.as_deref().map(str::trim) {
+                Some(name) if !name.is_empty() && !name.eq_ignore_ascii_case(&sender.email) => {
+                    format!("{name}  <{}>", sender.email).into()
+                }
+                _ => sender.email.clone().into(),
+            },
+        })
+        .collect::<Vec<_>>();
+    ui.set_composer_sender_names(ModelRc::new(VecModel::from(
+        choices
+            .iter()
+            .map(|choice| choice.label.clone())
+            .collect::<Vec<_>>(),
+    )));
+    ui.set_composer_sender_identities(ModelRc::new(VecModel::from(choices.clone())));
+    let labels = publish_sender_matches(&choices, "", &picker.matched_emails);
+    *picker.all.borrow_mut() = choices;
+    ui.set_composer_sender_match_names(ModelRc::new(VecModel::from(labels)));
+    ui.set_composer_sender_query("".into());
+    let index = (!requested.is_empty())
+        .then(|| {
+            group
+                .senders
+                .iter()
+                .position(|sender| sender.email.eq_ignore_ascii_case(requested))
+        })
+        .flatten()
+        .unwrap_or(0);
+    let Some(sender) = group.senders.get(index) else {
+        ui.set_composer_sender_index(0);
+        ui.set_composer_sender_email("".into());
+        ui.set_composer_sender_label("".into());
+        ui.set_composer_preferences_ready(true);
+        return;
+    };
+    ui.set_composer_sender_index(i32::try_from(index).unwrap_or(0));
+    ui.set_composer_sender_email(sender.email.clone().into());
+    ui.set_composer_sender_label(
+        picker
+            .all
+            .borrow()
+            .get(index)
+            .map(|choice| choice.label.clone())
+            .unwrap_or_else(|| sender.email.clone().into()),
+    );
+    let Ok(account_id) = i32::try_from(sender.account_id) else {
+        ui.set_composer_preferences_ready(true);
+        return;
+    };
+    if app.get_compose_account_id() != account_id {
+        app.set_compose_account_id(account_id);
+        ui.invoke_composer_account_changed(account_id);
+    } else {
+        ui.set_composer_preferences_ready(true);
+    }
+}
+
+fn apply_transport_account(app: &AppWindow, groups: &[ComposeGroup], email: &str) {
+    let ui = app.global::<AccountMailPreferences>();
+    let Some(group) = usize::try_from(ui.get_composer_group_index())
+        .ok()
+        .and_then(|index| groups.get(index))
+    else {
+        return;
+    };
+    let Some(account_id) = compose_senders::sender_account_id(group, email) else {
+        return;
+    };
+    let Ok(account_id) = i32::try_from(account_id) else {
+        return;
+    };
+    if app.get_compose_account_id() != account_id {
+        app.set_compose_account_id(account_id);
+        ui.invoke_composer_account_changed(account_id);
+    }
 }
 
 fn identity_label(identity: &SenderIdentity) -> String {
@@ -1150,12 +1284,21 @@ fn register_composer(
     let ui = app.global::<AccountMailPreferences>();
     let reset = inserted.clone();
     let generation = Rc::new(Cell::new(0_u64));
+    let compose_groups = Rc::new(RefCell::new(Vec::<ComposeGroup>::new()));
+    let need_catalog = Rc::new(Cell::new(true));
+    let catalog_generation = Rc::new(Cell::new(0_u64));
     let reset_generation = generation.clone();
+    let reset_groups = compose_groups.clone();
+    let reset_catalog = need_catalog.clone();
+    let reset_catalog_generation = catalog_generation.clone();
     let reset_list = available.clone();
     let weak = app.as_weak();
     let picker = composer_picker.clone();
     ui.on_composer_reset(move || {
         reset_generation.set(reset_generation.get().wrapping_add(1));
+        reset_catalog.set(true);
+        reset_catalog_generation.set(reset_catalog_generation.get().wrapping_add(1));
+        reset_groups.borrow_mut().clear();
         *reset.borrow_mut() = None;
         reset_list.borrow_mut().clear();
         if let Some(app) = weak.upgrade() {
@@ -1171,6 +1314,8 @@ fn register_composer(
             picker.matched_emails.borrow_mut().clear();
             ui.set_composer_sender_index(0);
             ui.set_composer_sender_email("".into());
+            ui.set_composer_group_names(ModelRc::default());
+            ui.set_composer_group_index(0);
             ui.set_composer_security("".into());
             ui.set_composer_preferences_ready(false);
         }
@@ -1181,24 +1326,91 @@ fn register_composer(
     let list = available.clone();
     let managed = inserted.clone();
     let picker = composer_picker.clone();
+    let groups_for_account = compose_groups.clone();
+    let catalog_for_account = need_catalog.clone();
+    let catalog_groups = compose_groups.clone();
+    let catalog_generation_for_account = catalog_generation.clone();
     ui.on_composer_account_changed(move |account_id| {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
+        let grouped = !groups_for_account.borrow().is_empty();
         ui.set_composer_preferences_ready(false);
         ui.set_composer_signature_names(ModelRc::default());
-        ui.set_composer_sender_identities(ModelRc::default());
-        ui.set_composer_sender_names(ModelRc::default());
-        ui.set_composer_sender_match_names(ModelRc::default());
-        ui.set_composer_sender_label("".into());
-        ui.set_composer_sender_query("".into());
+        if !grouped {
+            ui.set_composer_sender_identities(ModelRc::default());
+            ui.set_composer_sender_names(ModelRc::default());
+            ui.set_composer_sender_match_names(ModelRc::default());
+            ui.set_composer_sender_label("".into());
+            ui.set_composer_sender_query("".into());
+        }
         ui.set_composer_security("".into());
         let Some(core) = core(&state) else { return };
+        if catalog_for_account.get() {
+            catalog_for_account.set(false);
+            let catalog_groups = catalog_groups.clone();
+            let catalog_picker = picker.clone();
+            let retry_catalog = catalog_for_account.clone();
+            let catalog_generation = catalog_generation_for_account.clone();
+            let expected_catalog = catalog_generation.get();
+            work.spawn(
+                &app,
+                false,
+                {
+                    let core = core.clone();
+                    async move { load_compose_groups(&core).await }
+                },
+                move |app, result| {
+                    if catalog_generation.get() != expected_catalog {
+                        return;
+                    }
+                    match result {
+                    Ok((groups, active)) => {
+                        let requested = app
+                            .global::<AccountMailPreferences>()
+                            .get_composer_sender_email()
+                            .to_string();
+                        let index = compose_senders::compose_group_index(
+                            &groups,
+                            &requested,
+                            active.as_deref(),
+                        );
+                        let ui = app.global::<AccountMailPreferences>();
+                        if groups.is_empty() {
+                            ui.set_composer_group_names(ModelRc::default());
+                            ui.set_composer_group_index(0);
+                            *catalog_groups.borrow_mut() = groups;
+                            return;
+                        }
+                        ui.set_composer_group_names(ModelRc::new(VecModel::from(
+                            groups
+                                .iter()
+                                .map(|group| SharedString::from(group.name.as_str()))
+                                .collect::<Vec<_>>(),
+                        )));
+                        ui.set_composer_group_index(i32::try_from(index).unwrap_or(0));
+                        let group = groups[index].clone();
+                        *catalog_groups.borrow_mut() = groups;
+                        publish_group_senders(&app, &group, &requested, &catalog_picker);
+                    }
+                    Err(error) => {
+                        retry_catalog.set(true);
+                        app.set_compose_notice(UiMessage::detail(
+                            "Could not load account preferences: {}",
+                            error,
+                        ));
+                        app.set_compose_notice_is_error(true);
+                    }
+                }
+                },
+            );
+        }
         generation.set(generation.get().wrapping_add(1));
         let generation = generation.clone();
         let expected = generation.get();
         let list = list.clone();
         let managed = managed.clone();
         let picker = picker.clone();
+        let sender_groups = groups_for_account.clone();
         work.spawn(
             &app,
             false,
@@ -1216,6 +1428,8 @@ fn register_composer(
                         else {
                             return;
                         };
+                        let use_account_identities = sender_groups.borrow().is_empty();
+                        if use_account_identities {
                         let requested = ui.get_composer_sender_email().to_string();
                         let identities = {
                             let all = identities;
@@ -1286,6 +1500,9 @@ fn register_composer(
                             .unwrap_or(0);
                         ui.set_composer_preferences_ready(true);
                         ui.invoke_composer_sender(i32::try_from(sender_index).unwrap_or(0));
+                        } else {
+                            ui.set_composer_preferences_ready(true);
+                        }
                         let signatures = choices(&settings, i64::from(account_id));
                         let mut names = vec![SharedString::from("No signature")];
                         names.extend(signatures.iter().map(|s| SharedString::from(&s.name)));
@@ -1343,6 +1560,35 @@ fn register_composer(
         );
     });
     let weak = app.as_weak();
+    let compose_groups_for_sender = compose_groups.clone();
+    let groups_for_change = compose_groups.clone();
+    let picker_for_change = composer_picker.clone();
+    ui.on_composer_group_changed(move |index| {
+        let Some(app) = weak.upgrade() else { return };
+        let groups = groups_for_change.borrow();
+        let Some(group) = usize::try_from(index)
+            .ok()
+            .and_then(|index| groups.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        let ui = app.global::<AccountMailPreferences>();
+        ui.set_composer_group_index(index);
+        let current = ui.get_composer_sender_email().to_string();
+        let requested = if group
+            .senders
+            .iter()
+            .any(|sender| sender.email.eq_ignore_ascii_case(&current))
+        {
+            current
+        } else {
+            String::new()
+        };
+        drop(groups);
+        publish_group_senders(&app, &group, &requested, &picker_for_change);
+    });
+    let weak = app.as_weak();
     ui.on_composer_sender(move |index| {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -1355,6 +1601,7 @@ fn register_composer(
         ui.set_composer_sender_index(index);
         ui.set_composer_sender_email(identity.email.clone());
         ui.set_composer_sender_label(identity.label);
+        apply_transport_account(&app, &compose_groups_for_sender.borrow(), identity.email.as_str());
     });
     let weak = app.as_weak();
     let picker = composer_picker.clone();
@@ -1366,6 +1613,7 @@ fn register_composer(
     });
     let weak = app.as_weak();
     let picker = composer_picker.clone();
+    let compose_groups_for_pick = compose_groups.clone();
     ui.on_pick_composer_sender(move |index| {
         let Some(app) = weak.upgrade() else { return };
         let ui = app.global::<AccountMailPreferences>();
@@ -1385,6 +1633,11 @@ fn register_composer(
         ui.set_composer_sender_index(i32::try_from(position).unwrap_or(0));
         ui.set_composer_sender_email(choices[position].email.clone());
         ui.set_composer_sender_label(choices[position].label.clone());
+        apply_transport_account(
+            &app,
+            &compose_groups_for_pick.borrow(),
+            choices[position].email.as_str(),
+        );
     });
     let weak = app.as_weak();
     let document = document.clone();

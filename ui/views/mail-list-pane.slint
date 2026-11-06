@@ -310,6 +310,8 @@ export component MailListPane inherits FocusScope {
     in property <bool> show-preview: false;
     in property <bool> dense: false;
     in property <bool> loading: false;
+    in property <bool> catchup: false;
+    in property <string> catchup_count: "";
     in property <[EmailRow]> emails: [];
     in property <[MailListEntry]> list_entries: [];
     in property <bool> group_mail_by_date: true;
@@ -672,6 +674,38 @@ export component MailListPane inherits FocusScope {
                             edited(text) => { root.search_changed(text); }
                             filter-selected(value) => { root.set_search_filter(value); }
                             refresh => { root.sync_mail(); }
+                        }
+                    }
+
+                    if root.catchup : Rectangle {
+                        background: root.accent-soft;
+                        VerticalBox {
+                            padding-top: 8px;
+                            padding-right: 16px;
+                            padding-bottom: 8px;
+                            padding-left: 16px;
+                            spacing: 2px;
+                            Text {
+                                text: @tr("Downloading mail…");
+                                color: root.heading;
+                                font-size: TypeScale.secondary;
+                                font-weight: 700;
+                                wrap: word-wrap;
+                                height: max(self.preferred-height, 0px);
+                            }
+                            Text {
+                                text: @tr("This computer is catching up once. Mail already stored here opens from this PC, and only new mail is downloaded after that.");
+                                color: root.muted-text;
+                                font-size: TypeScale.caption;
+                                wrap: word-wrap;
+                                height: max(self.preferred-height, 0px);
+                            }
+                            if root.catchup_count != "" : Text {
+                                text: root.catchup_count;
+                                color: root.muted-text;
+                                font-size: TypeScale.caption;
+                                height: max(self.preferred-height, 0px);
+                            }
                         }
                     }
 
@@ -1418,8 +1452,8 @@ export component MailListPane inherits FocusScope {
                                 padding-top: 28px;
                                 padding-left: 20px;
                                 spacing: 4px;
-                                Text { text: root.loading ? @tr("Opening your mailbox…") : @tr("Nothing here"); color: root.heading; font-size: TypeScale.subtitle; font-weight: 700; }
-                                if !root.loading : Text { text: @tr("Try another folder or search term."); color: root.muted-text; font-size: TypeScale.secondary; }
+                                Text { text: root.catchup ? @tr("Downloading mail…") : @tr("Nothing here"); color: root.heading; font-size: TypeScale.subtitle; font-weight: 700; wrap: word-wrap; height: max(self.preferred-height, 0px); }
+                                if !root.catchup : Text { text: @tr("Try another folder or search term."); color: root.muted-text; font-size: TypeScale.secondary; wrap: word-wrap; height: max(self.preferred-height, 0px); }
                             }
                         }
 

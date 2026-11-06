@@ -1645,6 +1645,13 @@ export component SettingsDialog inherits Rectangle {
                                             clicked => { root.sync_mail(); }
                                         }
                                     }
+                                    Text {
+                                        text: @tr("Mail already on this computer opens from the local store. New mail downloads in the background. Tabs, pins, label rules, and other settings are also written to mirror/settings.json beside the database so another computer can apply them. Mail is downloaded again on each computer.");
+                                        color: root.faint-text;
+                                        font-size: TypeScale.caption;
+                                        wrap: word-wrap;
+                                        height: max(self.preferred-height, 0px);
+                                    }
                                 }
                             }
 

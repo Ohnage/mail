@@ -39,6 +39,7 @@ pub mod route;
 pub mod scheduler;
 pub mod search;
 pub mod sender_identities;
+pub mod settings_mirror;
 pub mod signatures;
 pub mod smtp;
 pub mod sync;
@@ -696,6 +697,8 @@ pub struct Core {
     /// Serializes AI routing passes so the background router and an inline
     /// re-sort never classify the same 'pending' threads twice.
     ai_router_lock: Arc<tokio::sync::Mutex<()>>,
+    /// True when startup applied a newer `mirror/settings.json`.
+    settings_mirror_applied: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Core {
@@ -791,6 +794,7 @@ impl Core {
             oauth_cancel: Arc::new(tokio::sync::Notify::new()),
             ui_ready: Arc::new(tokio::sync::Notify::new()),
             ai_router_lock: Arc::new(tokio::sync::Mutex::new(())),
+            settings_mirror_applied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         // Finish any destructive operation interrupted between the mail and
@@ -825,8 +829,17 @@ impl Core {
         }
 
         // Make saved OAuth app registrations available before any actor
-        // needs a token refresh.
-        let settings = core.db.read(|conn| repo::settings::get(conn)).await?;
+        // needs a token refresh. A newer mirror file from another computer
+        // replaces these preferences first and keeps secrets stored here.
+        let mut settings = core.db.read(|conn| repo::settings::get(conn)).await?;
+        if let Some(merged) = settings_mirror::merged_if_newer(&core.paths.db_file(), &settings) {
+            core.settings_mirror_applied
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            core.db
+                .write(move |conn| repo::settings::set(conn, &merged))
+                .await?;
+            settings = core.db.read(|conn| repo::settings::get(conn)).await?;
+        }
         apply_oauth_settings(&settings);
 
         // Recover any actions orphaned mid-flight by a previous crash/kill, so a
@@ -8698,6 +8711,24 @@ impl Core {
 
     pub fn data_dir(&self) -> &std::path::Path {
         &self.paths.data_dir
+    }
+
+    /// Startup applied `mirror/settings.json` from another computer.
+    pub fn settings_mirror_applied(&self) -> bool {
+        self.settings_mirror_applied
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How much of the selected accounts' mail is still being downloaded for
+    /// the first time. `None` covers every account. An empty list is a tab
+    /// with no mailboxes and has nothing to download.
+    pub async fn catch_up_progress(
+        &self,
+        account_ids: Option<Vec<i64>>,
+    ) -> Result<repo::folders::CatchUpProgress> {
+        self.db
+            .read(move |conn| repo::folders::catch_up_progress(conn, account_ids.as_deref()))
+            .await
     }
 
     pub async fn get_settings(&self) -> Result<Settings> {

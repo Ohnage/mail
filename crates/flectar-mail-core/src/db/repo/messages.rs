@@ -1369,6 +1369,16 @@ pub fn list_outline_for_thread(conn: &Connection, thread_id: i64) -> Result<Vec<
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Messages in a folder that already have a server UID. Compared with the
+/// mailbox's EXISTS count so an unchanged folder skips a full UID search.
+pub fn live_uid_count(conn: &Connection, folder_id: i64) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE folder_id = ?1 AND uid IS NOT NULL",
+        params![folder_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// All (id, uid) pairs currently mapped in a folder - used for expunge reconciliation.
 pub fn uids_in_folder(conn: &Connection, folder_id: i64) -> Result<Vec<(i64, i64)>> {
     let mut stmt =

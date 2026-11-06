@@ -74,6 +74,7 @@ pub(crate) async fn run(ctx: SyncCtx, mut config: AccountConfig, mut inputs: Inp
             tracing::warn!(account_id, %error, "completing local POP3 actions failed");
         }
         if next_sync.is_some_and(|at| at <= Instant::now()) {
+            let _sync_slot = super::engine::reserve_account_sync().await;
             next_sync = match sync(&ctx, &config).await {
                 Ok(synced) => {
                     backoff = Duration::from_secs(1);

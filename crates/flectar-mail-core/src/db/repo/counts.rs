@@ -794,4 +794,46 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn badge_scans_can_be_limited_to_the_open_tab() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO accounts (id, email, provider, auth_kind, username,
+             incoming_host, incoming_port, smtp_host, smtp_port, created_at, sort_order, mail_protocol, settings_json)
+             VALUES (2,'two@x.com','generic','password','two','h',993,'h',587,0,1,'imap','{\"connection\":{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path, role) VALUES (2,2,'INBOX','inbox')",
+            [],
+        )
+        .unwrap();
+        seed_thread(&conn, 1, 1, false);
+        conn.execute(
+            "INSERT INTO threads (id, account_id, subject_norm, unread_count, last_message_at)
+             VALUES (2, 2, 'other', 1, 1000)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (thread_id, account_id, folder_id, uid, message_id, subject,
+             from_addr, date, is_read, is_automated, is_draft, is_outgoing)
+             VALUES (2, 2, 2, 2, 'mid-2', 'other', 'a@b.c', 1000, 0, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+        let scope = crate::recipient_match::MailScope {
+            base_account_ids: Some(vec![1]),
+            ..Default::default()
+        };
+        let badges =
+            mailbox_badge_counts_filtered(&conn, MailGrouping::Conversations, &scope).unwrap();
+        let inbox = badges
+            .iter()
+            .map(|counts| (counts.account_id, counts.inbox))
+            .collect::<Vec<_>>();
+        assert_eq!(inbox, vec![(1, 1), (2, 0)]);
+    }
 }

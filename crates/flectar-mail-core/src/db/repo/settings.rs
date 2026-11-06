@@ -29,11 +29,55 @@ pub fn get(conn: &Connection) -> Result<Settings> {
 }
 
 pub fn set(conn: &Connection, settings: &Settings) -> Result<()> {
+    let mut value = serde_json::to_value(settings)?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "mirrorUpdatedAt".into(),
+            serde_json::json!(chrono::Utc::now().timestamp_millis()),
+        );
+    }
+    let json = serde_json::to_string(&value)?;
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('settings', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![serde_json::to_string(settings)?],
+        params![json],
     )?;
+    // Stage the committed JSON. An open transaction flushes it from the
+    // commit hook; an autocommit statement has already committed, so flush now.
+    if let Some(path) = database_file(conn) {
+        crate::settings_mirror::stage(path, serde_json::to_string(&value)?);
+        if conn.is_autocommit() {
+            crate::settings_mirror::flush_pending();
+        }
+    }
+    Ok(())
+}
+
+fn database_file(conn: &Connection) -> Option<std::path::PathBuf> {
+    let path: String = conn
+        .query_row(
+            "SELECT file FROM pragma_database_list WHERE name = 'main'",
+            [],
+            |row| row.get(0),
+        )
+        .ok()?;
+    if path.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(path))
+    }
+}
+
+/// Record a settings mirror when a mail transaction commits, and drop it
+/// when that transaction rolls back.
+pub(crate) fn install_mirror_hooks(conn: &Connection) -> Result<()> {
+    conn.commit_hook(Some(|| {
+        crate::settings_mirror::flush_pending();
+        false
+    }))?;
+    conn.rollback_hook(Some(|| {
+        crate::settings_mirror::clear_pending();
+    }))?;
     Ok(())
 }
 

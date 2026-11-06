@@ -3813,6 +3813,7 @@ async fn run_actor(
             }
         }
 
+        let _sync_slot = super::engine::reserve_account_sync().await;
         set_state(&ctx, account_id, "syncing").await;
         let mail_history = settings_rx.borrow_and_update().mail_history;
         let result = async {
@@ -3869,6 +3870,7 @@ async fn run_actor(
                 (delay, actions_remaining)
             }
             Err(CoreError::NeedsReauth) | Err(CoreError::Auth(_)) => {
+                drop(_sync_slot);
                 set_state(&ctx, account_id, "needs_reauth").await;
                 for waiter in waiters.drain(..) {
                     let _ = waiter.send(Err("authentication required".into()));
@@ -3902,6 +3904,7 @@ async fn run_actor(
             }
         };
 
+        drop(_sync_slot);
         if rerun {
             continue;
         }

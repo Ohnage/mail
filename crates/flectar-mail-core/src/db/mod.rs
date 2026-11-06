@@ -66,6 +66,15 @@ enum StoreKind {
     Files,
 }
 
+fn prepare_connection(conn: &Connection, kind: StoreKind, query_only: bool) -> Result<()> {
+    if query_only {
+        configure_query_connection(conn, kind)?;
+    } else if matches!(kind, StoreKind::Mail) {
+        repo::settings::install_mirror_hooks(conn)?;
+    }
+    Ok(())
+}
+
 fn configure_query_connection(conn: &Connection, kind: StoreKind) -> Result<()> {
     conn.pragma_update(None, "query_only", "ON")?;
     if matches!(kind, StoreKind::Mail) {
@@ -94,9 +103,7 @@ fn spawn_conn_thread(
 ) -> Result<mpsc::Sender<Command>> {
     let (tx, mut rx) = mpsc::channel::<Command>(JOB_QUEUE_CAPACITY);
     let conn = open_connection(&path, kind)?;
-    if query_only {
-        configure_query_connection(&conn, kind)?;
-    }
+    prepare_connection(&conn, kind, query_only)?;
     std::thread::Builder::new()
         .name(format!("flectar-mail-db-{name}"))
         .spawn(move || {
@@ -116,9 +123,7 @@ fn spawn_conn_thread(
                         let result = (|| {
                             if connection.is_none() {
                                 let conn = open_connection(&path, kind)?;
-                                if query_only {
-                                    configure_query_connection(&conn, kind)?;
-                                }
+                                prepare_connection(&conn, kind, query_only)?;
                                 connection = Some(conn);
                             }
                             Ok(())

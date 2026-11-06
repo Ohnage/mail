@@ -470,6 +470,7 @@ export global I18n {
         if (key == "Local storage startup failed.") { return @tr("Local storage startup failed."); }
         if (key == "Loading local data…") { return @tr("Loading local data…"); }
         if (key == "Local data ready.") { return @tr("Local data ready."); }
+        if (key == "Downloading changes…") { return @tr("Downloading changes…"); }
         return "";
     }
 
@@ -960,6 +961,8 @@ export component AppWindow inherits Window {
     in property <bool> can_load_more: false;
     in property <bool> mail_loading_more: false;
     in property <bool> mail_page_loading: false;
+    in property <bool> mail_catchup: false;
+    in property <string> mail_catchup_count: "";
     in property <int> mail_list_revision: 0;
     in property <int> mail_selection_count: 0;
     in property <bool> has_selected: true;
@@ -1553,6 +1556,8 @@ export component AppWindow inherits Window {
             compact-page <=> root.mail-compact-page;
             folders-open <=> root.mail-folders-open;
             loading: !root.startup_hydrated || root.mail_page_loading;
+            catchup: root.mail_catchup;
+            catchup_count: root.mail_catchup_count;
             x: 0px;
             y: 0px;
             width: parent.width;

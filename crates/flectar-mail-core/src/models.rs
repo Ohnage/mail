@@ -2244,6 +2244,16 @@ pub struct Settings {
     /// key is the list used when no business tab is open.
     #[serde(default)]
     pub pinned_sidebar_tags: std::collections::HashMap<String, Vec<String>>,
+    /// Milliseconds when these preferences were last saved. `mirror/settings.json`
+    /// carries the same value. A file with a greater value is applied on the
+    /// next startup; an older file is left unused. Zero means the blob predates
+    /// the mirror.
+    #[serde(default, skip_serializing_if = "mirror_timestamp_unset")]
+    pub mirror_updated_at: i64,
+}
+
+fn mirror_timestamp_unset(value: &i64) -> bool {
+    *value == 0
 }
 
 /// One label-automation rule. `when_added`, `remove`, and `add` are normalized
@@ -2456,6 +2466,7 @@ impl Default for Settings {
             brand_registry_backup: None,
             label_rules: Vec::new(),
             pinned_sidebar_tags: std::collections::HashMap::new(),
+            mirror_updated_at: 0,
         }
     }
 }

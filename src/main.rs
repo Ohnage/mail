@@ -5436,7 +5436,11 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     if !startup_benchmark_disable_background {
                         core.notify_ui_ready();
                     }
-                    app.set_sync_status(UiMessage::plain("Local data ready."));
+                    app.set_sync_status(if core.settings_mirror_applied() {
+                        UiMessage::plain("Downloading changes…")
+                    } else {
+                        UiMessage::plain("Local data ready.")
+                    });
                     startup_metrics_for_ui.emit_once(
                         "core_ready",
                         serde_json::json!({
@@ -9237,6 +9241,69 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             });
         });
     }
+
+    // The open mailbox is local. This only reports whether the first download
+    // for the current tab is still running, so the list never waits on it.
+    let catchup_state = Rc::clone(&state);
+    let catchup_runtime = Rc::clone(&runtime);
+    let catchup_app = app.as_weak();
+    let catchup_busy = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let catchup_timer = Timer::default();
+    let poll_catchup = {
+        let catchup_state = Rc::clone(&catchup_state);
+        let catchup_runtime = Rc::clone(&catchup_runtime);
+        let catchup_app = catchup_app.clone();
+        let catchup_busy = std::sync::Arc::clone(&catchup_busy);
+        move || {
+            if catchup_busy.swap(true, std::sync::atomic::Ordering::AcqRel) {
+                return;
+            }
+            let Some(app) = catchup_app.upgrade() else {
+                catchup_busy.store(false, std::sync::atomic::Ordering::Release);
+                return;
+            };
+            if app.get_active_view() != "mail" {
+                catchup_busy.store(false, std::sync::atomic::Ordering::Release);
+                return;
+            }
+            let core = catchup_state.borrow().core.clone();
+            let Some(core) = core else {
+                catchup_busy.store(false, std::sync::atomic::Ordering::Release);
+                return;
+            };
+            let busy = std::sync::Arc::clone(&catchup_busy);
+            let app = app.as_weak();
+            catchup_runtime.spawn(async move {
+                let progress = core.open_view_catch_up().await.ok();
+                let busy_if_dropped = std::sync::Arc::clone(&busy);
+                let posted = slint::invoke_from_event_loop(move || {
+                    busy.store(false, std::sync::atomic::Ordering::Release);
+                    let Some(app) = app.upgrade() else {
+                        return;
+                    };
+                    let Some((done, pending)) = progress else {
+                        return;
+                    };
+                    app.set_mail_catchup(pending > 0);
+                    let total = done.saturating_add(pending);
+                    app.set_mail_catchup_count(if pending > 0 && total > 0 {
+                        format!("{done} / {total}").into()
+                    } else {
+                        "".into()
+                    });
+                });
+                if posted.is_err() {
+                    busy_if_dropped.store(false, std::sync::atomic::Ordering::Release);
+                }
+            });
+        }
+    };
+    poll_catchup();
+    catchup_timer.start(
+        slint::TimerMode::Repeated,
+        Duration::from_secs(2),
+        poll_catchup,
+    );
 
     // A mailbox left open overnight must promote its date sections and row
     // timestamps without waiting for a network sync or a folder change.

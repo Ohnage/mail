@@ -43,8 +43,16 @@ impl Paths {
         Self::new(root.to_path_buf(), root.join("cache"))
     }
 
+    /// Mail, folders, tags, counts, and settings. On Windows this is
+    /// `%APPDATA%\flectar-mail\flectar-mail.db`.
     pub fn db_file(&self) -> PathBuf {
         self.data_dir.join("flectar-mail.db")
+    }
+
+    /// Preferences copied to another computer. OAuth client secrets are not
+    /// written here. See `settings_mirror`.
+    pub fn settings_mirror_file(&self) -> PathBuf {
+        self.data_dir.join("mirror").join("settings.json")
     }
 
     /// Calendar data lives in its own SQLite database so large mailbox writes,

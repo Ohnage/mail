@@ -1,4 +1,12 @@
 //! End-to-end fixtures for scheduling and IMAP compatibility in one sync cycle.
+
+#[test]
+fn an_unchanged_mailbox_does_not_need_a_full_uid_search() {
+    assert!(!mailbox_needs_full_reconcile(0, 0));
+    assert!(!mailbox_needs_full_reconcile(40, 40));
+    assert!(mailbox_needs_full_reconcile(40, 39));
+    assert!(mailbox_needs_full_reconcile(39, 40));
+}
 use super::*;
 use crate::db::repo::messages::NewMessage;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};

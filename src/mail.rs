@@ -883,6 +883,22 @@ impl CoreMailSource {
     /// Load exact sidebar badges independently of the latency-sensitive message
     /// page. Core events can therefore update counters live without delaying
     /// list rendering.
+    /// First-download progress for the open company tab. With no tab, every
+    /// account is included. `(done, pending)` folder-or-account units.
+    pub async fn open_view_catch_up(&self) -> Result<(i64, i64), String> {
+        let ids = self.company_account_ids().map(|ids| ids.to_vec());
+        let progress = self
+            .core
+            .catch_up_progress(ids)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok((progress.done, progress.pending))
+    }
+
+    pub fn settings_mirror_applied(&self) -> bool {
+        self.core.settings_mirror_applied()
+    }
+
     pub async fn load_mail_metadata(&self, scope: Scope) -> Result<MailMetadata, String> {
         let revision = self.account_revision();
         let profile = self.profile_accounts();
@@ -925,9 +941,18 @@ impl CoreMailSource {
         profile: Option<&[i64]>,
     ) -> Result<MailMetadata, String> {
         let scope_filter = self.scope_filter(scope).await?;
+        let mut badge_scope = scope_filter.clone();
+        // Badge scans follow the open tab. Counting every account on each
+        // tab switch walks the whole store and is what makes a large profile
+        // look like it is loading mail again.
+        if badge_scope.base_account_ids.is_none()
+            && let Some(ids) = self.badge_account_limit(profile)
+        {
+            badge_scope.base_account_ids = Some(ids);
+        }
         let mut badges = self
             .core
-            .mailbox_badge_counts_filtered(self.grouping(), scope_filter.clone())
+            .mailbox_badge_counts_filtered(self.grouping(), badge_scope)
             .await
             .map_err(|error| error.to_string())?;
         // A sender rule counts matching mail in every account. Drafts stay
@@ -968,7 +993,10 @@ impl CoreMailSource {
                 self.core
                     .mailbox_badge_counts_filtered(
                         self.grouping(),
-                        flectar_mail_core::recipient_match::MailScope::default(),
+                        flectar_mail_core::recipient_match::MailScope {
+                            base_account_ids: Some(company.to_vec()),
+                            ..Default::default()
+                        },
                     )
                     .await
                     .map_err(|error| error.to_string())?
@@ -2004,6 +2032,27 @@ impl CoreMailSource {
             .save_address_view(address, source_account_emails)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    /// Accounts whose badges the open tab needs. `None` leaves the scan
+    /// unscoped. An empty vector matches nothing.
+    fn badge_account_limit(&self, profile: Option<&[i64]>) -> Option<Vec<i64>> {
+        let company = self.company_account_ids();
+        if company.is_none() && profile.is_none() {
+            return None;
+        }
+        let mut ids = Vec::new();
+        if let Some(company) = company.as_deref() {
+            ids.extend(company.iter().copied());
+        }
+        if let Some(profile) = profile {
+            for id in profile {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
+            }
+        }
+        Some(ids)
     }
 
     fn company_account_ids(&self) -> Option<Arc<[i64]>> {

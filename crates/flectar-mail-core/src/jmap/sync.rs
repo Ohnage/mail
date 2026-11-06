@@ -98,6 +98,7 @@ async fn actor(
         if settings.has_changed().unwrap_or(false) {
             config.settings = settings.borrow_and_update().clone();
         }
+        let _sync_slot = crate::sync::engine::reserve_account_sync().await;
         let reused = session.take();
         let outcome = async {
             let connected = match reused {
@@ -149,6 +150,7 @@ async fn actor(
                 None
             }
         };
+        drop(_sync_slot);
         let normal = configured_sync_interval(&ctx.db).await;
         let delay = if retry == 1 {
             normal

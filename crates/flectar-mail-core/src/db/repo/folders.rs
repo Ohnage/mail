@@ -574,6 +574,107 @@ pub fn reopen_backfill_for_account(conn: &Connection, account_id: i64) -> Result
     Ok(())
 }
 
+/// First-download progress for the accounts in `account_ids`. `None` is every
+/// account. An empty slice is a tab with no mailboxes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CatchUpProgress {
+    pub done: i64,
+    pub pending: i64,
+}
+
+impl CatchUpProgress {
+    pub fn downloading(self) -> bool {
+        self.pending > 0
+    }
+}
+
+pub fn catch_up_progress(
+    conn: &Connection,
+    account_ids: Option<&[i64]>,
+) -> Result<CatchUpProgress> {
+    if matches!(account_ids, Some([])) {
+        return Ok(CatchUpProgress {
+            done: 0,
+            pending: 0,
+        });
+    }
+    let done = catch_up_count(conn, account_ids, true)?;
+    let pending = catch_up_count(conn, account_ids, false)?;
+    Ok(CatchUpProgress { done, pending })
+}
+
+fn catch_up_count(conn: &Connection, account_ids: Option<&[i64]>, done: bool) -> Result<i64> {
+    let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let imap_folders = account_filter("a.id", account_ids, &mut binds);
+    let imap_accounts = account_filter("a.id", account_ids, &mut binds);
+    let gmail = account_filter("a.id", account_ids, &mut binds);
+    let jmap = account_filter("a.id", account_ids, &mut binds);
+    let folder_state = if done {
+        "f.backfill_done = 1"
+    } else {
+        "f.backfill_done = 0"
+    };
+    let imap_account_clause = if done {
+        "AND 0"
+    } else {
+        "AND NOT EXISTS (
+            SELECT 1 FROM folders f
+            WHERE f.account_id = a.id AND f.selectable = 1 AND IFNULL(f.role, '') != 'all'
+        )"
+    };
+    let gmail_clause = if done {
+        "AND EXISTS (
+            SELECT 1 FROM gmail_sync_state g
+            WHERE g.account_id = a.id AND g.backfill_done = 1
+        )"
+    } else {
+        "AND NOT EXISTS (
+            SELECT 1 FROM gmail_sync_state g
+            WHERE g.account_id = a.id AND g.backfill_done = 1
+        )"
+    };
+    let jmap_clause = if done {
+        "AND EXISTS (
+            SELECT 1 FROM jmap_sync_state j
+            WHERE j.account_id = a.id AND j.email_state IS NOT NULL AND j.full_sync_state IS NULL
+        )"
+    } else {
+        "AND NOT EXISTS (
+            SELECT 1 FROM jmap_sync_state j
+            WHERE j.account_id = a.id AND j.email_state IS NOT NULL AND j.full_sync_state IS NULL
+        )"
+    };
+    let sql = format!(
+        "SELECT
+            (SELECT COUNT(*) FROM folders f
+             JOIN accounts a ON a.id = f.account_id
+             WHERE f.selectable = 1 AND IFNULL(f.role, '') != 'all' AND {folder_state}
+               AND a.provider != 'gmail' AND a.mail_protocol = 'imap'{imap_folders})
+          + (SELECT COUNT(*) FROM accounts a
+             WHERE a.mail_protocol = 'imap' AND a.provider != 'gmail' {imap_account_clause}{imap_accounts})
+          + (SELECT COUNT(*) FROM accounts a
+             WHERE a.provider = 'gmail' {gmail_clause}{gmail})
+          + (SELECT COUNT(*) FROM accounts a
+             WHERE a.mail_protocol = 'jmap' {jmap_clause}{jmap})"
+    );
+    let params = binds.iter().map(|value| value.as_ref()).collect::<Vec<_>>();
+    Ok(conn.query_row(&sql, params.as_slice(), |row| row.get(0))?)
+}
+
+fn account_filter(
+    column: &str,
+    account_ids: Option<&[i64]>,
+    binds: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+) -> String {
+    match account_ids {
+        None => String::new(),
+        Some(ids) => format!(
+            " AND {}",
+            super::search::account_set_clause(column, ids, binds)
+        ),
+    }
+}
+
 /// UIDVALIDITY changed: drop all UID mappings for the folder. Its mail waits
 /// to be re-linked by Message-ID, and headers that failed under the old UIDs
 /// are no longer worth retrying.
@@ -968,5 +1069,26 @@ mod tests {
         assert_eq!(content_failures, 1);
         let folder = get(&conn, 1).unwrap().unwrap();
         assert_eq!((folder.last_seen_uid, folder.backfill_done), (0, false));
+    }
+
+    #[test]
+    fn catch_up_follows_unfinished_imap_folders_for_the_open_accounts() {
+        let conn = testutil::conn();
+        testutil::seed_account(&conn);
+        let open = catch_up_progress(&conn, None).unwrap();
+        assert!(open.downloading());
+        assert!(open.pending >= 1);
+        assert_eq!(
+            catch_up_progress(&conn, Some(&[])).unwrap(),
+            CatchUpProgress {
+                done: 0,
+                pending: 0
+            }
+        );
+        assert!(!catch_up_progress(&conn, Some(&[99])).unwrap().downloading());
+        set_backfill(&conn, 1, Some(1), true).unwrap();
+        let finished = catch_up_progress(&conn, Some(&[1])).unwrap();
+        assert!(!finished.downloading());
+        assert!(finished.done >= 1);
     }
 }

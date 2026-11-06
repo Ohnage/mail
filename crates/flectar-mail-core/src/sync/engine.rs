@@ -50,6 +50,22 @@ const BACKGROUND_BODY_PLAN_PAGES: usize = 2;
 static BACKGROUND_BODY_PLAN_BUDGET: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
     std::sync::OnceLock::new();
 
+/// How many accounts may run a network sync at once. A profile with hundreds
+/// of mailboxes otherwise opens every connection together, and the local
+/// database then cannot answer the mailbox the user just opened.
+const ACCOUNT_SYNC_SLOTS: usize = 4;
+
+pub(crate) async fn reserve_account_sync() -> tokio::sync::OwnedSemaphorePermit {
+    static SLOTS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+        std::sync::OnceLock::new();
+    SLOTS
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(ACCOUNT_SYNC_SLOTS)))
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("account sync slots stay open")
+}
+
 async fn reserve_background_plan_page() -> tokio::sync::OwnedSemaphorePermit {
     BACKGROUND_BODY_PLAN_BUDGET
         .get_or_init(|| {
@@ -864,6 +880,10 @@ async fn run_actor(
     let mut cycle_due;
 
     loop {
+        // Hold one shared slot for the connect and the cycle, then release it
+        // before IDLE. Waiting here keeps a large profile from syncing every
+        // mailbox at once; opening a mailbox does not take this slot.
+        let _sync_slot = reserve_account_sync().await;
         // 1. Ensure a connection.
         if session.is_none() {
             match connect(&ctx, &config).await {
@@ -895,6 +915,7 @@ async fn run_actor(
                         "imap connect rejected at auth; marking needs_reauth"
                     );
                     set_state(&ctx, account_id, "needs_reauth").await;
+                    drop(_sync_slot);
                     // Wait for an external nudge before retrying auth.
                     match rx.recv().await {
                         None | Some(SyncCmd::Shutdown) => return,
@@ -913,6 +934,7 @@ async fn run_actor(
                     ctx.bus.emit(CoreEvent::NetworkState { online: false });
                     let message = e.to_string();
                     set_state_error(&ctx, account_id, "offline", &message).await;
+                    drop(_sync_slot);
                     // Backoff, but wake early on commands.
                     let wait = std::time::Duration::from_secs(backoff_secs);
                     backoff_secs = (backoff_secs * 2).min(300);
@@ -1045,6 +1067,7 @@ async fn run_actor(
             }
         }
 
+        drop(_sync_slot);
         if rerun_immediately {
             continue;
         }
@@ -1744,7 +1767,18 @@ async fn sync_folder(
         }
         if heavy {
             reconcile_flags(ctx, session, &fresh_folder).await?;
-            reconcile_mailbox(ctx, config, session, &fresh_folder).await?;
+            // New UIDs were already fetched above. Search every UID only when
+            // the local count and the server's EXISTS disagree, which is how
+            // deletions and gaps show up. An unchanged mailbox must not dump
+            // its UID set on every pass.
+            let folder_id = fresh_folder.id;
+            let local_uids = ctx
+                .db
+                .read(move |conn| repo::messages::live_uid_count(conn, folder_id))
+                .await?;
+            if mailbox_needs_full_reconcile(local_uids, selected.exists) {
+                reconcile_mailbox(ctx, config, session, &fresh_folder).await?;
+            }
         }
         // Historical backfill (extending the window downward) also runs on the
         // history connection; just make sure it's awake.
@@ -1883,6 +1917,7 @@ async fn run_history_backfill(
                 if folder.backfill_cursor.is_some() && folder.backfill_done {
                     continue;
                 }
+                let _sync_slot = reserve_account_sync().await;
                 if session.is_none() {
                     match connect(&ctx, &config).await {
                         Ok(s) => session = Some(s),
@@ -2509,6 +2544,13 @@ async fn reconcile_flags(ctx: &SyncCtx, session: &mut Session, folder: &Folder) 
         });
     }
     Ok(())
+}
+
+/// True when the cached UID set cannot be the server's live set. Equal counts
+/// after the new-UID fetch mean nothing was deleted or left missing, so the
+/// full UID search can wait.
+pub(crate) fn mailbox_needs_full_reconcile(local_uids: i64, remote_exists: u32) -> bool {
+    local_uids != i64::from(remote_exists)
 }
 
 /// Remove local messages that vanished or are marked `\\Deleted` on the

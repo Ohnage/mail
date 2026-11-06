@@ -143,18 +143,27 @@ What this fork adds:
 - **Local mail store.** Messages, folders, tags, counts, and settings are
   read from a SQLite database on this computer. On Windows that file is
   `%APPDATA%\flectar-mail\flectar-mail.db` (the operating system's application
-  data directory, not Program Files). The first time a computer sees an
-  account it shows “Downloading mail…” while it catches up once. After that,
-  opening a mailbox or switching company tabs reads the local database and
-  does not download every message again. Background sync fetches new mail
-  and applies flag, folder, and label changes. At most four accounts sync
-  at the same time, so a large profile does not lock the local database.
-  Settings, tabs, pins, and label rules are also written to
-  `%APPDATA%\flectar-mail\mirror\settings.json`. OAuth client secrets are
-  left blank in that file. Copy it to the same path on another computer;
-  the next launch applies it when its `mirrorUpdatedAt` is newer and shows
-  “Downloading changes…”. Mail itself stays in the database and is
-  downloaded again on each computer. There is no separate Mirror service.
+  data directory, not Program Files). Message text is stored in
+  `message_bodies` and marked `body_state=cached`. Opening a cached message
+  reads SQLite and does not ask the server again. A missing body is fetched
+  once, saved, and not fetched again unless it is invalidated. The first
+  time a computer sees an account it shows “Downloading mail…” while headers
+  catch up. After headers exist, the same banner stays up while message
+  contents are still being saved, with a saved/total count, and the message
+  list stays usable. Background download takes the newest mail inside each
+  account's mail-history window first. Gmail and JMAP share one loop: eight
+  messages per page, two accounts at a time. IMAP keeps its own body pool.
+  One account that fails to parse does not stop the others; that message
+  waits and is tried again later. At most four accounts sync headers at the
+  same time, so a large profile does not lock the local database.
+  Settings, tabs, pins, label rules, and which sidebar rows are collapsed
+  are also written to `%APPDATA%\flectar-mail\mirror\settings.json`. OAuth
+  client secrets are left blank in that file. Copy it to the same path on
+  another computer; the next launch applies it when its `mirrorUpdatedAt`
+  is newer and shows “Downloading changes…”. Mail itself stays in the
+  database and is downloaded again on each computer. There is no separate
+  Mirror service. Company Inbox and its warm-start snapshot list only the
+  open company tab's accounts.
 
 ### Build and install
 

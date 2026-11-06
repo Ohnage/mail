@@ -589,6 +589,148 @@ pub fn body_progress_since(
     Ok((progress.done, progress.total))
 }
 
+/// One message whose text is still only on the server. Gmail and JMAP are
+/// planned here; IMAP keeps its own folder planner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncachedRemoteBody {
+    pub message_id: i64,
+    pub account_id: i64,
+    pub date: i64,
+    pub gmail: bool,
+    pub remote_id: String,
+}
+
+/// Newest Gmail and JMAP messages that still need a body, inside each
+/// account's mail-history window. `now_ms` and the four cutoffs are the
+/// one-month, three-month, one-year, and six-month boundaries.
+pub fn newest_uncached_remote_bodies(
+    conn: &Connection,
+    now_ms: i64,
+    one_month_ms: i64,
+    three_month_ms: i64,
+    one_year_ms: i64,
+    six_month_ms: i64,
+    limit: i64,
+) -> Result<Vec<UncachedRemoteBody>> {
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.account_id, m.date,
+                a.provider = 'gmail',
+                CASE WHEN a.provider = 'gmail' THEN m.gm_msgid ELSE m.jmap_id END
+         FROM messages m
+         JOIN accounts a ON a.id = m.account_id
+         LEFT JOIN folders f ON f.id = m.folder_id
+         LEFT JOIN sync_failures sf
+           ON sf.stage = 'content' AND sf.message_id = m.id
+         WHERE m.body_state = 'none'
+           AND (sf.id IS NULL OR sf.next_retry_at IS NULL OR sf.next_retry_at <= ?1)
+           AND (
+             (a.provider = 'gmail' AND m.gm_msgid IS NOT NULL)
+             OR (a.mail_protocol = 'jmap' AND m.jmap_id IS NOT NULL AND m.jmap_blob_id IS NOT NULL)
+           )
+           AND COALESCE(f.role, '') != 'all'
+           AND (
+             COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths') = 'all'
+             OR COALESCE(m.internal_date, m.date) >= CASE
+               COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths')
+               WHEN 'oneMonth' THEN ?2
+               WHEN 'threeMonths' THEN ?3
+               WHEN 'oneYear' THEN ?4
+               ELSE ?5
+             END
+           )
+         ORDER BY m.date DESC, m.id DESC
+         LIMIT ?6",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![
+                now_ms,
+                one_month_ms,
+                three_month_ms,
+                one_year_ms,
+                six_month_ms,
+                limit
+            ],
+            |row| {
+                Ok(UncachedRemoteBody {
+                    message_id: row.get(0)?,
+                    account_id: row.get(1)?,
+                    date: row.get(2)?,
+                    gmail: row.get(3)?,
+                    remote_id: row.get(4)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Bodies saved for the accounts in `account_ids`. `None` is every account.
+/// An empty slice matches nothing. Mail outside an account's history window
+/// is omitted, matching what background download will fetch.
+pub fn body_cache_progress(
+    conn: &Connection,
+    account_ids: Option<&[i64]>,
+    one_month_ms: i64,
+    three_month_ms: i64,
+    one_year_ms: i64,
+    six_month_ms: i64,
+) -> Result<super::folders::CatchUpProgress> {
+    use super::folders::CatchUpProgress;
+    if matches!(account_ids, Some([])) {
+        return Ok(CatchUpProgress {
+            done: 0,
+            pending: 0,
+        });
+    }
+    let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
+        Box::new(one_month_ms),
+        Box::new(three_month_ms),
+        Box::new(one_year_ms),
+        Box::new(six_month_ms),
+    ];
+    let account_sql = match account_ids {
+        None => String::new(),
+        Some(ids) => format!(
+            " AND {}",
+            super::search::account_set_clause("m.account_id", ids, &mut binds)
+        ),
+    };
+    let sql = format!(
+        "SELECT
+           COALESCE(SUM(m.body_state = 'cached'), 0),
+           COALESCE(SUM(m.body_state != 'cached'), 0)
+         FROM messages m
+         JOIN accounts a ON a.id = m.account_id
+         LEFT JOIN folders f ON f.id = m.folder_id
+         WHERE (
+             (a.provider = 'gmail' AND m.gm_msgid IS NOT NULL)
+             OR (a.mail_protocol = 'jmap' AND m.jmap_id IS NOT NULL AND m.jmap_blob_id IS NOT NULL)
+             OR (a.mail_protocol = 'imap' AND a.provider != 'gmail'
+                 AND m.uid IS NOT NULL AND COALESCE(f.role, '') != 'all')
+           )
+           AND (
+             COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths') = 'all'
+             OR COALESCE(m.internal_date, m.date) >= CASE
+               COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths')
+               WHEN 'oneMonth' THEN ?1
+               WHEN 'threeMonths' THEN ?2
+               WHEN 'oneYear' THEN ?3
+               ELSE ?4
+             END
+           )
+           {account_sql}"
+    );
+    let params = binds.iter().map(|value| value.as_ref()).collect::<Vec<_>>();
+    conn.query_row(&sql, params.as_slice(), |row| {
+        Ok(CatchUpProgress {
+            done: row.get(0)?,
+            pending: row.get(1)?,
+        })
+    })
+    .map_err(Into::into)
+}
+
 pub fn set_body_state(conn: &Connection, id: i64, state: &str) -> Result<()> {
     conn.execute(
         "UPDATE messages SET body_state = ?2 WHERE id = ?1",

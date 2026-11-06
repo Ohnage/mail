@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-06 05:16+0000\n"
+"POT-Creation-Date: 2026-11-06 07:50+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1566,7 +1566,7 @@ msgstr ""
 msgid "Add an account to send mail."
 msgstr ""
 
-#: ui/app.slint:546 ui/components/sidebar.slint:542
+#: ui/app.slint:546 ui/components/sidebar.slint:560
 msgid "On this device"
 msgstr ""
 
@@ -3441,7 +3441,7 @@ msgstr ""
 msgid "Tags"
 msgstr ""
 
-#: ui/components/sidebar.slint:458 ui/components/sidebar.slint:663
+#: ui/components/sidebar.slint:458 ui/components/sidebar.slint:681
 #: ui/views/mail-reading-pane.slint:1170
 msgid "Labels"
 msgstr ""
@@ -3450,36 +3450,40 @@ msgstr ""
 msgid "Global label {}"
 msgstr ""
 
-#: ui/components/sidebar.slint:511
+#: ui/components/sidebar.slint:511 ui/views/files-view.slint:581
+msgid "Folders"
+msgstr ""
+
+#: ui/components/sidebar.slint:529
 msgid "Mailboxes"
 msgstr ""
 
-#: ui/components/sidebar.slint:529 ui/views/contacts-view.slint:221
+#: ui/components/sidebar.slint:547 ui/views/contacts-view.slint:221
 msgid "ACCOUNTS"
 msgstr ""
 
-#: ui/components/sidebar.slint:563
+#: ui/components/sidebar.slint:581
 msgid "Address inbox {}"
 msgstr ""
 
-#: ui/components/sidebar.slint:684
+#: ui/components/sidebar.slint:702
 msgid "{} label, {} account"
 msgstr ""
 
-#: ui/components/sidebar.slint:733 ui/dialogs/folder-dialog.slint:29
+#: ui/components/sidebar.slint:751 ui/dialogs/folder-dialog.slint:29
 #: ui/views/files-view.slint:354 ui/views/files-view.slint:578
 msgid "New folder"
 msgstr ""
 
-#: ui/components/sidebar.slint:750
+#: ui/components/sidebar.slint:768
 msgid "New tag"
 msgstr ""
 
-#: ui/components/sidebar.slint:750 ui/dialogs/folder-dialog.slint:28
+#: ui/components/sidebar.slint:768 ui/dialogs/folder-dialog.slint:28
 msgid "New label"
 msgstr ""
 
-#: ui/components/sidebar.slint:770
+#: ui/components/sidebar.slint:788
 msgid "No folders found"
 msgstr ""
 
@@ -5133,10 +5137,11 @@ msgstr ""
 
 #: ui/dialogs/settings-dialog.slint:1649
 msgid ""
-"Mail already on this computer opens from the local store. New mail downloads "
-"in the background. Tabs, pins, label rules, and other settings are also "
-"written to mirror/settings.json beside the database so another computer can "
-"apply them. Mail is downloaded again on each computer."
+"Mail already on this computer opens from the local store, including message "
+"contents once they are saved. New mail and missing contents download in the "
+"background. Tabs, pins, label rules, and other settings are also written to "
+"mirror/settings.json beside the database so another computer can apply them. "
+"Mail is downloaded again on each computer."
 msgstr ""
 
 #: ui/dialogs/settings-dialog.slint:1669
@@ -6581,10 +6586,6 @@ msgstr ""
 msgid "Files and folders"
 msgstr ""
 
-#: ui/views/files-view.slint:581
-msgid "Folders"
-msgstr ""
-
 #: ui/views/files-view.slint:582 ui/views/files-view.slint:603
 msgid "Name"
 msgstr ""
@@ -6905,8 +6906,8 @@ msgstr ""
 
 #: ui/views/mail-list-pane.slint:697
 msgid ""
-"This computer is catching up once. Mail already stored here opens from this "
-"PC, and only new mail is downloaded after that."
+"The list stays usable. Message contents are saved on this computer, and mail "
+"already saved opens from this PC."
 msgstr ""
 
 #: ui/views/mail-list-pane.slint:737

@@ -264,7 +264,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                     width: max(0px, mailbox-scroll.visible-width - LayoutMetrics.sidebar-scrollbar-gutter);
                     height: !entry.show_row || (entry.reveal_row && !self.reveal-ready && MotionSettings.enabled) ? 0px
                         : entry.kind == SidebarRowKind.unified-heading ? 21px
-                        : entry.kind == SidebarRowKind.accounts-heading && entry.key == "mailboxes" ? 31px
+                        : entry.kind == SidebarRowKind.accounts-heading && (entry.key == "mailboxes" || entry.key == "company-folders") ? 31px
                         : entry.kind == SidebarRowKind.accounts-heading ? 25px
                         : entry.kind == SidebarRowKind.account ? (entry.mailbox.detail == "" ? 35px : root.account-row-height)
                         : entry.kind == SidebarRowKind.address-inbox ? max(48px, root.account-row-height)
@@ -503,6 +503,24 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         }
                     }
 
+                    if entry.kind == SidebarRowKind.accounts-heading && entry.key == "company-folders": SidebarSectionHeader {
+                        x: 0px;
+                        interactive: entry.show_row;
+                        y: 0px;
+                        width: parent.width;
+                        label: @tr("Folders");
+                        label-font-weight: 500;
+                        folder-row-style: true;
+                        sidebar-background: root.background-color;
+                        hover-background: root.hover-background;
+                        body-color: root.body-color;
+                        muted-color: root.muted-color;
+                        icon: @image-url("../icons/lucide/filled/file-directory.svg");
+                        icon-color: root.monochrome-icons ? root.body-color : MailIconPalette.folders;
+                        open: entry.open;
+                        toggled(open) => { root.toggle-section(entry.key, open); }
+                    }
+
                     if entry.kind == SidebarRowKind.accounts-heading && entry.key == "mailboxes": SidebarSectionHeader {
                         x: 0px;
                         interactive: entry.show_row;
@@ -521,7 +539,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         toggled(open) => { root.toggle-section(entry.key, open); }
                     }
 
-                    if entry.kind == SidebarRowKind.accounts-heading && entry.key != "mailboxes": WorkspaceMiniHeading {
+                    if entry.kind == SidebarRowKind.accounts-heading && entry.key != "mailboxes" && entry.key != "company-folders": WorkspaceMiniHeading {
                         x: 0px;
                         y: 0px;
                         width: parent.width;

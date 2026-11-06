@@ -931,6 +931,9 @@ impl Core {
                 for cfg in configs {
                     core.spawn_actor(cfg).await;
                 }
+                // Gmail and JMAP bodies are not part of header sync. This keeps
+                // saving them after the workers exist, newest mail first.
+                crate::sync::body_backfill::spawn(core.sync_ctx());
                 match core.db.read(|conn| repo::local::id(conn)).await {
                     Ok(Some(account_id)) => core.spawn_local_actor(account_id).await,
                     Ok(None) => {}
@@ -1077,9 +1080,8 @@ impl Core {
 
     /// Long-lived loop: on every mail change, reads the bodies of recent
     /// received messages that mention a code their subject and preview do
-    /// not show. Gmail and JMAP read bodies only when a message is opened,
-    /// and IMAP's background reading can be far behind, while a code is
-    /// wanted now.
+    /// not show. Background body download may still be behind the message
+    /// the user is looking at, and a code is wanted now.
     async fn code_body_loop(&self) {
         use tokio::sync::broadcast::error::RecvError;
         // Older codes have expired.
@@ -9173,6 +9175,38 @@ impl Core {
                     .find(|profile| profile.id == profile_id)
                     .ok_or_else(|| CoreError::NotFound(format!("mail profile {profile_id}")))?;
                 profile.logo = logo;
+                repo::settings::set(conn, &settings)?;
+                Ok(settings)
+            })
+            .await
+    }
+
+    /// Remember which sidebar rows are collapsed. Unchanged input is not written.
+    pub async fn set_sidebar_collapse(
+        &self,
+        sections: std::collections::HashMap<String, Vec<String>>,
+        folders: Vec<i64>,
+    ) -> Result<Settings> {
+        let mut sections = sections;
+        for keys in sections.values_mut() {
+            keys.sort();
+            keys.dedup();
+        }
+        let mut folders = folders;
+        folders.sort_unstable();
+        folders.dedup();
+        self.db
+            .write(move |conn| {
+                let mut settings = repo::settings::get(conn)?;
+                if settings.sidebar_collapse_saved
+                    && settings.sidebar_collapsed_sections == sections
+                    && settings.sidebar_collapsed_folders == folders
+                {
+                    return Ok(settings);
+                }
+                settings.sidebar_collapsed_sections = sections;
+                settings.sidebar_collapsed_folders = folders;
+                settings.sidebar_collapse_saved = true;
                 repo::settings::set(conn, &settings)?;
                 Ok(settings)
             })

@@ -899,6 +899,18 @@ impl CoreMailSource {
         self.core.settings_mirror_applied()
     }
 
+    pub async fn set_sidebar_collapse(
+        &self,
+        sections: std::collections::HashMap<String, Vec<String>>,
+        folders: Vec<i64>,
+    ) -> Result<(), String> {
+        self.core
+            .set_sidebar_collapse(sections, folders)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
     pub async fn load_mail_metadata(&self, scope: Scope) -> Result<MailMetadata, String> {
         let revision = self.account_revision();
         let profile = self.profile_accounts();

@@ -1045,6 +1045,8 @@ struct InboxState {
     mail_work: Option<mail_work::MailWork>,
     collapsed_folder_ids: HashSet<i64>,
     collapsed_sidebar_sections: HashSet<String>,
+    /// The next sidebar build should keep folders the user already left open.
+    adopt_saved_sidebar_collapse: bool,
     /// Expand state remembered per business tab. An empty key is All accounts.
     sidebar_collapse_by_tab: HashMap<String, HashSet<String>>,
     sidebar_collapse_tab: String,
@@ -1831,6 +1833,7 @@ impl InboxState {
             unified_mailboxes: Vec::new(),
             mail_work: None,
             collapsed_folder_ids: HashSet::new(),
+            adopt_saved_sidebar_collapse: false,
             collapsed_sidebar_sections: HashSet::from([
                 "categories".into(),
                 "global-labels".into(),
@@ -2052,6 +2055,32 @@ impl InboxState {
         true
     }
 
+    /// Apply the collapse state stored with settings. Call after the active
+    /// tab is known. A saved tab replaces the defaults; a tab that was never
+    /// saved keeps the defaults just applied.
+    fn load_saved_sidebar_collapse(&mut self, settings: &Settings) {
+        self.sidebar_collapse_by_tab = settings
+            .sidebar_collapsed_sections
+            .iter()
+            .map(|(tab, keys)| (tab.clone(), keys.iter().cloned().collect()))
+            .collect();
+        self.collapsed_folder_ids = settings.sidebar_collapsed_folders.iter().copied().collect();
+        self.initialized_sidebar_accounts.clear();
+        self.initialized_sidebar_folders.clear();
+        // Only a saved snapshot may skip the first-run collapse. Otherwise a
+        // company with thousands of folders would open every branch.
+        self.adopt_saved_sidebar_collapse = settings.sidebar_collapse_saved;
+        let tab = self
+            .account_presentation
+            .active_business_tab
+            .clone()
+            .unwrap_or_default();
+        if let Some(saved) = self.sidebar_collapse_by_tab.get(&tab).cloned() {
+            self.sidebar_collapse_tab = tab;
+            self.collapsed_sidebar_sections = saved;
+        }
+    }
+
     /// Replace the account inventory. Returns whether the selection moved to
     /// stay visible, in which case the caller must reload the message list.
     #[must_use]
@@ -2089,11 +2118,41 @@ impl InboxState {
                 next_cursor: self.next_cursor.and_then(WarmStartCursor::of),
                 accounts: &self.connected_accounts,
                 profile_accounts: self.profile_accounts.as_deref(),
+                company_account_ids: self.company_account_ids.as_deref(),
                 messages: &self.messages,
                 mailboxes: &self.mailboxes,
                 unified_mailboxes: &self.unified_mailboxes,
             }));
     }
+}
+
+fn persist_sidebar_collapse(runtime: &tokio::runtime::Runtime, state: &Rc<RefCell<InboxState>>) {
+    let (core, sections, folders) = {
+        let state = state.borrow();
+        let Some(core) = state.core.clone() else {
+            return;
+        };
+        let mut sections = state
+            .sidebar_collapse_by_tab
+            .iter()
+            .map(|(tab, keys)| (tab.clone(), keys.iter().cloned().collect::<Vec<_>>()))
+            .collect::<HashMap<_, Vec<_>>>();
+        sections.insert(
+            state.sidebar_collapse_tab.clone(),
+            state
+                .collapsed_sidebar_sections
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+        let folders = state.collapsed_folder_ids.iter().copied().collect::<Vec<_>>();
+        (core, sections, folders)
+    };
+    runtime.spawn(async move {
+        if let Err(error) = core.set_sidebar_collapse(sections, folders).await {
+            tracing::warn!(error = %error, "could not save which sidebar rows are collapsed");
+        }
+    });
 }
 
 /// Everything the shared application needs from its host. Desktop builds use
@@ -4149,6 +4208,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
     let section_toggle_state = Rc::clone(&state);
     let section_toggle_app = app.as_weak();
+    let section_toggle_runtime = Rc::clone(&runtime);
     app.on_toggle_sidebar_section(move |key, open| {
         {
             let mut state = section_toggle_state.borrow_mut();
@@ -4161,6 +4221,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let sections = state.collapsed_sidebar_sections.clone();
             state.sidebar_collapse_by_tab.insert(tab, sections);
         }
+        persist_sidebar_collapse(&section_toggle_runtime, &section_toggle_state);
         let animate = section_toggle_app
             .upgrade()
             .is_some_and(|app| app.global::<MotionSettings>().get_enabled());
@@ -4169,6 +4230,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
     let folder_toggle_state = Rc::clone(&state);
     let folder_toggle_app = app.as_weak();
+    let folder_toggle_runtime = Rc::clone(&runtime);
     app.on_toggle_folder(move |folder_id, expanded| {
         let folder_id = i64::from(folder_id);
         if expanded {
@@ -4182,6 +4244,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 .collapsed_folder_ids
                 .insert(folder_id);
         }
+        persist_sidebar_collapse(&folder_toggle_runtime, &folder_toggle_state);
         let animate = folder_toggle_app
             .upgrade()
             .is_some_and(|app| app.global::<MotionSettings>().get_enabled());
@@ -5329,13 +5392,18 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             let data_dir = state.core.as_ref().unwrap().data_dir();
                             state.account_presentation.load_logos(&data_dir);
                         }
-                        let _ = state.sync_profile_accounts();
                         // The startup scope was already validated for these
                         // accounts, which also become the source of truth.
                         let _ = state.set_connected_accounts(accounts);
                         state.account_configs = account_configs;
                         state.local_mail = local_mail;
                         state.set_scope(scope);
+                        // Company Inbox uses the open tab once the account
+                        // records exist, so a hub address can be excluded.
+                        let _ = state.sync_profile_accounts();
+                        if let Some(settings) = settings.as_ref() {
+                            state.load_saved_sidebar_collapse(settings);
+                        }
                         state.remote_images_enabled = allow_remote_images;
                         state.mark_read_on_open = settings
                             .as_ref()

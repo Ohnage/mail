@@ -2244,6 +2244,18 @@ pub struct Settings {
     /// key is the list used when no business tab is open.
     #[serde(default)]
     pub pinned_sidebar_tags: std::collections::HashMap<String, Vec<String>>,
+    /// Sidebar sections the user collapsed, keyed by business tab id. The
+    /// empty key is the view with no business tab. Account rows use
+    /// `account:<id>`. The custom-folder list uses `company-folders`.
+    #[serde(default)]
+    pub sidebar_collapsed_sections: std::collections::HashMap<String, Vec<String>>,
+    /// Folder ids the user collapsed, including merged company folders.
+    #[serde(default)]
+    pub sidebar_collapsed_folders: Vec<i64>,
+    /// True after the sidebar collapse has been saved once. An empty list
+    /// then means the user left those rows open.
+    #[serde(default)]
+    pub sidebar_collapse_saved: bool,
     /// Milliseconds when these preferences were last saved. `mirror/settings.json`
     /// carries the same value. A file with a greater value is applied on the
     /// next startup; an older file is left unused. Zero means the blob predates
@@ -2466,6 +2478,9 @@ impl Default for Settings {
             brand_registry_backup: None,
             label_rules: Vec::new(),
             pinned_sidebar_tags: std::collections::HashMap::new(),
+            sidebar_collapsed_sections: std::collections::HashMap::new(),
+            sidebar_collapsed_folders: Vec::new(),
+            sidebar_collapse_saved: false,
             mirror_updated_at: 0,
         }
     }

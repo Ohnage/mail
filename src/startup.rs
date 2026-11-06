@@ -39,7 +39,9 @@ use tokio::io::AsyncReadExt;
 // stores the provider and mail protocol names of the current account model.
 // Version 6 keeps message dates as timestamps instead of English text.
 // Version 7 records whether the rows are conversations or single messages.
-const WARM_START_FORMAT_VERSION: u32 = 7;
+// Version 8 records the open company tab's accounts. An older file listed
+// every account and could paint the wrong Company Inbox.
+const WARM_START_FORMAT_VERSION: u32 = 8;
 const MAX_WARM_START_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_WARM_START_ACCOUNTS: usize = 64;
 const MAX_WARM_START_MESSAGES: usize = 25;
@@ -279,6 +281,10 @@ pub(crate) struct WarmStartSnapshot {
     /// The active profile's accounts, which the saved rows show.
     #[serde(default)]
     pub(crate) profile_accounts: Option<Vec<i64>>,
+    /// Accounts that feed the open company tab. `None` is not a company tab.
+    /// `Some` is that tab only, including an empty tab.
+    #[serde(default)]
+    pub(crate) company_account_ids: Option<Vec<i64>>,
     pub(crate) messages: Vec<WarmStartMessage>,
     pub(crate) mailboxes: Vec<WarmStartMailbox>,
     pub(crate) unified_mailboxes: Vec<WarmStartMailbox>,
@@ -291,6 +297,7 @@ pub(crate) struct WarmStartProjection<'a> {
     pub(crate) next_cursor: Option<WarmStartCursor>,
     pub(crate) accounts: &'a [Account],
     pub(crate) profile_accounts: Option<&'a [i64]>,
+    pub(crate) company_account_ids: Option<&'a [i64]>,
     pub(crate) messages: &'a [mail::MailMessage],
     pub(crate) mailboxes: &'a [mail::MailboxEntry],
     pub(crate) unified_mailboxes: &'a [mail::MailboxEntry],
@@ -299,11 +306,19 @@ pub(crate) struct WarmStartProjection<'a> {
 impl WarmStartSnapshot {
     pub(crate) fn capture(projection: WarmStartProjection<'_>) -> Self {
         // Local mail is left out: until the core is open, nothing names it.
+        // A company tab saves only its own accounts. The full account list
+        // made Company Inbox look like every mailbox on the next launch.
+        let company = projection
+            .company_account_ids
+            .map(|ids| ids.iter().copied().collect::<HashSet<_>>());
         let connected = |account_id: i64| {
             projection
                 .accounts
                 .iter()
                 .any(|account| account.id == account_id)
+                && company
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&account_id))
         };
         Self {
             format_version: WARM_START_FORMAT_VERSION,
@@ -315,10 +330,12 @@ impl WarmStartSnapshot {
             accounts: projection
                 .accounts
                 .iter()
+                .filter(|account| connected(account.id))
                 .take(MAX_WARM_START_ACCOUNTS)
                 .cloned()
                 .collect(),
             profile_accounts: projection.profile_accounts.map(<[i64]>::to_vec),
+            company_account_ids: projection.company_account_ids.map(<[i64]>::to_vec),
             messages: projection
                 .messages
                 .iter()
@@ -329,7 +346,7 @@ impl WarmStartSnapshot {
             mailboxes: projection
                 .mailboxes
                 .iter()
-                .filter(|mailbox| connected(mailbox.account_id))
+                .filter(|mailbox| mailbox.account_id <= 0 || connected(mailbox.account_id))
                 .take(MAX_WARM_START_MAILBOXES)
                 .map(WarmStartMailbox::from)
                 .collect(),
@@ -392,6 +409,7 @@ pub(crate) fn apply_warm_start_snapshot(
         // The saved rows show the profile's accounts; so do the sidebar and
         // scope until settings load.
         state.profile_accounts = snapshot.profile_accounts;
+        state.company_account_ids = snapshot.company_account_ids;
         let _ = state.set_connected_accounts(snapshot.accounts);
         state.set_scope(snapshot.scope);
         state.inbox_count = snapshot.inbox_count;
@@ -1051,6 +1069,7 @@ mod warm_start_tests {
             next_cursor: None,
             accounts: &[account()],
             profile_accounts: None,
+            company_account_ids: None,
             messages: &[message()],
             mailboxes: &mailboxes,
             unified_mailboxes: &[],
@@ -1265,6 +1284,54 @@ mod warm_start_tests {
         }
     }
 
+    #[test]
+    fn company_warm_start_keeps_only_the_open_tab() {
+        let mut other = account();
+        other.id = 8;
+        other.email = "other@example.com".into();
+        let mut other_message = message();
+        other_message.account_id = 8;
+        let mut other_mailbox = mailbox();
+        other_mailbox.account_id = 8;
+        other_mailbox.is_account = true;
+        let company_row = mail::MailboxEntry {
+            account_id: -2,
+            folder_id: 4,
+            is_account: false,
+            label: "Clients".into(),
+            ..mailbox()
+        };
+        let snapshot = WarmStartSnapshot::capture(WarmStartProjection {
+            scope: Scope::CompanyInbox,
+            inbox_count: 1,
+            grouping: MailGrouping::Conversations,
+            next_cursor: None,
+            accounts: &[account(), other],
+            profile_accounts: None,
+            company_account_ids: Some(&[7]),
+            messages: &[message(), other_message],
+            mailboxes: &[mailbox(), other_mailbox, company_row],
+            unified_mailboxes: &[],
+        });
+        assert_eq!(
+            snapshot
+                .accounts
+                .iter()
+                .map(|account| account.id)
+                .collect::<Vec<_>>(),
+            vec![7]
+        );
+        assert!(
+            snapshot
+                .messages
+                .iter()
+                .all(|message| message.account_id == 7)
+        );
+        assert!(snapshot.mailboxes.iter().any(|row| row.account_id == -2));
+        assert!(snapshot.mailboxes.iter().all(|row| row.account_id != 8));
+        assert_eq!(snapshot.company_account_ids.as_deref(), Some(&[7][..]));
+    }
+
     #[tokio::test]
     async fn warm_start_round_trip_excludes_bodies_and_recipient_details() {
         let temporary = tempfile::tempdir().unwrap();
@@ -1282,6 +1349,7 @@ mod warm_start_tests {
             })),
             accounts: &accounts,
             profile_accounts: Some(&[7]),
+            company_account_ids: None,
             messages: &messages,
             mailboxes: &mailboxes,
             unified_mailboxes: &[],
@@ -1361,6 +1429,7 @@ mod warm_start_tests {
             next_cursor: None,
             accounts: &accounts,
             profile_accounts: None,
+            company_account_ids: None,
             messages: &messages,
             mailboxes: &mailboxes,
             unified_mailboxes: &[],
@@ -1372,7 +1441,7 @@ mod warm_start_tests {
     #[test]
     fn benchmark_warm_cache_fixture_matches_the_current_format() {
         let snapshot: WarmStartSnapshot = serde_json::from_str(include_str!(
-            "../resources/benchmarks/warm-cache/warm-start-mailbox-v7.json"
+            "../resources/benchmarks/warm-cache/warm-start-mailbox-v8.json"
         ))
         .unwrap();
 

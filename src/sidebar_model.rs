@@ -140,9 +140,10 @@ fn collapse_new_account_label_sections(
     initialized: &mut HashSet<i64>,
     collapsed: &mut HashSet<String>,
     collapse_accounts: bool,
+    adopt_saved: bool,
 ) {
     for account_id in account_ids {
-        if initialized.insert(account_id) {
+        if initialized.insert(account_id) && !adopt_saved {
             collapsed.insert(format!("account-labels:{account_id}"));
             if collapse_accounts {
                 collapsed.insert(format!("account:{account_id}"));
@@ -155,9 +156,10 @@ fn collapse_new_folder_sections(
     folder_ids: impl IntoIterator<Item = i64>,
     initialized: &mut HashSet<i64>,
     collapsed: &mut HashSet<i64>,
+    adopt_saved: bool,
 ) {
     for folder_id in folder_ids {
-        if initialized.insert(folder_id) {
+        if initialized.insert(folder_id) && !adopt_saved {
             collapsed.insert(folder_id);
         }
     }
@@ -242,6 +244,8 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         .map(|mailbox| mailbox.folder_id)
         .collect::<Vec<_>>();
     let collapse_accounts = !state.sidebar_collapse_tab.is_empty();
+    let adopt_saved = state.adopt_saved_sidebar_collapse;
+    state.adopt_saved_sidebar_collapse = false;
     let InboxState {
         initialized_sidebar_accounts,
         initialized_sidebar_folders,
@@ -254,11 +258,13 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         initialized_sidebar_accounts,
         collapsed_sidebar_sections,
         collapse_accounts,
+        adopt_saved,
     );
     collapse_new_folder_sections(
         folder_ids,
         initialized_sidebar_folders,
         collapsed_folder_ids,
+        adopt_saved,
     );
     let query = state.folder_filter.trim().to_owned();
     let filtering = !query.is_empty();
@@ -911,7 +917,10 @@ fn make_company_sidebar_rows(
         .collect::<Vec<_>>();
     let merged = merge_folders(&leaves);
     let mut company_mailboxes = Vec::with_capacity(merged.len());
+    rows.push(section(Kind::AccountsHeading, "company-folders", collapsed));
+    let folders_open = !collapsed.contains("company-folders");
     let mut hidden_depth = None;
+    if folders_open {
     for node in &merged {
         if let Some(depth) = hidden_depth {
             if node.depth > depth {
@@ -983,6 +992,7 @@ fn make_company_sidebar_rows(
         },
         ..row(Kind::NewFolder, "new-folder:company")
     });
+    }
     rows.push(section(
         Kind::GlobalLabelsSection,
         "company-tags",
@@ -1390,14 +1400,14 @@ mod tests {
     fn new_account_labels_start_collapsed_without_collapsing_accounts() {
         let mut initialized = HashSet::new();
         let mut collapsed = defaults();
-        collapse_new_account_label_sections([1, 2], &mut initialized, &mut collapsed, false);
+        collapse_new_account_label_sections([1, 2], &mut initialized, &mut collapsed, false, false);
         assert!(!collapsed.contains("account:1"));
         assert!(collapsed.contains("account-labels:1"));
         assert!(!collapsed.contains("account:2"));
         assert!(collapsed.contains("account-labels:2"));
 
         collapsed.remove("account-labels:1");
-        collapse_new_account_label_sections([1, 2, 3], &mut initialized, &mut collapsed, false);
+        collapse_new_account_label_sections([1, 2, 3], &mut initialized, &mut collapsed, false, false);
         assert!(!collapsed.contains("account:1"));
         assert!(!collapsed.contains("account-labels:1"));
         assert!(!collapsed.contains("account:3"));
@@ -1408,11 +1418,11 @@ mod tests {
     fn new_folder_branches_start_collapsed_without_overriding_user_expansion() {
         let mut initialized = HashSet::new();
         let mut collapsed = HashSet::new();
-        collapse_new_folder_sections([10, 20], &mut initialized, &mut collapsed);
+        collapse_new_folder_sections([10, 20], &mut initialized, &mut collapsed, false);
         assert_eq!(collapsed, HashSet::from([10, 20]));
 
         collapsed.remove(&10);
-        collapse_new_folder_sections([10, 20, 30], &mut initialized, &mut collapsed);
+        collapse_new_folder_sections([10, 20, 30], &mut initialized, &mut collapsed, false);
         assert_eq!(collapsed, HashSet::from([20, 30]));
     }
 
@@ -1572,7 +1582,7 @@ mod tests {
             },
         ];
         let (rows, entries) = make_company_sidebar_rows(
-            mailboxes,
+            mailboxes.clone(),
             vec![],
             vec![],
             &[],
@@ -1604,6 +1614,32 @@ mod tests {
                     Kind::CategoriesSection | Kind::Important | Kind::Other | Kind::Category
                 )
             })
+        );
+        assert!(rows.iter().any(|row| row.key.as_str() == "company-folders" && row.open));
+        let (collapsed_rows, _) = make_company_sidebar_rows(
+            mailboxes,
+            vec![],
+            vec![],
+            &[],
+            &HashSet::new(),
+            &HashSet::from(["company-folders".to_owned()]),
+            &HashSet::new(),
+            &[1],
+            &HashMap::new(),
+            0,
+            "Company",
+            None,
+            &[],
+        );
+        assert!(
+            collapsed_rows
+                .iter()
+                .any(|row| row.key.as_str() == "company-folders" && !row.open)
+        );
+        assert!(
+            !collapsed_rows
+                .iter()
+                .any(|row| row.kind == Kind::Folder && row.mailbox.account_id == -2)
         );
         assert!(rows.iter().any(|row| row.key.as_str() == "company-tags"));
         assert!(

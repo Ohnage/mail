@@ -20,6 +20,7 @@ fn apply_account_presentation_settings(
         if let Some(core) = state.core.clone() {
             state.account_presentation.load_logos(&core.data_dir());
         }
+        state.load_saved_sidebar_collapse(settings);
     }
     app.set_show_message_preview(settings.show_message_preview);
     refresh_connected_accounts(app, state);

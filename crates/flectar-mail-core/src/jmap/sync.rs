@@ -2633,6 +2633,40 @@ async fn body_session<'a>(
     Ok(session.as_ref().expect("the session was connected above"))
 }
 
+/// Download these JMAP messages on one connection. A message that is already
+/// cached or already being fetched is skipped. One failure does not stop the
+/// rest; the connection is opened again for the next message.
+pub(crate) async fn cache_message_bodies(
+    ctx: &crate::sync::engine::SyncCtx,
+    config: &AccountConfig,
+    message_ids: &[i64],
+) -> Vec<(i64, std::result::Result<(), String>)> {
+    let mut session = None;
+    let mut results = Vec::new();
+    for message_id in message_ids.iter().copied() {
+        let claimed = ctx
+            .db
+            .write(move |conn| repo::messages::begin_body_fetch(conn, message_id))
+            .await
+            .unwrap_or(false);
+        if !claimed {
+            continue;
+        }
+        match fetch_body(ctx, config, &mut session, message_id).await {
+            Ok(()) => results.push((message_id, Ok(()))),
+            Err(error) => {
+                session = None;
+                let _ = ctx
+                    .db
+                    .write(move |conn| repo::messages::cancel_body_fetch(conn, message_id))
+                    .await;
+                results.push((message_id, Err(error.to_string())));
+            }
+        }
+    }
+    results
+}
+
 async fn fetch_body(
     ctx: &SyncCtx,
     config: &AccountConfig,

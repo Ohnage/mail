@@ -598,6 +598,28 @@ pub fn catch_up_progress(
             pending: 0,
         });
     }
+    let now = crate::models::now_ms();
+    let bodies = super::messages::body_cache_progress(
+        conn,
+        account_ids,
+        crate::models::MailHistory::OneMonth
+            .cutoff_ms_at(now)
+            .unwrap_or(0),
+        crate::models::MailHistory::ThreeMonths
+            .cutoff_ms_at(now)
+            .unwrap_or(0),
+        crate::models::MailHistory::OneYear
+            .cutoff_ms_at(now)
+            .unwrap_or(0),
+        crate::models::MailHistory::SixMonths
+            .cutoff_ms_at(now)
+            .unwrap_or(0),
+    )?;
+    // Once any message exists, the number the user sees is saved message
+    // contents. Header backfill is the number only before the first message.
+    if bodies.done + bodies.pending > 0 {
+        return Ok(bodies);
+    }
     let done = catch_up_count(conn, account_ids, true)?;
     let pending = catch_up_count(conn, account_ids, false)?;
     Ok(CatchUpProgress { done, pending })
@@ -1090,5 +1112,42 @@ mod tests {
         let finished = catch_up_progress(&conn, Some(&[1])).unwrap();
         assert!(!finished.downloading());
         assert!(finished.done >= 1);
+    }
+
+    #[test]
+    fn catch_up_counts_uncached_bodies_after_headers_are_done() {
+        let conn = testutil::conn();
+        testutil::seed_account(&conn);
+        set_backfill(&conn, 1, Some(1), true).unwrap();
+        let (_, message_id) = testutil::seed_message(&conn, "sender@example.com", "Hello", false);
+        let now = crate::models::now_ms();
+        conn.execute(
+            "UPDATE messages SET date = ?2, body_state = 'none' WHERE id = ?1",
+            params![message_id, now],
+        )
+        .unwrap();
+        let pending = catch_up_progress(&conn, Some(&[1])).unwrap();
+        assert!(pending.downloading());
+        assert_eq!(pending.pending, 1);
+        assert_eq!(pending.done, 0);
+        conn.execute(
+            "UPDATE messages SET body_state = 'cached' WHERE id = ?1",
+            [message_id],
+        )
+        .unwrap();
+        let done = catch_up_progress(&conn, Some(&[1])).unwrap();
+        assert!(!done.downloading());
+        assert_eq!(done.done, 1);
+        // Mail older than the account's history window is not part of the
+        // background download, so it does not hold the banner open.
+        let (_, old_id) = testutil::seed_message(&conn, "sender@example.com", "Old", false);
+        conn.execute(
+            "UPDATE messages SET date = 1000, body_state = 'none' WHERE id = ?1",
+            [old_id],
+        )
+        .unwrap();
+        let still = catch_up_progress(&conn, Some(&[1])).unwrap();
+        assert!(!still.downloading());
+        assert_eq!(still.done, 1);
     }
 }

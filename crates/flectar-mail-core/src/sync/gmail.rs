@@ -2232,6 +2232,78 @@ async fn hydrate_parts(api: &GmailApi, resource: &Value) -> Result<HydratedBody>
     Ok(hydrated)
 }
 
+/// Text for the reading pane, without downloading file attachments. Those stay
+/// available on demand. Inline text that Gmail stored as an attachment id is
+/// still fetched, because otherwise the saved message would open blank.
+async fn hydrate_readable_body(api: &GmailApi, resource: &Value) -> Result<HydratedBody> {
+    let message_id = required_string(resource, "id")?;
+    let mut specs = Vec::new();
+    collect_part_specs(resource.get("payload").unwrap_or(&Value::Null), &mut specs)?;
+    let mut hydrated = HydratedBody::default();
+    for spec in specs {
+        let is_text_body = !spec.mime_type.eq_ignore_ascii_case("message/rfc822")
+            && (spec.mime_type == "text/plain"
+                || spec.mime_type == "text/html"
+                || spec.mime_type == "text/calendar");
+        if !is_text_body {
+            hydrated.attachments.push(HydratedAttachment {
+                part_id: spec.part_id,
+                provider_attachment_id: spec.provider_attachment_id,
+                filename: spec.filename,
+                mime_type: spec.mime_type,
+                size: spec.size.max(0),
+                content_id: spec.content_id,
+                is_inline: spec.is_inline,
+                inline_bytes: None,
+            });
+            continue;
+        }
+        let bytes = match (&spec.encoded_data, &spec.provider_attachment_id) {
+            (Some(data), _) => decode_gmail_data(data)?,
+            (None, Some(attachment_id)) => api.attachment(message_id, attachment_id).await?,
+            (None, None) => Vec::new(),
+        };
+        let decoded = decode_text_part(&bytes, spec.charset.as_deref());
+        match spec.mime_type.as_str() {
+            "text/plain" if hydrated.text.is_none() => hydrated.text = Some(decoded),
+            "text/html" if hydrated.html.is_none() => {
+                hydrated.html = Some(crate::mime::sanitize_html(&decoded))
+            }
+            "text/calendar" => hydrated.calendar_parts.push(decoded),
+            _ => {}
+        }
+    }
+    if hydrated.text.is_none() {
+        hydrated.text = hydrated.html.as_deref().map(html_to_text);
+    }
+    if hydrated.html.is_none() {
+        hydrated.html = hydrated
+            .text
+            .as_deref()
+            .map(|text| format!("<pre>{}</pre>", escape_html(text)));
+    }
+    Ok(hydrated)
+}
+
+/// Download one Gmail message and store its text. File attachments are named
+/// but not downloaded. A cached row is left unchanged by the caller.
+pub(crate) async fn cache_message_body(
+    ctx: &SyncCtx,
+    config: &AccountConfig,
+    remote_id: &str,
+) -> Result<()> {
+    let api = GmailApi::new(ctx.clone(), config.clone())?;
+    let resource = api
+        .get_json(&format!(
+            "{GMAIL_API}/messages/{}?format=full",
+            urlencode(remote_id)
+        ))
+        .await?;
+    let body = hydrate_readable_body(&api, &resource).await?;
+    store_hydrated_body(ctx, config, remote_id.to_owned(), body).await?;
+    Ok(())
+}
+
 fn decode_text_part(bytes: &[u8], charset: Option<&str>) -> String {
     let encoding = charset
         .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))

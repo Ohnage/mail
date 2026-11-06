@@ -42,6 +42,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration::TableRebuild(include_str!("migrations/023_local_mail.sql")),
     Migration::Plain(include_str!("migrations/024_delivery_recipients.sql")),
     Migration::Plain(include_str!("migrations/025_message_list_indexes.sql")),
+    Migration::Plain(include_str!("migrations/026_uncached_body_index.sql")),
 ];
 pub const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -396,6 +397,10 @@ mod tests {
         assert_eq!(
             index_columns("idx_messages_pending_body_page"),
             ["folder_id", "date", "id"]
+        );
+        assert_eq!(
+            index_columns("idx_messages_uncached_recent"),
+            ["date", "id"]
         );
         assert_eq!(index_columns("idx_contacts_unfolded"), ["id"]);
         assert_eq!(

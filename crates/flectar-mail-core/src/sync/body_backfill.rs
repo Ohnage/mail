@@ -50,30 +50,26 @@ async fn download_page(ctx: &SyncCtx) -> crate::error::Result<u64> {
     let (jmap, gmail) = ctx
         .db
         .read(move |conn| {
-            let one_month = MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0);
-            let three_months = MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0);
-            let one_year = MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0);
-            let six_months = MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0);
+            let cutoffs = [
+                MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0),
+                MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0),
+            ];
             // Separate queues. One shared newest-N page let ~100k uncached
             // Gmail rows crowd JMAP down to the one or two JMAP ids that
             // happened to be in that page.
             let jmap = repo::messages::newest_uncached_remote_bodies(
                 conn,
                 now,
-                one_month,
-                three_months,
-                one_year,
-                six_months,
+                cutoffs,
                 PAGE,
                 repo::messages::RemoteBodySource::Jmap,
             )?;
             let gmail = repo::messages::newest_uncached_remote_bodies(
                 conn,
                 now,
-                one_month,
-                three_months,
-                one_year,
-                six_months,
+                cutoffs,
                 i64::try_from(GMAIL_PAGE).unwrap_or(32),
                 repo::messages::RemoteBodySource::Gmail,
             )?;

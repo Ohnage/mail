@@ -315,10 +315,12 @@ jobs:
       - name: Audit the locked dependency graph
         shell: bash
         # The first four exceptions are unmaintained notices in optional/build
-        # or Slint/Blitz typography dependencies. The last three cover crates
-        # folded into zbus 6: remove them when Slint, ashpd, and ksni migrate
-        # from zbus 5. These are maintenance notices, not vulnerability waivers.
-        # Deny every other warning and all known vulnerabilities.
+        # or Slint/Blitz typography dependencies. RUSTSEC-2026-0441 is
+        # unmaintained pin-utils 0.1, pulled in by async-imap and spin_on.
+        # The last three cover crates folded into zbus 6: remove them when
+        # Slint, ashpd, and ksni migrate from zbus 5. These are maintenance
+        # notices, not vulnerability waivers. Deny every other warning and
+        # all known vulnerabilities.
         run: |
           lockfiles="Cargo.lock"
           # The Windows fork has one product lockfile. Preserve upstream's
@@ -337,5 +339,6 @@ jobs:
               --ignore RUSTSEC-2026-0192 \
               --ignore RUSTSEC-2026-0370 \
               --ignore RUSTSEC-2026-0371 \
-              --ignore RUSTSEC-2026-0372
+              --ignore RUSTSEC-2026-0372 \
+              --ignore RUSTSEC-2026-0441
           done

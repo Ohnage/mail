@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-06 07:50+0000\n"
+"POT-Creation-Date: 2026-11-06 20:14+0000\n"
 "PO-Revision-Date: 2026-09-15 12:00+0000\n"
 "Last-Translator: Flectar contributors\n"
 "Language-Team: Turkish\n"
@@ -384,7 +384,7 @@ msgstr "Konuşma geçmişi mevcut"
 msgid "New address-book entry"
 msgstr "Yeni adres defteri kaydı"
 
-#: ui/app.slint:180 ui/app.slint:1091 ui/components/composer-fields.slint:66
+#: ui/app.slint:180 ui/app.slint:1092 ui/components/composer-fields.slint:66
 #: ui/dialogs/compose-dialog.slint:37
 msgid "No connected account"
 msgstr "Bağlı hesap yok"
@@ -1679,82 +1679,86 @@ msgid "Compose failed: {}"
 msgstr "Oluşturma başarısız: {}"
 
 #: ui/app.slint:575
+msgid "Compose failed: {}. The message is still in this window."
+msgstr "Oluşturma başarısız: {}. İleti bu pencerede duruyor."
+
+#: ui/app.slint:576
 msgid "Connect an account before managing email templates."
 msgstr "E-posta şablonlarını yönetmeden önce bir hesap bağlayın."
 
-#: ui/app.slint:576
+#: ui/app.slint:577
 msgid "Could not load email templates: {}"
 msgstr "E-posta şablonları yüklenemedi: {}"
 
-#: ui/app.slint:577
+#: ui/app.slint:578
 msgid "Enter a template name."
 msgstr "Bir şablon adı girin."
 
-#: ui/app.slint:578
+#: ui/app.slint:579
 msgid "Add a subject or message to the template."
 msgstr "Şablona bir konu veya ileti ekleyin."
 
-#: ui/app.slint:579
+#: ui/app.slint:580
 msgid "Email template saved."
 msgstr "E-posta şablonu kaydedildi."
 
-#: ui/app.slint:580
+#: ui/app.slint:581
 msgid "Could not save email template: {}"
 msgstr "E-posta şablonu kaydedilemedi: {}"
 
-#: ui/app.slint:581
+#: ui/app.slint:582
 msgid "Email template deleted."
 msgstr "E-posta şablonu silindi."
 
-#: ui/app.slint:582
+#: ui/app.slint:583
 msgid "Could not delete email template: {}"
 msgstr "E-posta şablonu silinemedi: {}"
 
-#: ui/app.slint:583
+#: ui/app.slint:584
 msgid "Email template is no longer available."
 msgstr "E-posta şablonu artık mevcut değil."
 
-#: ui/app.slint:584
+#: ui/app.slint:585
 msgid "Email template inserted."
 msgstr "E-posta şablonu eklendi."
 
-#: ui/app.slint:585
+#: ui/app.slint:586
 msgid "Email template inserted, but its usage could not be saved: {}"
 msgstr "E-posta şablonu eklendi, ancak kullanımı kaydedilemedi: {}"
 
-#: ui/app.slint:586
+#: ui/app.slint:587
 msgid "Choose a supported account type and connection security."
 msgstr ""
 
-#: ui/app.slint:587
+#: ui/app.slint:588
 msgid "IMAP port must be between 1 and 65535."
 msgstr "IMAP bağlantı noktası 1 ile 65535 arasında olmalıdır."
 
-#: ui/app.slint:588
+#: ui/app.slint:589
 msgid "POP3 port must be between 1 and 65535."
 msgstr ""
 
-#: ui/app.slint:589
+#: ui/app.slint:590
 msgid "SMTP port must be between 1 and 65535."
 msgstr "SMTP bağlantı noktası 1 ile 65535 arasında olmalıdır."
 
-#: ui/app.slint:590
+#: ui/app.slint:591
 msgid "Local mail data is unavailable. Retry startup."
 msgstr "Yerel e-posta verisi kullanılamıyor. Başlatmayı yeniden deneyin."
 
-#: ui/app.slint:591
+#: ui/app.slint:592
 msgid "Discovering JMAP and checking capabilities…"
 msgstr "JMAP keşfediliyor ve yetenekler denetleniyor…"
 
-#: ui/app.slint:592
+#: ui/app.slint:593
 msgid "Certificate imported. Connect to verify the server."
 msgstr "Sertifika içe aktarıldı. Sunucuyu doğrulamak için bağlanın."
 
-#: ui/app.slint:593
+#: ui/app.slint:594
 msgid "Could not load account preferences: {}"
 msgstr "Hesap tercihleri yüklenemedi: {}"
 
-#: ui/app.slint:594
+#: ui/app.slint:595
 msgid ""
 "Your edited signature was preserved. Choose No signature to keep it as "
 "message text before inserting another."
@@ -1762,19 +1766,19 @@ msgstr ""
 "Düzenlediğiniz imza korundu. Başka birini eklemeden önce onu ileti metni "
 "olarak tutmak için İmza yok'u seçin."
 
-#: ui/app.slint:595
+#: ui/app.slint:596
 msgid "Certificate import failed: {}"
 msgstr "Sertifika içe aktarılamadı: {}"
 
-#: ui/app.slint:596
+#: ui/app.slint:597
 msgid "Testing IMAP and SMTP connections…"
 msgstr "IMAP ve SMTP bağlantıları sınanıyor…"
 
-#: ui/app.slint:597
+#: ui/app.slint:598
 msgid "Testing POP3 and SMTP connections…"
 msgstr ""
 
-#: ui/app.slint:602
+#: ui/app.slint:603
 msgid ""
 "Another browser authorization is already in progress; finish it or choose "
 "Cancel."
@@ -1782,145 +1786,145 @@ msgstr ""
 "Başka bir tarayıcı yetkilendirmesi zaten sürüyor; onu bitirin veya İptal'i "
 "seçin."
 
-#: ui/app.slint:603 ui/dialogs/settings-dialog.slint:2082
+#: ui/app.slint:604 ui/dialogs/settings-dialog.slint:2082
 #: ui/dialogs/settings-dialog.slint:2125 ui/views/onboarding-view.slint:161
 msgid "Add app keys in Sign-in settings to enable this provider."
 msgstr ""
 "Bu sağlayıcıyı etkinleştirmek için Oturum açma ayarlarında uygulama "
 "anahtarları ekleyin."
 
-#: ui/app.slint:604
+#: ui/app.slint:605
 msgid "Choose Gmail or Outlook OAuth."
 msgstr "Gmail veya Outlook OAuth seçin."
 
-#: ui/app.slint:605
+#: ui/app.slint:606
 msgid "Complete sign-in in your browser, or choose Cancel here."
 msgstr "Oturum açmayı tarayıcınızda tamamlayın veya burada İptal'i seçin."
 
-#: ui/app.slint:606
+#: ui/app.slint:607
 msgid "Cancelling browser sign-in…"
 msgstr "Tarayıcıyla oturum açma iptal ediliyor…"
 
-#: ui/app.slint:607
+#: ui/app.slint:608
 msgid "Finishing browser sign-in…"
 msgstr "Tarayıcıyla oturum açma tamamlanıyor…"
 
-#: ui/app.slint:608
+#: ui/app.slint:609
 msgid "Could not use that browser address: {}"
 msgstr "O tarayıcı adresi kullanılamadı: {}"
 
-#: ui/app.slint:609
+#: ui/app.slint:610
 msgid "Calendar core is unavailable."
 msgstr "Takvim çekirdeği kullanılamıyor."
 
-#: ui/app.slint:610
+#: ui/app.slint:611
 msgid "Account no longer exists."
 msgstr "Hesap artık yok."
 
-#: ui/app.slint:611
+#: ui/app.slint:612
 msgid "Authorize calendar access in your browser."
 msgstr "Takvim erişimini tarayıcınızda yetkilendirin."
 
-#: ui/app.slint:612
+#: ui/app.slint:613
 msgid "OAuth app keys saved."
 msgstr "OAuth uygulama anahtarları kaydedildi."
 
-#: ui/app.slint:613
+#: ui/app.slint:614
 msgid "{} OAuth settings saved."
 msgstr "{} OAuth ayarları kaydedildi."
 
-#: ui/app.slint:614
+#: ui/app.slint:615
 msgid "OAuth settings failed: {}"
 msgstr "OAuth ayarları başarısız: {}"
 
-#: ui/app.slint:615
+#: ui/app.slint:616
 msgid "Mail refresh failed: {}"
 msgstr "E-posta yenilemesi başarısız: {}"
 
-#: ui/app.slint:616
+#: ui/app.slint:617
 msgid "Mail filter failed: {}"
 msgstr "E-posta filtresi başarısız: {}"
 
-#: ui/app.slint:617
+#: ui/app.slint:618
 msgid "Mail pagination failed: {}"
 msgstr "E-posta sayfalaması başarısız: {}"
 
-#: ui/app.slint:618
+#: ui/app.slint:619
 msgid "Could not mark message as read: {}"
 msgstr "İleti okundu olarak işaretlenemedi: {}"
 
-#: ui/app.slint:619 ui/views/mail-reading-pane.slint:196
+#: ui/app.slint:620 ui/views/mail-reading-pane.slint:196
 #: ui/views/mail-reading-pane.slint:1441
 msgid "Loading message…"
 msgstr "İleti yükleniyor…"
 
-#: ui/app.slint:625 ui/components/workspace-navigation.slint:798
+#: ui/app.slint:626 ui/components/workspace-navigation.slint:798
 #: ui/tray.slint:13 ui/tray.slint:14
 msgid "Flectar Mail"
 msgstr "Flectar Mail"
 
-#: ui/app.slint:1348 ui/app.slint:1361
+#: ui/app.slint:1349 ui/app.slint:1362
 msgid "Global Labels (local only)"
 msgstr "Genel Etiketler (yalnızca yerel)"
 
-#: ui/app.slint:2325
+#: ui/app.slint:2326
 msgid "Empty Trash?"
 msgstr ""
 
-#: ui/app.slint:2325 ui/views/files-view.slint:578
+#: ui/app.slint:2326 ui/views/files-view.slint:578
 msgid "Delete permanently?"
 msgstr "Kalıcı olarak silinsin mi?"
 
-#: ui/app.slint:2329
+#: ui/app.slint:2330
 msgid ""
 "Permanently delete all messages in Trash across every connected account?"
 msgstr ""
 
-#: ui/app.slint:2330
+#: ui/app.slint:2331
 msgid "Permanently delete all messages in this account’s Trash?"
 msgstr ""
 
-#: ui/app.slint:2332
+#: ui/app.slint:2333
 msgid "Permanently delete the selected conversations from Trash?"
 msgstr ""
 
-#: ui/app.slint:2333
+#: ui/app.slint:2334
 msgid "Permanently delete this conversation from Trash?"
 msgstr ""
 
-#: ui/app.slint:2334 ui/components/calendar.slint:947
+#: ui/app.slint:2335 ui/components/calendar.slint:947
 msgid "This action cannot be undone."
 msgstr "Bu işlem geri alınamaz."
 
-#: ui/app.slint:2335
+#: ui/app.slint:2336
 msgid "Empty Trash"
 msgstr ""
 
-#: ui/app.slint:2335 ui/views/files-view.slint:660
+#: ui/app.slint:2336 ui/views/files-view.slint:660
 msgid "Delete permanently"
 msgstr "Kalıcı olarak sil"
 
-#: ui/app.slint:2513
+#: ui/app.slint:2514
 msgid "Mailbox startup failed"
 msgstr "Posta kutusu başlatılamadı"
 
-#: ui/app.slint:2519
+#: ui/app.slint:2520
 msgid "Flectar Mail could not open local storage"
 msgstr "Flectar Mail yerel depolamayı açamadı"
 
-#: ui/app.slint:2532
+#: ui/app.slint:2533
 msgid "Diagnostic ID: {}"
 msgstr "Tanılama kimliği: {}"
 
-#: ui/app.slint:2535
+#: ui/app.slint:2536
 msgid "Diagnostic ID {}"
 msgstr "Tanılama kimliği {}"
 
-#: ui/app.slint:2540
+#: ui/app.slint:2541
 msgid "Retry"
 msgstr "Yeniden dene"
 
-#: ui/app.slint:2548 ui/components/copyable-diagnostic.slint:43
+#: ui/app.slint:2549 ui/components/copyable-diagnostic.slint:43
 msgid "Copy diagnostics"
 msgstr "Tanılama bilgilerini kopyala"
 

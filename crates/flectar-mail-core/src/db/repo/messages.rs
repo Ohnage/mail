@@ -619,13 +619,11 @@ pub enum RemoteBodySource {
 pub fn newest_uncached_remote_bodies(
     conn: &Connection,
     now_ms: i64,
-    one_month_ms: i64,
-    three_month_ms: i64,
-    one_year_ms: i64,
-    six_month_ms: i64,
+    history_cutoffs_ms: [i64; 4],
     limit: i64,
     source: RemoteBodySource,
 ) -> Result<Vec<UncachedRemoteBody>> {
+    let [one_month_ms, three_month_ms, one_year_ms, six_month_ms] = history_cutoffs_ms;
     let source_sql = match source {
         RemoteBodySource::Gmail => "AND a.provider = 'gmail'",
         RemoteBodySource::Jmap => "AND a.mail_protocol = 'jmap' AND a.provider <> 'gmail'",
@@ -2712,33 +2710,15 @@ mod tests {
         let _ = add(3, 12, now - 3, None, Some("jmap-2"));
         let _ = add(3, 13, now - 4, None, Some("jmap-all"));
 
-        let cuts = (0, 0, 0, 0);
-        let jmap = newest_uncached_remote_bodies(
-            &conn,
-            now,
-            cuts.0,
-            cuts.1,
-            cuts.2,
-            cuts.3,
-            500,
-            RemoteBodySource::Jmap,
-        )
-        .unwrap();
+        let cuts = [0, 0, 0, 0];
+        let jmap =
+            newest_uncached_remote_bodies(&conn, now, cuts, 500, RemoteBodySource::Jmap).unwrap();
         assert_eq!(
             jmap.iter().map(|row| row.message_id).collect::<Vec<_>>(),
             [jmap_id, jmap_id + 1]
         );
-        let gmail = newest_uncached_remote_bodies(
-            &conn,
-            now,
-            cuts.0,
-            cuts.1,
-            cuts.2,
-            cuts.3,
-            32,
-            RemoteBodySource::Gmail,
-        )
-        .unwrap();
+        let gmail =
+            newest_uncached_remote_bodies(&conn, now, cuts, 32, RemoteBodySource::Gmail).unwrap();
         assert_eq!(gmail.len(), 1);
         assert_eq!(gmail[0].message_id, gmail_id);
 
@@ -2750,19 +2730,11 @@ mod tests {
             now,
         )
         .unwrap();
-        let after_missing = newest_uncached_remote_bodies(
-            &conn,
-            now,
-            cuts.0,
-            cuts.1,
-            cuts.2,
-            cuts.3,
-            32,
-            RemoteBodySource::Gmail,
-        )
-        .unwrap();
+        let after_missing =
+            newest_uncached_remote_bodies(&conn, now, cuts, 32, RemoteBodySource::Gmail).unwrap();
         assert!(after_missing.is_empty());
-        let progress = body_cache_progress(&conn, None, cuts.0, cuts.1, cuts.2, cuts.3).unwrap();
+        let progress =
+            body_cache_progress(&conn, None, cuts[0], cuts[1], cuts[2], cuts[3]).unwrap();
         assert_eq!(progress.pending, 2);
         assert_eq!(progress.unavailable, 1);
         assert_eq!(progress.done, 0);

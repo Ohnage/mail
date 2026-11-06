@@ -431,8 +431,8 @@ jobs:
     # Job-level if cannot read matrix, so the architecture list is chosen here.
     # This fork publishes the x64 installer and portable zip. Arm64 stays on
     # the upstream repository, which also publishes the Store bundle.
-    # Pull requests build the Windows test exe, not this installer. Push to
-    # main and a manual run still produce the release package.
+    # Push to main and a manual run with Windows included produce the installer.
+    # The test exe job runs on those same events and does not replace this one.
     if: github.event_name == 'push' || inputs.include_windows
     runs-on: ubuntu-22.04
     outputs:
@@ -459,12 +459,13 @@ jobs:
   # thin LTO, and this profile would otherwise invalidate those fingerprints.
   windows-test:
     name: Windows test exe (x64)
+    # Push to main, a manual run, and a pull request. Not tied to opening a PR.
     if: >-
       github.repository == 'Ohnage/mail' &&
       (
         github.event_name == 'push' ||
-        github.event_name == 'pull_request' ||
-        inputs.include_windows
+        github.event_name == 'workflow_dispatch' ||
+        github.event_name == 'pull_request'
       )
     runs-on: windows-2025
     steps:

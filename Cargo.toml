@@ -235,6 +235,17 @@ codegen-units = 1
 panic = "unwind"
 strip = "symbols"
 
+# Feedback exe for the Windows CI test artifact. Same optimization level and
+# panic strategy as release. More codegen units and no thin LTO so a small
+# edit does not repeat the single-threaded release link. The installer job
+# still builds profile.release unchanged.
+[profile.ci-win]
+inherits = "release"
+lto = false
+codegen-units = 8
+incremental = true
+strip = "none"
+
 # Full DWARF for this renderer/protocol dependency graph consumes many GiB and
 # makes every integration-test binary expensive to link. Line tables preserve
 # useful file/line backtraces while keeping development builds substantially

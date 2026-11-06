@@ -19,6 +19,10 @@ on:
         description: Run the full quality suite (disable only for manual packaging checks)
         type: boolean
         default: true
+      measure_incremental:
+        description: Time a one-line rebuild of the Windows test exe after it is uploaded
+        type: boolean
+        default: false
       include_android:
         description: Build the signed Android APK
         type: boolean
@@ -427,7 +431,9 @@ jobs:
     # Job-level if cannot read matrix, so the architecture list is chosen here.
     # This fork publishes the x64 installer and portable zip. Arm64 stays on
     # the upstream repository, which also publishes the Store bundle.
-    if: github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')
+    # Pull requests build the Windows test exe, not this installer. Push to
+    # main and a manual run still produce the release package.
+    if: github.event_name == 'push' || inputs.include_windows
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -448,9 +454,124 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+  # Runnable exe for the commit under test. Does not replace the installer
+  # job and does not share its cache key: release stays codegen-units=1 with
+  # thin LTO, and this profile would otherwise invalidate those fingerprints.
+  windows-test:
+    name: Windows test exe (x64)
+    if: >-
+      github.repository == 'Ohnage/mail' &&
+      (
+        github.event_name == 'push' ||
+        github.event_name == 'pull_request' ||
+        inputs.include_windows
+      )
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          cache-on-failure: true
+          key: native-windows-x64-ci-win
+      # rust-cache keeps deps and fingerprints, then deletes the incremental
+      # directory before it saves. Persist that directory separately so the
+      # next edit can reuse codegen from this commit.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: target/ci-win/incremental
+          key: ci-win-incremental-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            ci-win-incremental-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}-
+
+      - name: Build test executable
+        shell: bash
+        env:
+          # Same CRT and stack as the installer build. jobs overrides the
+          # repo-wide jobs=1, which exists so a 16 GiB machine does not run
+          # every crate at once. Two rustc processes fit this runner.
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/STACK:8000000"
+          CARGO_BUILD_JOBS: "2"
+          CARGO_INCREMENTAL: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p target
+          start=$(date +%s)
+          cargo build --profile ci-win --locked --no-default-features --features remote-content,gpu-renderer --bin flectar-mail
+          end=$(date +%s)
+          seconds=$((end - start))
+          echo "ci-win build seconds=${seconds}" | tee target/ci-win-build-seconds.txt
+          echo "CI_WIN_BUILD_SECONDS=${seconds}" >> "$GITHUB_ENV"
+
+      - name: Record commit and upload test executable
+        shell: bash
+        env:
+          CI_WIN_BUILD_SECONDS: ${{ env.CI_WIN_BUILD_SECONDS }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/ci-win-test
+          cp target/ci-win/flectar-mail.exe target/ci-win-test/flectar-mail.exe
+          python - <<'PY'
+          import hashlib, os, pathlib
+          exe = pathlib.Path("target/ci-win-test/flectar-mail.exe")
+          digest = hashlib.sha256()
+          with exe.open("rb") as stream:
+              for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                  digest.update(chunk)
+          seconds = os.environ.get("CI_WIN_BUILD_SECONDS", "")
+          text = "\n".join([
+              f"commit={os.environ['GITHUB_SHA']}",
+              "profile=ci-win",
+              "opt-level=3",
+              "lto=false",
+              "codegen-units=8",
+              f"sha256={digest.hexdigest()}",
+              f"build_seconds={seconds}",
+              "installer=release profile from the Windows packages job (codegen-units=1, thin LTO)",
+              f"workflow={os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "",
+          ])
+          pathlib.Path("target/ci-win-test/BUILD.txt").write_text(text, encoding="utf-8")
+          summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary:
+              with open(summary, "a", encoding="utf-8") as handle:
+                  handle.write("## Windows test exe\n\n")
+                  handle.write(f"- Commit `{os.environ['GITHUB_SHA']}`\n")
+                  handle.write(f"- Profile `ci-win` build: {seconds or 'unknown'} seconds\n")
+                  handle.write(f"- SHA-256 `{digest.hexdigest()}`\n")
+                  handle.write("- Installer artifact remains the release-profile build.\n")
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: flectar-mail-windows-x64-test
+          path: target/ci-win-test/
+          if-no-files-found: error
+
+      - name: Time a one-line rebuild
+        if: github.event_name == 'push' || inputs.measure_incremental
+        shell: bash
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static -C link-arg=/STACK:8000000"
+          CARGO_BUILD_JOBS: "2"
+          CARGO_INCREMENTAL: "1"
+        run: |
+          set -euo pipefail
+          printf '\n' >> src/lib.rs
+          start=$(date +%s)
+          cargo build --profile ci-win --locked --no-default-features --features remote-content,gpu-renderer --bin flectar-mail
+          end=$(date +%s)
+          seconds=$((end - start))
+          git checkout -- src/lib.rs
+          echo "ci-win one-line rebuild seconds=${seconds}" | tee target/ci-win-rebuild-seconds.txt
+          if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            printf -- '- One-line rebuild after upload: %s seconds\n' "$seconds" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   windows:
     needs: [metadata, windows-plan]
-    if: github.event_name == 'push' || inputs.include_windows || (github.repository == 'Ohnage/mail' && github.event_name == 'pull_request')
+    if: github.event_name == 'push' || inputs.include_windows
     name: Windows packages (${{ matrix.arch }})
     strategy:
       fail-fast: false

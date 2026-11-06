@@ -600,9 +600,22 @@ pub struct UncachedRemoteBody {
     pub remote_id: String,
 }
 
-/// Newest Gmail and JMAP messages that still need a body, inside each
-/// account's mail-history window. `now_ms` and the four cutoffs are the
-/// one-month, three-month, one-year, and six-month boundaries.
+/// Which remote body queue a pass is filling. JMAP and Gmail are selected
+/// separately so a large Gmail backlog cannot shrink a JMAP `Email/get`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoteBodySource {
+    Jmap,
+    Gmail,
+}
+
+/// Newest messages of `source` that still need a body, inside each account's
+/// mail-history window. `now_ms` and the four cutoffs are the one-month,
+/// three-month, one-year, and six-month boundaries.
+///
+/// A Gmail row filed in Inbox (or Archive, Sent, and the other real roles)
+/// stays eligible when All Mail is also linked in `message_folders`. Only a
+/// canonical `folder_id` whose role is `all` is skipped, matching the rows
+/// this queue will actually request.
 pub fn newest_uncached_remote_bodies(
     conn: &Connection,
     now_ms: i64,
@@ -611,8 +624,13 @@ pub fn newest_uncached_remote_bodies(
     one_year_ms: i64,
     six_month_ms: i64,
     limit: i64,
+    source: RemoteBodySource,
 ) -> Result<Vec<UncachedRemoteBody>> {
-    let mut stmt = conn.prepare(
+    let source_sql = match source {
+        RemoteBodySource::Gmail => "AND a.provider = 'gmail'",
+        RemoteBodySource::Jmap => "AND a.mail_protocol = 'jmap' AND a.provider <> 'gmail'",
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT m.id, m.account_id, m.date,
                 a.provider = 'gmail',
                 CASE WHEN a.provider = 'gmail' THEN m.gm_msgid ELSE m.jmap_id END
@@ -627,6 +645,7 @@ pub fn newest_uncached_remote_bodies(
              (a.provider = 'gmail' AND m.gm_msgid IS NOT NULL)
              OR (a.mail_protocol = 'jmap' AND m.jmap_id IS NOT NULL AND m.jmap_blob_id IS NOT NULL)
            )
+           {source_sql}
            AND COALESCE(f.role, '') != 'all'
            AND (
              COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths') = 'all'
@@ -639,8 +658,8 @@ pub fn newest_uncached_remote_bodies(
              END
            )
          ORDER BY m.date DESC, m.id DESC
-         LIMIT ?6",
-    )?;
+         LIMIT ?6"
+    ))?;
     let rows = stmt
         .query_map(
             params![
@@ -681,8 +700,18 @@ pub fn body_cache_progress(
         return Ok(CatchUpProgress {
             done: 0,
             pending: 0,
+            unavailable: 0,
         });
     }
+    let missing = format!(
+        "EXISTS (
+           SELECT 1 FROM sync_failures sf
+           WHERE sf.stage = 'content' AND sf.message_id = m.id
+             AND (sf.last_error = '{jmap}' OR sf.last_error LIKE '{gmail}%')
+         )",
+        jmap = super::sync_failures::JMAP_MISSING_ERROR.replace('\'', "''"),
+        gmail = super::sync_failures::GMAIL_MISSING_PREFIX.replace('\'', "''"),
+    );
     let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = vec![
         Box::new(one_month_ms),
         Box::new(three_month_ms),
@@ -699,15 +728,16 @@ pub fn body_cache_progress(
     let sql = format!(
         "SELECT
            COALESCE(SUM(m.body_state = 'cached'), 0),
-           COALESCE(SUM(m.body_state != 'cached'), 0)
+           COALESCE(SUM(m.body_state != 'cached' AND NOT ({missing})), 0),
+           COALESCE(SUM(m.body_state != 'cached' AND ({missing})), 0)
          FROM messages m
          JOIN accounts a ON a.id = m.account_id
          LEFT JOIN folders f ON f.id = m.folder_id
-         WHERE (
+         WHERE COALESCE(f.role, '') != 'all'
+           AND (
              (a.provider = 'gmail' AND m.gm_msgid IS NOT NULL)
              OR (a.mail_protocol = 'jmap' AND m.jmap_id IS NOT NULL AND m.jmap_blob_id IS NOT NULL)
-             OR (a.mail_protocol = 'imap' AND a.provider != 'gmail'
-                 AND m.uid IS NOT NULL AND COALESCE(f.role, '') != 'all')
+             OR (a.mail_protocol = 'imap' AND a.provider != 'gmail' AND m.uid IS NOT NULL)
            )
            AND (
              COALESCE(json_extract(a.settings_json, '$.mailHistory'), 'sixMonths') = 'all'
@@ -726,6 +756,7 @@ pub fn body_cache_progress(
         Ok(CatchUpProgress {
             done: row.get(0)?,
             pending: row.get(1)?,
+            unavailable: row.get(2)?,
         })
     })
     .map_err(Into::into)
@@ -2616,6 +2647,134 @@ mod tests {
             .unwrap();
         assert_eq!(folders, [1, 2, 3, 6]);
         assert_eq!(oldest_relink_pending(&conn, 1).unwrap(), None);
+    }
+
+    #[test]
+    fn jmap_body_queue_ignores_a_newer_gmail_backlog_and_an_all_mail_link() {
+        let conn = testutil::conn();
+        let now = now_ms();
+        conn.execute(
+            "INSERT INTO accounts (id, email, provider, auth_kind, username,
+             incoming_host, incoming_port, smtp_host, smtp_port, created_at, mail_protocol, settings_json)
+             VALUES (2,'tim@gmail.com','gmail','oauth2','tim','h',993,'h',587,0,'gmail','{\"mailHistory\":\"all\"}'),
+                    (3,'box@example.com','generic','password','box','h',993,'h',587,0,'jmap','{\"mailHistory\":\"all\"}')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path, role) VALUES
+             (10, 2, 'INBOX', 'inbox'),
+             (11, 2, '[Gmail]/All Mail', 'all'),
+             (12, 3, 'Inbox', 'inbox'),
+             (13, 3, 'All', 'all')",
+            [],
+        )
+        .unwrap();
+        let add =
+            |account: i64, folder: i64, date: i64, gmail: Option<&str>, jmap: Option<&str>| {
+                conn.execute(
+                    "INSERT INTO threads (account_id, subject_norm, unread_count, last_message_at)
+                 VALUES (?1, 's', 0, ?2)",
+                    params![account, date],
+                )
+                .unwrap();
+                let thread = conn.last_insert_rowid();
+                conn.execute(
+                "INSERT INTO messages (thread_id, account_id, folder_id, uid, message_id, subject,
+                 from_addr, date, is_read, is_automated, is_draft, is_outgoing, body_state,
+                 gm_msgid, jmap_id, jmap_blob_id)
+                 VALUES (?1, ?2, ?3, NULL, 'mid', 'Subject', 'a@test.dev', ?4, 1, 0, 0, 0, 'none',
+                         ?5, ?6, ?7)",
+                params![
+                    thread,
+                    account,
+                    folder,
+                    date,
+                    gmail,
+                    jmap,
+                    jmap.map(|_| "blob")
+                ],
+            )
+            .unwrap();
+                conn.last_insert_rowid()
+            };
+        // Newer than the JMAP row, and also linked to All Mail. The inbox
+        // folder is still the canonical folder, so the body stays eligible.
+        let gmail_id = add(2, 10, now, Some("gmail-new"), None);
+        conn.execute(
+            "INSERT INTO message_folders (message_id, folder_id) VALUES (?1, 10), (?1, 11)",
+            params![gmail_id],
+        )
+        .unwrap();
+        // Canonical All Mail only. The downloader skips it and so does the count.
+        let all_only = add(2, 11, now - 1, Some("gmail-all"), None);
+        let jmap_id = add(3, 12, now - 2, None, Some("jmap-1"));
+        let _ = add(3, 12, now - 3, None, Some("jmap-2"));
+        let _ = add(3, 13, now - 4, None, Some("jmap-all"));
+
+        let cuts = (0, 0, 0, 0);
+        let jmap = newest_uncached_remote_bodies(
+            &conn,
+            now,
+            cuts.0,
+            cuts.1,
+            cuts.2,
+            cuts.3,
+            500,
+            RemoteBodySource::Jmap,
+        )
+        .unwrap();
+        assert_eq!(
+            jmap.iter().map(|row| row.message_id).collect::<Vec<_>>(),
+            [jmap_id, jmap_id + 1]
+        );
+        let gmail = newest_uncached_remote_bodies(
+            &conn,
+            now,
+            cuts.0,
+            cuts.1,
+            cuts.2,
+            cuts.3,
+            32,
+            RemoteBodySource::Gmail,
+        )
+        .unwrap();
+        assert_eq!(gmail.len(), 1);
+        assert_eq!(gmail[0].message_id, gmail_id);
+
+        sync_failures::record_content_at(
+            &conn,
+            gmail_id,
+            Some(now + 60_000),
+            "not found: Gmail resource: Requested entity was not found.",
+            now,
+        )
+        .unwrap();
+        let after_missing = newest_uncached_remote_bodies(
+            &conn,
+            now,
+            cuts.0,
+            cuts.1,
+            cuts.2,
+            cuts.3,
+            32,
+            RemoteBodySource::Gmail,
+        )
+        .unwrap();
+        assert!(after_missing.is_empty());
+        let progress = body_cache_progress(&conn, None, cuts.0, cuts.1, cuts.2, cuts.3).unwrap();
+        assert_eq!(progress.pending, 2);
+        assert_eq!(progress.unavailable, 1);
+        assert_eq!(progress.done, 0);
+        // The All Mail rows are still on disk.
+        let stored: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE id IN (?1, ?2)",
+                params![all_only, gmail_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, 2);
     }
 }
 

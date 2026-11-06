@@ -2380,6 +2380,7 @@ async fn store_hydrated_body(
                 has_files,
                 Some(&snippet),
             )?;
+            repo::sync_failures::clear_content(&tx, local_message_id)?;
 
             let mut seen_ids = Vec::<i64>::new();
             let mut cached_inline = Vec::<(i64, Vec<u8>)>::new();

@@ -1138,6 +1138,10 @@ async fn persist_emails(
                         repo::actions::jmap_reconciliation_guards(&tx, existing.id)?;
                     let old_thread_id = existing.thread_id;
                     if existing.jmap_blob_id != blob_id {
+                        // The server listed this message again, under a different
+                        // blob. A previous "no longer on the server" hold belongs
+                        // to the old blob and must not block the new body.
+                        repo::sync_failures::clear_provider_missing(&tx, existing.id)?;
                         // These rows describe the previous content; the
                         // attachment listing describes the new blob.
                         tx.execute(
@@ -2848,7 +2852,7 @@ pub(crate) async fn cache_message_bodies(
                         for id in missing {
                             results.push((
                                 id,
-                                Err("the server no longer has this message".to_owned()),
+                                Err(repo::sync_failures::JMAP_MISSING_ERROR.to_owned()),
                             ));
                         }
                     }
@@ -2977,6 +2981,7 @@ async fn store_body_values(
                     body.has_attachments,
                     body.snippet.as_deref(),
                 )?;
+                repo::sync_failures::clear_content(&tx, body.message_id)?;
                 repo::search::index_message(&tx, body.message_id)?;
                 if body.thread_id > 0 {
                     threads.insert(body.thread_id);

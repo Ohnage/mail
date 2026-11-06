@@ -3072,6 +3072,7 @@ impl Core {
         account_ids: Vec<i64>,
         folder_ids: Option<Vec<i64>>,
         label_ids: Option<Vec<i64>>,
+        scope: recipient_match::MailScope,
         page: impl Into<ThreadPageRequest>,
     ) -> Result<ThreadPage> {
         let ThreadPageRequest { cursor, limit } = page.into();
@@ -3090,7 +3091,7 @@ impl Core {
                         cursor,
                         limit: limit.clamp(1, 200),
                     },
-                    &recipient_match::MailScope::default(),
+                    &scope,
                 )
             })
             .await
@@ -7636,6 +7637,8 @@ impl Core {
         parsed.address_inboxes = scope.address_inboxes;
         parsed.address_groups = scope.address_groups;
         parsed.base_account_ids = scope.base_account_ids;
+        parsed.evidenced_mail = scope.evidenced_mail;
+        parsed.remainder_mail = scope.remainder_mail;
         self.search_chronological_parsed(parsed, cursor, limit)
             .await
     }
@@ -7704,6 +7707,8 @@ impl Core {
         parsed.address_inboxes = scope.address_inboxes;
         parsed.address_groups = scope.address_groups;
         parsed.base_account_ids = scope.base_account_ids;
+        parsed.evidenced_mail = scope.evidenced_mail;
+        parsed.remainder_mail = scope.remainder_mail;
         self.search_messages_parsed(parsed, cursor, limit).await
     }
 
@@ -9023,16 +9028,20 @@ impl Core {
     }
 
     pub async fn folder_unread_counts(&self) -> Result<std::collections::HashMap<i64, i64>> {
-        self.folder_unread_counts_for(None).await
+        self.folder_unread_counts_for(None, None).await
     }
 
     /// [`Self::folder_unread_counts`] for one set of accounts. One grouped query.
+    /// `scope` limits a shared mailbox to the addresses that belong on this tab.
     pub async fn folder_unread_counts_for(
         &self,
         account_ids: Option<Vec<i64>>,
+        scope: Option<recipient_match::MailScope>,
     ) -> Result<std::collections::HashMap<i64, i64>> {
         self.db
-            .read(move |conn| repo::counts::folder_unread_counts_for(conn, account_ids.as_deref()))
+            .read(move |conn| {
+                repo::counts::folder_unread_counts_for(conn, account_ids.as_deref(), scope.as_ref())
+            })
             .await
     }
 

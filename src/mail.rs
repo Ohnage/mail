@@ -996,11 +996,17 @@ impl CoreMailSource {
             let counted_in_full = scope_filter
                 == flectar_mail_core::recipient_match::MailScope::default()
                 || (scope_filter.match_any
+                    && !scope_filter.splits_shared_mailbox()
                     && included
                         .iter()
                         .all(|id| scope_filter.or_account_ids.contains(id)));
             let source = if counted_in_full {
                 unified.clone()
+            } else if scope_filter.splits_shared_mailbox() {
+                self.core
+                    .mailbox_badge_counts_filtered(self.grouping(), scope_filter.clone())
+                    .await
+                    .map_err(|error| error.to_string())?
             } else {
                 self.core
                     .mailbox_badge_counts_filtered(
@@ -1024,7 +1030,12 @@ impl CoreMailSource {
         };
         let folder_unreads = if let Some(company) = company.as_deref() {
             self.core
-                .folder_unread_counts_for(Some(company.to_vec()))
+                .folder_unread_counts_for(
+                    Some(company.to_vec()),
+                    scope_filter
+                        .splits_shared_mailbox()
+                        .then(|| scope_filter.clone()),
+                )
                 .await
                 .map_err(|error| error.to_string())?
         } else {
@@ -1125,6 +1136,7 @@ impl CoreMailSource {
             let (search_account, search_accounts, search_scope) = if !query.trim().is_empty()
                 && !matches!(scope, Scope::AddressInbox(_))
                 && let Some(accounts) = company_ids.clone()
+                && !scope_filter.splits_shared_mailbox()
             {
                 (
                     None,
@@ -1134,7 +1146,7 @@ impl CoreMailSource {
             } else {
                 (account_id, listed_accounts.clone(), scope_filter.clone())
             };
-            let list_scope = if company_list {
+            let list_scope = if company_list && !scope_filter.splits_shared_mailbox() {
                 flectar_mail_core::recipient_match::MailScope::default()
             } else {
                 scope_filter.clone()
@@ -1201,6 +1213,7 @@ impl CoreMailSource {
                         listed_accounts.clone().unwrap_or_default(),
                         resolved.folder_ids.clone(),
                         resolved.label_ids.clone(),
+                        scope_filter.clone(),
                         (cursor, limit),
                     )
                     .await
@@ -1238,6 +1251,7 @@ impl CoreMailSource {
             let (search_account, search_accounts, search_scope) =
                 if !matches!(scope, Scope::AddressInbox(_))
                     && let Some(accounts) = company_ids.clone()
+                    && !scope_filter.splits_shared_mailbox()
                 {
                     (
                         None,
@@ -2084,7 +2098,14 @@ impl CoreMailSource {
                 Scope::CompanyInbox | Scope::MergedFolder(_) | Scope::TabTag(_) | Scope::Unified(_)
             )
         {
-            return Ok(flectar_mail_core::recipient_match::MailScope::default());
+            let saved = self.mail_scope();
+            // The company list is normally every message in the tab's
+            // mailboxes. A shared mailbox keeps that account in the list and
+            // uses address evidence to decide which messages belong here.
+            if !saved.splits_shared_mailbox() {
+                return Ok(flectar_mail_core::recipient_match::MailScope::default());
+            }
+            return Ok(saved);
         }
         let Scope::AddressInbox(id) = scope else {
             return Ok(self.mail_scope());

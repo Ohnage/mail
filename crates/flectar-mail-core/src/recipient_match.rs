@@ -502,9 +502,42 @@ pub struct MailScope {
     pub base_account_ids: Option<Vec<i64>>,
     pub address_inboxes: Vec<AddressInboxScope>,
     pub address_groups: Vec<AddressGroupScope>,
+    /// Shared-mailbox messages whose To, Cc, Bcc, delivery headers, or From
+    /// name one of these addresses. The account list is the shared storage.
+    pub evidenced_mail: Vec<EvidencedMail>,
+    /// Shared-mailbox messages that are not Tim-only. A message that names
+    /// only an omit address is left out; one that names no owned address, or
+    /// also names a keep address, stays.
+    pub remainder_mail: Option<RemainderMail>,
+}
+
+/// Addresses that identify mail inside specific stored accounts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EvidencedMail {
+    pub account_ids: Vec<i64>,
+    pub addresses: Vec<String>,
+}
+
+/// What remains of a shared mailbox after evidenced addresses are removed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemainderMail {
+    pub account_ids: Vec<i64>,
+    pub omit_addresses: Vec<String>,
+    pub keep_addresses: Vec<String>,
 }
 
 impl MailScope {
+    /// True when this scope separates messages inside a shared mailbox.
+    pub fn splits_shared_mailbox(&self) -> bool {
+        self.evidenced_mail
+            .iter()
+            .any(|mail| !mail.account_ids.is_empty() && !mail.addresses.is_empty())
+            || self
+                .remainder_mail
+                .as_ref()
+                .is_some_and(|mail| !mail.account_ids.is_empty() && !mail.omit_addresses.is_empty())
+    }
+
     pub fn recipients(patterns: Vec<String>) -> Self {
         Self {
             recipient_patterns: patterns,
@@ -618,7 +651,159 @@ fn compose_address_inboxes(
             |old| format!("({old} OR {group_clause})"),
         ));
     }
+    if let Some(sql) = shared_mailbox_clause(scope, thread_column, &mut binds, first_bind) {
+        clause = Some(clause.map_or_else(|| sql.clone(), |old| format!("({old} OR {sql})")));
+    }
     clause.map(|sql| (sql, binds))
+}
+
+fn shared_mailbox_clause(
+    scope: &MailScope,
+    thread_column: Option<&str>,
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> Option<String> {
+    let alias = if thread_column.is_some() { "sm" } else { "m" };
+    let mut parts = Vec::new();
+    for mail in &scope.evidenced_mail {
+        if let Some(predicate) =
+            evidenced_predicate(alias, &mail.account_ids, &mail.addresses, binds, first_bind)
+        {
+            parts.push(predicate);
+        }
+    }
+    if let Some(mail) = &scope.remainder_mail
+        && let Some(predicate) = remainder_predicate(alias, mail, binds, first_bind)
+    {
+        parts.push(predicate);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let predicate = format!("({})", parts.join(" OR "));
+    Some(thread_column.map_or_else(
+        || predicate.clone(),
+        |thread| {
+            format!(
+                "EXISTS (SELECT 1 FROM messages sm WHERE sm.thread_id = {thread} AND {predicate})"
+            )
+        },
+    ))
+}
+
+fn evidenced_predicate(
+    alias: &str,
+    account_ids: &[i64],
+    addresses: &[String],
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> Option<String> {
+    let addresses = normalized_addresses(addresses);
+    if account_ids.is_empty() || addresses.is_empty() {
+        return None;
+    }
+    let accounts = account_in(alias, account_ids, binds, first_bind);
+    let header = address_header_match(alias, account_ids, &addresses, binds, first_bind);
+    let from = from_in(alias, &addresses, binds, first_bind);
+    Some(format!("({accounts} AND ({header} OR {from}))"))
+}
+
+fn remainder_predicate(
+    alias: &str,
+    mail: &RemainderMail,
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> Option<String> {
+    let omit = normalized_addresses(&mail.omit_addresses);
+    if mail.account_ids.is_empty() || omit.is_empty() {
+        return None;
+    }
+    let accounts = account_in(alias, &mail.account_ids, binds, first_bind);
+    let omitted = format!(
+        "({} OR {})",
+        address_header_match(alias, &mail.account_ids, &omit, binds, first_bind),
+        from_in(alias, &omit, binds, first_bind)
+    );
+    let keep = normalized_addresses(&mail.keep_addresses);
+    let kept = if keep.is_empty() {
+        "0".to_owned()
+    } else {
+        format!(
+            "({} OR {})",
+            address_header_match(alias, &mail.account_ids, &keep, binds, first_bind),
+            from_in(alias, &keep, binds, first_bind)
+        )
+    };
+    Some(format!("({accounts} AND (NOT {omitted} OR {kept}))"))
+}
+
+fn account_in(
+    alias: &str,
+    account_ids: &[i64],
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> String {
+    let mut placeholders = Vec::new();
+    for id in account_ids {
+        let index = first_bind + binds.len();
+        binds.push(id.to_string());
+        placeholders.push(format!("?{index}"));
+    }
+    format!("{alias}.account_id IN ({})", placeholders.join(", "))
+}
+
+fn address_header_match(
+    alias: &str,
+    account_ids: &[i64],
+    addresses: &[String],
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> String {
+    let inboxes = addresses
+        .iter()
+        .map(|address| AddressInboxScope {
+            address: address.clone(),
+            account_ids: Some(account_ids.to_vec()),
+        })
+        .collect::<Vec<_>>();
+    let index = first_bind + binds.len();
+    binds.push(serde_json::to_string(&inboxes).expect("shared address scopes serialize"));
+    format!(
+        "flectar_address_inbox_match({alias}.to_json, {alias}.cc_json, {alias}.bcc_json, {alias}.delivery_recipients_json, {alias}.account_id, ?{index})"
+    )
+}
+
+fn from_in(
+    alias: &str,
+    addresses: &[String],
+    binds: &mut Vec<String>,
+    first_bind: usize,
+) -> String {
+    let mut placeholders = Vec::new();
+    for address in addresses {
+        let index = first_bind + binds.len();
+        binds.push(address.clone());
+        placeholders.push(format!("?{index}"));
+    }
+    format!(
+        "LOWER(COALESCE({alias}.from_addr, '')) IN ({})",
+        placeholders.join(", ")
+    )
+}
+
+fn normalized_addresses(addresses: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for address in addresses {
+        let address = address.trim().to_ascii_lowercase();
+        if address.is_empty()
+            || address.len() > 320
+            || out.iter().any(|kept: &String| kept == &address)
+        {
+            continue;
+        }
+        out.push(address);
+    }
+    out
 }
 
 fn any_clause(
@@ -1025,6 +1210,74 @@ mod tests {
         scope.base_account_ids = Some(vec![]);
         scope.recipient_patterns = vec!["not-this-recipient@example.test".into()];
         assert_eq!(matching(&scope), 1);
+    }
+
+    #[test]
+    fn shared_mailbox_keeps_unmarked_mail_and_splits_named_addresses() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        let insert = |to: &str, from: &str| {
+            let (_, id) = crate::db::testutil::seed_message(&conn, from, "Shared", false);
+            conn.execute(
+                "UPDATE messages SET to_json=?1, cc_json='[]', bcc_json='[]', delivery_recipients_json='[]' WHERE id=?2",
+                rusqlite::params![to, id],
+            )
+            .unwrap();
+            id
+        };
+        let tim_to = insert(
+            r#"[{"email":"tim@mentinkmemorial.org"}]"#,
+            "outside@example.test",
+        );
+        let contact_to = insert(
+            r#"[{"email":"contact@mentinkmemorial.org"}]"#,
+            "outside@example.test",
+        );
+        let unmarked = insert("[]", "outside@example.test");
+        let tim_from = insert(
+            r#"[{"email":"reader@example.test"}]"#,
+            "tim@mentinkmemorial.org",
+        );
+        let both = insert(
+            r#"[{"email":"tim@mentinkmemorial.org"},{"email":"contact@mentinkmemorial.org"}]"#,
+            "outside@example.test",
+        );
+        install_recipient_matcher(&conn, &[]).unwrap();
+        let tim = MailScope {
+            match_any: true,
+            or_account_ids: vec![2],
+            evidenced_mail: vec![EvidencedMail {
+                account_ids: vec![1],
+                addresses: vec!["tim@mentinkmemorial.org".into()],
+            }],
+            ..MailScope::default()
+        };
+        let media = MailScope {
+            match_any: true,
+            or_account_ids: vec![4],
+            remainder_mail: Some(RemainderMail {
+                account_ids: vec![1],
+                omit_addresses: vec!["tim@mentinkmemorial.org".into()],
+                keep_addresses: vec!["contact@mentinkmemorial.org".into()],
+            }),
+            ..MailScope::default()
+        };
+        let ids = |scope: &MailScope| {
+            let (clause, bind) = message_scope_clause(scope, 1).unwrap();
+            let mut statement = conn
+                .prepare(&format!(
+                    "SELECT id FROM messages m WHERE {clause} ORDER BY id"
+                ))
+                .unwrap();
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(bind.iter()), |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap();
+            rows.collect::<Result<Vec<_>, _>>().unwrap()
+        };
+        assert_eq!(ids(&tim), vec![tim_to, tim_from, both]);
+        assert_eq!(ids(&media), vec![contact_to, unmarked, both]);
     }
 
     #[test]

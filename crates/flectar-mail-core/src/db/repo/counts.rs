@@ -391,8 +391,9 @@ fn scoped_badge_sql(
 pub fn folder_unread_counts_for(
     conn: &Connection,
     account_ids: Option<&[i64]>,
+    scope: Option<&crate::recipient_match::MailScope>,
 ) -> Result<HashMap<i64, i64>> {
-    let (filter, binds) = match account_ids {
+    let (mut filter, mut binds) = match account_ids {
         None => (String::new(), Vec::new()),
         Some([]) => return Ok(HashMap::new()),
         Some(ids) => {
@@ -401,6 +402,15 @@ pub fn folder_unread_counts_for(
             (format!(" AND {clause}"), binds)
         }
     };
+    if let Some(scope) = scope.filter(|scope| scope.splits_shared_mailbox())
+        && let Some((sql, scope_binds)) =
+            crate::recipient_match::message_scope_clause(scope, binds.len() + 1)
+    {
+        filter.push_str(&format!(" AND ({sql})"));
+        for value in scope_binds {
+            binds.push(Box::new(value));
+        }
+    }
     let mut stmt = conn.prepare(&format!(
         "SELECT folder_id, COUNT(DISTINCT thread_id) FROM (
              SELECT m.folder_id AS folder_id, m.thread_id AS thread_id
@@ -429,7 +439,7 @@ pub fn folder_unread_counts_for(
 
 /// Unread threads in each folder, across every account.
 pub fn folder_unread_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
-    folder_unread_counts_for(conn, None)
+    folder_unread_counts_for(conn, None, None)
 }
 
 #[cfg(test)]
@@ -782,14 +792,14 @@ mod tests {
         )
         .unwrap();
 
-        let all = folder_unread_counts_for(&conn, None).unwrap();
+        let all = folder_unread_counts_for(&conn, None, None).unwrap();
         assert_eq!(all.get(&2), Some(&1));
         assert_eq!(all.get(&3), Some(&1));
-        let company = folder_unread_counts_for(&conn, Some(&[2])).unwrap();
+        let company = folder_unread_counts_for(&conn, Some(&[2]), None).unwrap();
         assert_eq!(company.get(&3), Some(&1));
         assert!(!company.contains_key(&2));
         assert!(
-            folder_unread_counts_for(&conn, Some(&[]))
+            folder_unread_counts_for(&conn, Some(&[]), None)
                 .unwrap()
                 .is_empty()
         );

@@ -70,7 +70,7 @@ fn is_tim_tab(tab: &BusinessTab, tim: Option<&BusinessTab>) -> bool {
     tim.is_some_and(|tim| tim.id == tab.id)
 }
 
-fn is_tim_address(tim: Option<&BusinessTab>, email: &str) -> bool {
+pub fn is_tim_address(tim: Option<&BusinessTab>, email: &str) -> bool {
     if tim.is_some_and(|tab| {
         tab.recipient_patterns
             .iter()
@@ -223,6 +223,160 @@ pub fn compose_group_index(
     active_tab_id
         .and_then(|id| groups.iter().position(|group| group.id == id))
         .unwrap_or(0)
+}
+
+/// One tab and the mailboxes its inbox currently lists, before address evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabMailboxSet {
+    pub id: String,
+    pub mailbox_ids: Vec<i64>,
+}
+
+/// How the open tab lists a mailbox that also belongs to the Tim tab.
+///
+/// `None` means the tab does not share storage with that Tim tab, or no owned
+/// Tim address is hosted there, so the caller must not hide mail by guessing.
+pub fn shared_tab_scope(
+    tabs: &[BusinessTab],
+    tab_mailboxes: &[TabMailboxSet],
+    tim_mailbox_ids: &[i64],
+    active_tab_id: &str,
+    address_views: &[AddressView],
+    profiles: &[MailProfile],
+    account_emails: &[(i64, String)],
+) -> Option<crate::recipient_match::MailScope> {
+    use crate::recipient_match::{EvidencedMail, MailScope, RemainderMail};
+    let tim = existing_tim_tab(tabs, tim_mailbox_ids)?;
+    let active = tab_mailboxes.iter().find(|tab| tab.id == active_tab_id)?;
+    let tim_set = tab_mailboxes.iter().find(|tab| tab.id == tim.id)?;
+    let mut catalog = tim_set.mailbox_ids.clone();
+    for tab in tab_mailboxes {
+        catalog.extend(tab.mailbox_ids.iter().copied());
+    }
+    catalog.sort_unstable();
+    catalog.dedup();
+    let tim_hosts = catalog
+        .iter()
+        .copied()
+        .filter(|id| {
+            hosted_addresses(address_views, profiles, account_emails, &[*id])
+                .iter()
+                .any(|address| is_tim_address(Some(tim), address))
+        })
+        .collect::<Vec<_>>();
+    // A mailbox both tabs list is shared storage. A company mailbox that
+    // hosts a Tim address is split too, even when the Tim tab does not list
+    // that mailbox yet, so Tim mail is not left on the company tab.
+    let mut split = if active.id == tim.id {
+        active
+            .mailbox_ids
+            .iter()
+            .copied()
+            .filter(|id| other_tab_has(tab_mailboxes, &tim.id, *id))
+            .chain(tim_hosts.iter().copied().filter(|id| {
+                other_tab_has(tab_mailboxes, &tim.id, *id) && !active.mailbox_ids.contains(id)
+            }))
+            .collect::<Vec<_>>()
+    } else {
+        active
+            .mailbox_ids
+            .iter()
+            .copied()
+            .filter(|id| tim_set.mailbox_ids.contains(id) || tim_hosts.contains(id))
+            .collect::<Vec<_>>()
+    };
+    split.sort_unstable();
+    split.dedup();
+    if split.is_empty() {
+        return None;
+    }
+    let tim_addresses = hosted_addresses(address_views, profiles, account_emails, &split)
+        .into_iter()
+        .filter(|address| is_tim_address(Some(tim), address))
+        .collect::<Vec<_>>();
+    if tim_addresses.is_empty() {
+        return None;
+    }
+    let mut exclusive = active.mailbox_ids.clone();
+    exclusive.retain(|id| !split.contains(id));
+    exclusive.sort_unstable();
+    exclusive.dedup();
+    let mut scope = MailScope {
+        match_any: true,
+        or_account_ids: exclusive,
+        ..MailScope::default()
+    };
+    if active.id == tim.id {
+        scope.evidenced_mail.push(EvidencedMail {
+            account_ids: split,
+            addresses: tim_addresses,
+        });
+    } else {
+        let keep = hosted_addresses(address_views, profiles, account_emails, &split)
+            .into_iter()
+            .filter(|address| !is_tim_address(Some(tim), address))
+            .collect::<Vec<_>>();
+        scope.remainder_mail = Some(RemainderMail {
+            account_ids: split,
+            omit_addresses: tim_addresses,
+            keep_addresses: keep,
+        });
+    }
+    Some(scope)
+}
+
+fn other_tab_has(tabs: &[TabMailboxSet], tim_id: &str, mailbox_id: i64) -> bool {
+    tabs.iter()
+        .any(|tab| tab.id != tim_id && tab.mailbox_ids.contains(&mailbox_id))
+}
+
+fn hosted_addresses(
+    views: &[AddressView],
+    profiles: &[MailProfile],
+    account_emails: &[(i64, String)],
+    account_ids: &[i64],
+) -> Vec<String> {
+    let mut addresses = Vec::new();
+    for id in account_ids {
+        let email = account_emails
+            .iter()
+            .find(|(account_id, _)| account_id == id)
+            .map(|(_, email)| email.as_str())
+            .unwrap_or("");
+        for view in views {
+            if !view_hosted_by_mailbox(view, *id, email, profiles) {
+                continue;
+            }
+            let address = view.address.trim().to_ascii_lowercase();
+            if address.is_empty() || addresses.iter().any(|kept: &String| kept == &address) {
+                continue;
+            }
+            addresses.push(address);
+        }
+    }
+    addresses.sort();
+    addresses
+}
+
+fn view_hosted_by_mailbox(
+    view: &AddressView,
+    account_id: i64,
+    account_email: &str,
+    profiles: &[MailProfile],
+) -> bool {
+    if !account_email.is_empty()
+        && view
+            .source_account_emails
+            .iter()
+            .any(|email| email.eq_ignore_ascii_case(account_email))
+    {
+        return true;
+    }
+    view.profile_id.as_ref().is_some_and(|profile_id| {
+        profiles
+            .iter()
+            .any(|profile| profile.id == *profile_id && profile.account_ids.contains(&account_id))
+    })
 }
 
 pub fn sender_account_id(group: &ComposeGroup, email: &str) -> Option<i64> {
@@ -590,6 +744,98 @@ mod tests {
         assert!(transport_account(&groups, "other@elsewhere.example").is_none());
         assert_eq!(groups.iter().filter(|group| group.id == "tab-5").count(), 1);
         assert!(groups.iter().all(|group| group.name != "Tim Mentink"));
+    }
+
+    #[test]
+    fn shared_storage_lists_tim_mail_on_tm_and_leaves_other_mail_on_media() {
+        let tabs: Vec<BusinessTab> = serde_json::from_value(serde_json::json!([
+            {"id":"tab-5","name":"TM","accountIds":[2,293]},
+            {"id":"mentink-media","name":"Mentink Media","profileIds":["mentink-media","mentink-memorial"]}
+        ]))
+        .unwrap();
+        let sets = vec![
+            TabMailboxSet {
+                id: "tab-5".into(),
+                mailbox_ids: vec![2, 293],
+            },
+            TabMailboxSet {
+                id: "mentink-media".into(),
+                mailbox_ids: vec![4, 12, 293],
+            },
+        ];
+        let views = vec![
+            AddressView {
+                id: 1,
+                address: "tim@mentinkmemorial.org".into(),
+                source_account_emails: vec!["tim@mentinkmemorial.org".into()],
+                profile_id: Some("mentink-memorial".into()),
+                source: Default::default(),
+            },
+            AddressView {
+                id: 2,
+                address: "contact@mentinkmemorial.org".into(),
+                source_account_emails: vec!["contact@mentinkmemorial.org".into()],
+                profile_id: Some("mentink-memorial".into()),
+                source: Default::default(),
+            },
+            AddressView {
+                id: 3,
+                address: "other@elsewhere.example".into(),
+                source_account_emails: vec!["storage@elsewhere.example".into()],
+                profile_id: Some("pixelated-cities".into()),
+                source: Default::default(),
+            },
+        ];
+        let profiles = vec![
+            MailProfile {
+                id: "mentink-media".into(),
+                name: "Mentink Media".into(),
+                color: "#000".into(),
+                account_ids: vec![4],
+                logo: None,
+            },
+            MailProfile {
+                id: "mentink-memorial".into(),
+                name: "Mentink Memorial".into(),
+                color: "#000".into(),
+                account_ids: vec![12, 293],
+                logo: None,
+            },
+        ];
+        let emails = [(293_i64, "storage@mentinkmemorial.org".into())];
+        let tim =
+            shared_tab_scope(&tabs, &sets, &[2, 293], "tab-5", &views, &profiles, &emails).unwrap();
+        assert_eq!(tim.or_account_ids, vec![2]);
+        assert_eq!(tim.evidenced_mail[0].account_ids, vec![12, 293]);
+        assert_eq!(
+            tim.evidenced_mail[0].addresses,
+            vec!["tim@mentinkmemorial.org"]
+        );
+        assert!(tim.remainder_mail.is_none());
+        let media = shared_tab_scope(
+            &tabs,
+            &sets,
+            &[2, 293],
+            "mentink-media",
+            &views,
+            &profiles,
+            &emails,
+        )
+        .unwrap();
+        assert_eq!(media.or_account_ids, vec![4]);
+        let remainder = media.remainder_mail.unwrap();
+        assert_eq!(remainder.account_ids, vec![12, 293]);
+        assert_eq!(remainder.omit_addresses, vec!["tim@mentinkmemorial.org"]);
+        assert_eq!(
+            remainder.keep_addresses,
+            vec!["contact@mentinkmemorial.org"]
+        );
+        assert!(tabs.iter().any(|tab| tab.id == "tab-5" && tab.name == "TM"));
+        assert_eq!(tabs.len(), 2);
+        assert!(
+            shared_tab_scope(&tabs, &sets, &[2, 293], "tab-5", &[], &profiles, &emails).is_none(),
+            "without a hosted Tim address, shared mail is not hidden"
+        );
     }
 
     #[test]

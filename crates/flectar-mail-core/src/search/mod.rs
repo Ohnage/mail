@@ -52,6 +52,8 @@ pub struct ParsedQuery {
     pub address_inboxes: Vec<crate::recipient_match::AddressInboxScope>,
     pub address_groups: Vec<crate::recipient_match::AddressGroupScope>,
     pub base_account_ids: Option<Vec<i64>>,
+    pub evidenced_mail: Vec<crate::recipient_match::EvidencedMail>,
+    pub remainder_mail: Option<crate::recipient_match::RemainderMail>,
 }
 
 /// A raw query token: a bare word or a `"quoted phrase"`. A phrase can be

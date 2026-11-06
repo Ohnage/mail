@@ -686,7 +686,11 @@ impl AccountPresentationSettings {
             // chosen named accounts' mailboxes. `None` would list every
             // account. An empty list lists nothing.
             let mailboxes = self.named_tab_mailbox_ids(tab);
-            return (Some(mailboxes.clone()), Some(mailboxes), self.named_tab_scope(tab));
+            return (
+                Some(mailboxes.clone()),
+                Some(mailboxes),
+                self.finish_shared_scope(self.named_tab_scope(tab)),
+            );
         }
         let company_accounts = match &tab.account_ids {
             Some(ids) => {
@@ -740,7 +744,8 @@ impl AccountPresentationSettings {
             && (!self.address_views.is_empty() || !self.address_rules.is_empty())
             && matches!(tab.resolved_scope(), "profiles" | "accounts");
         if aliases.is_empty() && !automatic_addresses {
-            return result;
+            let (sidebar, query, scope) = result;
+            return (sidebar, query, self.finish_shared_scope(scope));
         }
         let (sidebar, query, mut scope) = result;
         match tab.resolved_scope() {
@@ -762,7 +767,29 @@ impl AccountPresentationSettings {
                 rules: self.address_rules.clone(),
             }];
         }
-        (sidebar, None, scope)
+        (sidebar, None, self.finish_shared_scope(scope))
+    }
+
+    fn tab_mailbox_ids(&self, tab: &flectar_mail_core::models::BusinessTab) -> Vec<i64> {
+        let mut ids = if self.uses_named_tab(tab) {
+            self.named_tab_mailbox_ids(tab)
+        } else if let Some(ids) = &tab.account_ids {
+            ids.clone()
+        } else {
+            self.accounts_in(&tab.profile_ids)
+        };
+        ids.sort_unstable();
+        ids.dedup();
+        ids
+    }
+
+    /// Replace a whole shared mailbox with address evidence when the open tab
+    /// and the existing Tim tab both list it. Settings are not rewritten.
+    fn finish_shared_scope(
+        &self,
+        scope: flectar_mail_core::recipient_match::MailScope,
+    ) -> flectar_mail_core::recipient_match::MailScope {
+        self.active_shared_scope().unwrap_or(scope)
     }
 
     fn accounts_in(&self, profile_ids: &[String]) -> Vec<i64> {
@@ -877,7 +904,64 @@ impl AccountPresentationSettings {
                 email: account.email.clone(),
             })
             .collect::<Vec<_>>();
-        flectar_mail_core::company_view::company_mailbox_ids(&sources, &records, &explicit)
+        let mut ids =
+            flectar_mail_core::company_view::company_mailbox_ids(&sources, &records, &explicit);
+        if let Some(scope) = self.active_shared_scope() {
+            for mail in &scope.evidenced_mail {
+                for id in &mail.account_ids {
+                    let email = records
+                        .iter()
+                        .find(|account| account.id == *id)
+                        .map(|account| account.email.as_str())
+                        .unwrap_or("");
+                    if !flectar_mail_core::company_view::excluded_from_company_views(
+                        email,
+                        explicit.get(id).copied(),
+                    ) {
+                        ids.push(*id);
+                    }
+                }
+            }
+            ids.sort_unstable();
+            ids.dedup();
+        }
+        ids
+    }
+
+    fn active_shared_scope(&self) -> Option<flectar_mail_core::recipient_match::MailScope> {
+        let active_id = self.active_business().map(|tab| tab.id.clone())?;
+        let sets = self
+            .business_tabs
+            .iter()
+            .map(|tab| flectar_mail_core::compose_senders::TabMailboxSet {
+                id: tab.id.clone(),
+                mailbox_ids: self.tab_mailbox_ids(tab),
+            })
+            .collect::<Vec<_>>();
+        let mut tim_mailbox_ids = Vec::new();
+        for account in &self.inbox_accounts {
+            let tim = account.profile_id.as_deref() == Some("tim-personal")
+                || account.name.eq_ignore_ascii_case("Tim Mentink");
+            if tim {
+                tim_mailbox_ids.extend(account.account_ids.iter().copied());
+            }
+        }
+        tim_mailbox_ids.sort_unstable();
+        tim_mailbox_ids.dedup();
+        let emails = self
+            .connected_account_emails
+            .iter()
+            .map(|(email, id)| (*id, email.clone()))
+            .collect::<Vec<_>>();
+        flectar_mail_core::compose_senders::shared_tab_scope(
+            &self.business_tabs,
+            &sets,
+            &tim_mailbox_ids,
+            &active_id,
+            &self.address_views,
+            &self.profiles,
+            &emails,
+        )
     }
 
     /// A saved marker, without the generated fallback.

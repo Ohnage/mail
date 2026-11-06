@@ -653,6 +653,10 @@ pub fn reopen_backfill_for_account(conn: &Connection, account_id: i64) -> Result
 pub struct CatchUpProgress {
     pub done: i64,
     pub pending: i64,
+    /// Still in the history window, but the provider has said the remote id
+    /// is gone. Counted apart from `pending` so the download line can move
+    /// and still show them. The rows are not deleted.
+    pub unavailable: i64,
 }
 
 impl CatchUpProgress {
@@ -669,6 +673,7 @@ pub fn catch_up_progress(
         return Ok(CatchUpProgress {
             done: 0,
             pending: 0,
+            unavailable: 0,
         });
     }
     let now = crate::models::now_ms();
@@ -690,12 +695,16 @@ pub fn catch_up_progress(
     )?;
     // Once any message exists, the number the user sees is saved message
     // contents. Header backfill is the number only before the first message.
-    if bodies.done + bodies.pending > 0 {
+    if bodies.done + bodies.pending + bodies.unavailable > 0 {
         return Ok(bodies);
     }
     let done = catch_up_count(conn, account_ids, true)?;
     let pending = catch_up_count(conn, account_ids, false)?;
-    Ok(CatchUpProgress { done, pending })
+    Ok(CatchUpProgress {
+        done,
+        pending,
+        unavailable: 0,
+    })
 }
 
 fn catch_up_count(conn: &Connection, account_ids: Option<&[i64]>, done: bool) -> Result<i64> {
@@ -1177,7 +1186,8 @@ mod tests {
             catch_up_progress(&conn, Some(&[])).unwrap(),
             CatchUpProgress {
                 done: 0,
-                pending: 0
+                pending: 0,
+                unavailable: 0,
             }
         );
         assert!(!catch_up_progress(&conn, Some(&[99])).unwrap().downloading());

@@ -885,14 +885,14 @@ impl CoreMailSource {
     /// list rendering.
     /// First-download progress for the open company tab. With no tab, every
     /// account is included. `(done, pending)` folder-or-account units.
-    pub async fn open_view_catch_up(&self) -> Result<(i64, i64), String> {
+    pub async fn open_view_catch_up(&self) -> Result<(i64, i64, i64), String> {
         let ids = self.company_account_ids().map(|ids| ids.to_vec());
         let progress = self
             .core
             .catch_up_progress(ids)
             .await
             .map_err(|error| error.to_string())?;
-        Ok((progress.done, progress.pending))
+        Ok((progress.done, progress.pending, progress.unavailable))
     }
 
     pub fn settings_mirror_applied(&self) -> bool {

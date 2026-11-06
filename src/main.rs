@@ -9393,13 +9393,17 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     let Some(app) = app.upgrade() else {
                         return;
                     };
-                    let Some((done, pending)) = progress else {
+                    let Some((done, pending, unavailable)) = progress else {
                         return;
                     };
                     app.set_mail_catchup(pending > 0);
-                    let total = done.saturating_add(pending);
+                    let total = done.saturating_add(pending).saturating_add(unavailable);
                     app.set_mail_catchup_count(if pending > 0 && total > 0 {
-                        format!("{done} / {total}").into()
+                        let mut text = format!("{done} / {total}");
+                        if unavailable > 0 {
+                            text.push_str(&format!(" · {unavailable} not on the server"));
+                        }
+                        text.into()
                     } else {
                         "".into()
                     });

@@ -5403,6 +5403,12 @@ msgid ""
 "mirror/settings.json beside the database so another computer can apply them. "
 "Mail is downloaded again on each computer."
 msgstr ""
+"Почта, которая уже есть на этом компьютере, открывается из локального "
+"хранилища, включая текст писем после сохранения. Новая почта и недостающий "
+"текст загружаются в фоне. Вкладки, закрепления, правила меток и остальные "
+"настройки также записываются в mirror/settings.json рядом с базой, чтобы "
+"другой компьютер мог их применить. Почта заново загружается на каждом "
+"компьютере."
 
 #: ui/dialogs/settings-dialog.slint:1669
 msgid "Renderer"
@@ -7290,6 +7296,8 @@ msgid ""
 "The list stays usable. Message contents are saved on this computer, and mail "
 "already saved opens from this PC."
 msgstr ""
+"Список можно использовать. Текст писем сохраняется на этом компьютере, а "
+"уже сохранённая почта открывается с этого ПК."
 
 #: ui/views/mail-list-pane.slint:737
 msgid "Select all messages on this page"

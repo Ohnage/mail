@@ -5421,6 +5421,12 @@ msgid ""
 "mirror/settings.json beside the database so another computer can apply them. "
 "Mail is downloaded again on each computer."
 msgstr ""
+"El correo que ya está en este equipo se abre desde el almacén local, "
+"incluido el contenido de los mensajes cuando ya se ha guardado. El correo "
+"nuevo y el contenido que falta se descargan en segundo plano. Las pestañas, "
+"los anclajes, las reglas de etiquetas y los demás ajustes también se "
+"escriben en mirror/settings.json junto a la base de datos para que otro "
+"equipo pueda aplicarlos. El correo se vuelve a descargar en cada equipo."
 
 #: ui/dialogs/settings-dialog.slint:1669
 msgid "Renderer"
@@ -7301,6 +7307,8 @@ msgid ""
 "The list stays usable. Message contents are saved on this computer, and mail "
 "already saved opens from this PC."
 msgstr ""
+"La lista se puede usar. El contenido de los mensajes se guarda en este "
+"equipo, y el correo ya guardado se abre desde este PC."
 
 #: ui/views/mail-list-pane.slint:737
 msgid "Select all messages on this page"

@@ -8162,7 +8162,10 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     });
                 }
                 Err(error) => {
-                    let message = UiMessage::detail("Compose failed: {}", error);
+                    let message = UiMessage::detail(
+                        "Compose failed: {}. The message is still in this window.",
+                        error,
+                    );
                     app.set_compose_notice(message.clone());
                     app.set_compose_notice_is_error(true);
                     app.set_sync_status(message);
@@ -8203,7 +8206,10 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     refresh_from_source(&app, &state_for_compose, &runtime_for_compose, true, &[]);
             }
             Err(error) => {
-                let message = UiMessage::detail("Compose failed: {}", error);
+                let message = UiMessage::detail(
+                    "Compose failed: {}. The message is still in this window.",
+                    error,
+                );
                 app.set_compose_notice(message.clone());
                 app.set_compose_notice_is_error(true);
                 app.set_sync_status(message);

@@ -2448,32 +2448,117 @@ async fn ensure_role_mailbox(
     name: &'static str,
     jmap_role: Role,
 ) -> Result<String> {
-    if let Some(remote) = ctx
-        .db
-        .read(move |conn| {
-            Ok(repo::folders::by_jmap_role(conn, account_id, local_role)?
-                .and_then(|folder| folder.jmap_id))
-        })
-        .await?
-    {
+    // The server's mailbox for this role wins over a cached id. A folder
+    // rebuild (Stalwart taxonomy changes, a renamed Sent mailbox) leaves the
+    // old id in the local store; filing there fails as not found.
+    if let Some((remote, server_name)) = server_role_mailbox(c, jmap_role.clone()).await? {
+        let stored_name = if server_name.is_empty() {
+            name.to_owned()
+        } else {
+            server_name
+        };
+        remember_role_mailbox(ctx, account_id, &remote, &stored_name, local_role).await?;
         return Ok(remote);
     }
-    let mailbox = c
-        .mailbox_create(name, None::<String>, jmap_role)
+    if !c.may_create_top_level_mailbox {
+        return Err(CoreError::Jmap(format!(
+            "the server has no {name} mailbox (role {local_role}) and does not allow creating a top-level mailbox"
+        )));
+    }
+    match c
+        .mailbox_create(name, None::<String>, jmap_role.clone())
+        .await
+    {
+        Ok(mailbox) => {
+            let remote = mailbox
+                .id()
+                .ok_or_else(|| CoreError::Jmap(format!("Mailbox/set returned no id for {name}")))?
+                .to_owned();
+            remember_role_mailbox(ctx, account_id, &remote, name, local_role).await?;
+            Ok(remote)
+        }
+        Err(error) => {
+            if let Some((remote, server_name)) = server_role_mailbox(c, jmap_role).await? {
+                let stored_name = if server_name.is_empty() {
+                    name.to_owned()
+                } else {
+                    server_name
+                };
+                remember_role_mailbox(ctx, account_id, &remote, &stored_name, local_role).await?;
+                return Ok(remote);
+            }
+            Err(CoreError::Jmap(format!(
+                "could not create the {name} mailbox (role {local_role}): {error}"
+            )))
+        }
+    }
+}
+
+/// The first mailbox the server currently advertises for `role`, with the
+/// name it uses. Several matches are not rejected: submission needs one
+/// mailbox, and a later sync still reports a duplicate role.
+async fn server_role_mailbox(c: &ConnectedClient, role: Role) -> Result<Option<(String, String)>> {
+    let mut request = c.request();
+    request
+        .query_mailbox()
+        .account_id(&c.account_id)
+        .filter(jmap_client::mailbox::query::Filter::role(role));
+    let response = c
+        .send_single::<QueryResponse>(request)
         .await
         .map_err(client::map_error)?;
-    let remote = mailbox
-        .id()
-        .ok_or_else(|| CoreError::Jmap(format!("Mailbox/set returned no id for {name}")))?
-        .to_owned();
-    let saved_remote = remote.clone();
+    let Some(id) = response.ids().first().cloned() else {
+        return Ok(None);
+    };
+    let mut request = c.request();
+    request
+        .get_mailbox()
+        .account_id(&c.account_id)
+        .ids([id.clone()]);
+    let mailbox = c
+        .send_single::<MailboxGetResponse>(request)
+        .await
+        .map_err(client::map_error)?
+        .take_list()
+        .into_iter()
+        .next();
+    let Some(mailbox) = mailbox else {
+        return Ok(None);
+    };
+    Ok(Some((
+        mailbox.id().unwrap_or(&id).to_owned(),
+        mailbox.name().unwrap_or_default().to_owned(),
+    )))
+}
+
+async fn remember_role_mailbox(
+    ctx: &SyncCtx,
+    account_id: i64,
+    remote: &str,
+    name: &str,
+    local_role: &str,
+) -> Result<()> {
+    let remote = remote.to_owned();
+    let name = name.to_owned();
+    let local_role = local_role.to_owned();
     ctx.db
         .write(move |conn| {
-            repo::folders::upsert_jmap(conn, account_id, &saved_remote, name, Some(local_role))?;
+            // A rebuilt mailbox keeps the role string on the old row. Clear
+            // it so Drafts and Sent resolve to the id the server just gave.
+            conn.execute(
+                "UPDATE folders SET role = NULL
+                 WHERE account_id = ?1 AND role = ?2 AND IFNULL(jmap_id, '') <> ?3",
+                params![account_id, local_role, remote],
+            )?;
+            repo::folders::upsert_jmap(conn, account_id, &remote, &name, Some(&local_role))?;
+            conn.execute(
+                "UPDATE folders SET missing_on_server = 0
+                 WHERE account_id = ?1 AND jmap_id = ?2",
+                params![account_id, remote],
+            )?;
             Ok(())
         })
-        .await?;
-    Ok(remote)
+        .await
 }
 
 fn submission_request<'a>(

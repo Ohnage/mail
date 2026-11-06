@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{CoreError, Result};
 use crate::models::{FolderInfo, MailProtocol, now_ms};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use std::collections::{HashMap, HashSet};
@@ -120,6 +120,79 @@ pub fn upsert_discovered(
         |r| r.get(0),
     )?;
     Ok(id)
+}
+
+/// A folder that can hold mail for `role`.
+///
+/// Reuses any existing folder with that role, including one the folder list
+/// hides because it has no remote id yet. Inserts a new row only when none
+/// exists. An existing path is left alone when it already belongs to a JMAP
+/// mailbox: updating it would clear `jmap_id` and detach a server mailbox
+/// that merely shares the name, such as a topic folder named Drafts.
+pub fn ensure_local_role(
+    conn: &Connection,
+    account_id: i64,
+    role: &str,
+    path: &str,
+    delimiter: Option<&str>,
+) -> Result<i64> {
+    if let Some(id) = folder_with_role(conn, account_id, role)? {
+        return Ok(id);
+    }
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM folders
+             WHERE account_id = ?1 AND path = ?2 AND jmap_id IS NULL
+               AND (role IS NULL OR role = ?3)",
+            params![account_id, path, role],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+    {
+        conn.execute(
+            "UPDATE folders SET role = ?2, selectable = 1, missing_on_server = 0
+             WHERE id = ?1",
+            params![id, role],
+        )?;
+        return Ok(id);
+    }
+    let path = unused_folder_path(conn, account_id, path)?;
+    conn.execute(
+        "INSERT INTO folders (account_id, path, delimiter, role, selectable,
+                              can_create_children, can_rename, can_delete)
+         VALUES (?1, ?2, ?3, ?4, 1, 1, 1, 1)",
+        params![account_id, path, delimiter, role],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+fn folder_with_role(conn: &Connection, account_id: i64, role: &str) -> Result<Option<i64>> {
+    Ok(conn
+        .query_row(
+            "SELECT id FROM folders
+             WHERE account_id = ?1 AND role = ?2
+             ORDER BY missing_on_server ASC, (jmap_id IS NOT NULL) DESC,
+                      selectable DESC, id
+             LIMIT 1",
+            params![account_id, role],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+fn unused_folder_path(conn: &Connection, account_id: i64, path: &str) -> Result<String> {
+    if !path_exists(conn, account_id, path)? {
+        return Ok(path.to_owned());
+    }
+    for suffix in 2..100 {
+        let candidate = format!("{path} ({suffix})");
+        if !path_exists(conn, account_id, &candidate)? {
+            return Ok(candidate);
+        }
+    }
+    Err(CoreError::Other(format!(
+        "could not find a free local name for the {path} folder"
+    )))
 }
 
 pub fn list(conn: &Connection, account_id: Option<i64>) -> Result<Vec<Folder>> {

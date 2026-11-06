@@ -696,14 +696,7 @@ async fn append_sent_action(
     if row.account_id != config.id || action.account_id != config.id {
         return Err(CoreError::Other("Sent filing account mismatch".into()));
     }
-    let sent = ctx
-        .db
-        .read({
-            let account_id = config.id;
-            move |conn| repo::folders::by_role(conn, account_id, roles::SENT)
-        })
-        .await?
-        .ok_or_else(|| CoreError::Imap("Sent mailbox has not been discovered yet".into()))?;
+    let sent = sent_folder_for_filing(ctx, config, session).await?;
     let selected = imap::select(session, &sent.path).await?;
     let existing_uid = if row.folder_id == Some(sent.id)
         && sent.uidvalidity.is_some()
@@ -769,6 +762,52 @@ async fn append_sent_action(
         .map(|r| (Some(i64::from(r.uid_validity)), Some(r.uid)))
         .unwrap_or((selected.uid_validity, None));
     finish_sent_filing(ctx, action, sent.id, validity, uid).await
+}
+
+/// The server's sent-role mailbox, or a Sent mailbox created when the
+/// account has none. IMAP special-use discovery is the normal source; a
+/// missing role must not fail filing after SMTP has already accepted the
+/// message.
+async fn sent_folder_for_filing(
+    ctx: &SyncCtx,
+    config: &AccountConfig,
+    session: &mut Session,
+) -> Result<repo::folders::Folder> {
+    let account_id = config.id;
+    if let Some(folder) = ctx
+        .db
+        .read(move |conn| repo::folders::by_role(conn, account_id, roles::SENT))
+        .await?
+    {
+        return Ok(folder);
+    }
+    match imap::create_folder(session, "Sent").await {
+        Ok(()) => {}
+        Err(error) if imap_mailbox_exists(&error) => {}
+        Err(error) => {
+            return Err(CoreError::Imap(format!(
+                "the server has no Sent mailbox and creating one failed: {error}"
+            )));
+        }
+    }
+    let folder_id = ctx
+        .db
+        .write(move |conn| {
+            repo::folders::ensure_local_role(conn, account_id, roles::SENT, "Sent", Some("/"))
+        })
+        .await?;
+    ctx.db
+        .read(move |conn| {
+            repo::folders::get(conn, folder_id)?.ok_or_else(|| {
+                CoreError::Imap("Sent mailbox was created but could not be stored locally".into())
+            })
+        })
+        .await
+}
+
+fn imap_mailbox_exists(error: &CoreError) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains("alreadyexists") || message.contains("already exists")
 }
 
 async fn find_sent_uid(session: &mut Session, message_id: &str) -> Result<Option<u32>> {

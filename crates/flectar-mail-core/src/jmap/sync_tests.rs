@@ -400,12 +400,38 @@ impl MockJmap {
                 let limit = args["limit"]
                     .as_u64()
                     .map_or(usize::MAX, |limit| limit as usize);
+                let role = mailbox_filter_role(&args["filter"]);
+                let matched = self
+                    .mailboxes
+                    .iter()
+                    .filter(|mailbox| {
+                        role.is_none_or(|role| mailbox["role"].as_str() == Some(role))
+                    })
+                    .collect::<Vec<_>>();
                 json!({
                     "accountId": "mail-account", "queryState": "mailbox-query-0",
                     "canCalculateChanges": false, "position": position,
-                    "total": self.mailboxes.len(),
-                    "ids": self.mailboxes.iter().skip(position).take(limit)
+                    "total": matched.len(),
+                    "ids": matched.into_iter().skip(position).take(limit)
                         .map(|mailbox| &mailbox["id"]).collect::<Vec<_>>()
+                })
+            }
+            "Mailbox/set" => {
+                let create = args["create"].as_object().cloned().unwrap_or_default();
+                let mut created = serde_json::Map::new();
+                for (create_id, mailbox) in create {
+                    let name = mailbox["name"].as_str().unwrap_or("Mailbox");
+                    let role = mailbox["role"].as_str().unwrap_or("");
+                    created.insert(
+                        create_id,
+                        json!({"id": format!("created-{role}"), "name": name, "role": role}),
+                    );
+                }
+                json!({
+                    "accountId": "mail-account",
+                    "oldState": "mailboxes-0",
+                    "newState": "mailboxes-1",
+                    "created": created
                 })
             }
             other => panic!("unexpected method {other}"),
@@ -1471,6 +1497,80 @@ async fn body_fetches_reuse_one_session() {
                     "cached"
                 );
             }
+            Ok(())
+        })
+        .await
+        .unwrap();
+    mock.task.abort();
+}
+
+fn mailbox_filter_role(filter: &Value) -> Option<&str> {
+    if let Some(role) = filter.get("role").and_then(Value::as_str) {
+        return Some(role);
+    }
+    filter
+        .get("conditions")?
+        .as_array()?
+        .iter()
+        .find_map(mailbox_filter_role)
+}
+
+#[tokio::test]
+async fn submission_uses_the_server_sent_role_and_creates_a_missing_drafts_mailbox() {
+    let (_dir, ctx, _config) = fixture().await;
+    ctx.db
+        .write(|conn| {
+            conn.execute(
+                "INSERT INTO folders (account_id, path, role, jmap_id, selectable)
+                 VALUES (1, 'Old Drafts', 'drafts', 'stale-drafts', 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    let mock = MockJmap {
+        mailboxes: vec![
+            json!({"id": "inbox-remote", "name": "Inbox", "role": "inbox"}),
+            json!({"id": "sent-mail", "name": "Sent Mail", "role": "sent"}),
+        ],
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+
+    let sent = ensure_role_mailbox(&ctx, 1, &mock.connected, roles::SENT, "Sent", Role::Sent)
+        .await
+        .unwrap();
+    assert_eq!(sent, "sent-mail");
+    assert!(mock.calls("Mailbox/set").is_empty());
+
+    let drafts = ensure_role_mailbox(
+        &ctx,
+        1,
+        &mock.connected,
+        roles::DRAFTS,
+        "Drafts",
+        Role::Drafts,
+    )
+    .await
+    .unwrap();
+    assert_eq!(drafts, "created-drafts");
+    assert_eq!(mock.calls("Mailbox/set").len(), 1);
+
+    ctx.db
+        .read(|conn| {
+            let sent_folder = repo::folders::by_jmap_role(conn, 1, roles::SENT)?.unwrap();
+            assert_eq!(sent_folder.jmap_id.as_deref(), Some("sent-mail"));
+            assert_eq!(sent_folder.path, "Sent Mail");
+            let drafts_folder = repo::folders::by_jmap_role(conn, 1, roles::DRAFTS)?.unwrap();
+            assert_eq!(drafts_folder.jmap_id.as_deref(), Some("created-drafts"));
+            let stale_role: Option<String> = conn.query_row(
+                "SELECT role FROM folders WHERE jmap_id='stale-drafts'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(stale_role.is_none());
             Ok(())
         })
         .await

@@ -4952,21 +4952,16 @@ impl Core {
                 // A user can compose immediately after OAuth, before the first
                 // provider page has created folders. Give drafts a valid local
                 // home up front; Gmail's names match the native label/synthetic
-                // folders that label reconciliation will reuse.
-                let drafts_folder = match repo::folders::by_role(
+                // folders that label reconciliation will reuse. This must not
+                // rewrite a server mailbox that only shares the Drafts name:
+                // `upsert` clears `jmap_id` on conflict.
+                let drafts_folder = repo::folders::ensure_local_role(
                     &tx,
                     args.account_id,
                     roles::DRAFTS,
-                )? {
-                    Some(folder) => folder.id,
-                    None => repo::folders::upsert(
-                        &tx,
-                        args.account_id,
-                        if gmail { "DRAFT" } else { "Drafts" },
-                        Some("/"),
-                        Some(roles::DRAFTS),
-                    )?,
-                };
+                    if gmail { "DRAFT" } else { "Drafts" },
+                    Some("/"),
+                )?;
                 let gmail_all_folder = if gmail {
                     Some(match repo::folders::by_role(&tx, args.account_id, roles::ALL)? {
                         Some(folder) => folder.id,
@@ -4992,7 +4987,12 @@ impl Core {
                     None => None,
                 };
 
-                let draft_id = match args.draft_id {
+                // A composer can still be holding text for a draft row that
+                // folder sync removed, or for a message that was already sent.
+                // Updating zero rows used to fail both Save and Send with
+                // "not found: draft" and store nothing. Save a new draft
+                // instead so the text is kept.
+                let reusable_id = match args.draft_id {
                     Some(id) => {
                         let updated = tx.execute(
                             "UPDATE messages SET subject = ?2, to_json = ?3, cc_json = ?4,
@@ -5010,57 +5010,57 @@ impl Core {
                                 args.account_id,
                             ],
                         )?;
-                        if updated != 1 {
-                            return Err(CoreError::NotFound("draft".into()));
-                        }
-                        id
+                        (updated == 1).then_some(id)
                     }
-                    None => {
-                        let tid = match thread_id {
-                            Some(t) => t,
-                            None => repo::threads::create(
-                                &tx,
-                                args.account_id,
-                                None,
-                                &crate::mime::normalize_subject(&args.subject),
-                            )?,
-                        };
-                        let nm = repo::messages::NewMessage {
-                            account_id: args.account_id,
-                            folder_id: drafts_folder,
-                            uid: None,
-                            message_id: None,
-                            gm_msgid: None,
-                            gm_thrid: None,
-                            subject: args.subject.clone(),
-                            from: Some(sender.clone()),
-                            to: args.to.clone(),
-                            cc: args.cc.clone(),
-                            bcc: args.bcc.clone(),
-                            date: now_ms(),
-                            internal_date: None,
-                            is_read: true,
-                            is_starred: false,
-                            is_draft: true,
-                            is_outgoing: true,
-                            is_automated: false,
-                            has_attachments: false,
-                            size: None,
-                            snippet: crate::mime::make_snippet(&args.body_text),
-                            references: Vec::new(),
-                            list_unsubscribe: None,
-                            list_unsubscribe_post: None,
-                            sender_addr: None,
-                            sender_verification: Default::default(),
-                        };
-                        let id = repo::messages::insert(&tx, &nm, tid)?;
-                        tx.execute(
-                            "INSERT INTO drafts_meta (message_id, mode, in_reply_to_message_id)
+                    None => None,
+                };
+                let draft_id = if let Some(id) = reusable_id {
+                    id
+                } else {
+                    let tid = match thread_id {
+                        Some(t) => t,
+                        None => repo::threads::create(
+                            &tx,
+                            args.account_id,
+                            None,
+                            &crate::mime::normalize_subject(&args.subject),
+                        )?,
+                    };
+                    let nm = repo::messages::NewMessage {
+                        account_id: args.account_id,
+                        folder_id: drafts_folder,
+                        uid: None,
+                        message_id: None,
+                        gm_msgid: None,
+                        gm_thrid: None,
+                        subject: args.subject.clone(),
+                        from: Some(sender.clone()),
+                        to: args.to.clone(),
+                        cc: args.cc.clone(),
+                        bcc: args.bcc.clone(),
+                        date: now_ms(),
+                        internal_date: None,
+                        is_read: true,
+                        is_starred: false,
+                        is_draft: true,
+                        is_outgoing: true,
+                        is_automated: false,
+                        has_attachments: false,
+                        size: None,
+                        snippet: crate::mime::make_snippet(&args.body_text),
+                        references: Vec::new(),
+                        list_unsubscribe: None,
+                        list_unsubscribe_post: None,
+                        sender_addr: None,
+                        sender_verification: Default::default(),
+                    };
+                    let id = repo::messages::insert(&tx, &nm, tid)?;
+                    tx.execute(
+                        "INSERT INTO drafts_meta (message_id, mode, in_reply_to_message_id)
                              VALUES (?1, ?2, ?3)",
-                            rusqlite::params![id, args.mode, args.in_reply_to_message_id],
-                        )?;
-                        id
-                    }
+                        rusqlite::params![id, args.mode, args.in_reply_to_message_id],
+                    )?;
+                    id
                 };
 
                 tx.execute(
@@ -5210,9 +5210,13 @@ impl Core {
                         },
                     )
                     .optional()?
-                    .ok_or_else(|| CoreError::NotFound("draft".into()))?;
+                    .ok_or_else(|| {
+                        CoreError::NotFound("this draft is no longer on this device".into())
+                    })?;
                 if !draft.1 {
-                    return Err(CoreError::NotFound("draft".into()));
+                    return Err(CoreError::NotFound(
+                        "this message is no longer a draft".into(),
+                    ));
                 }
 
                 let mut stmt = conn.prepare(
@@ -5292,9 +5296,13 @@ impl Core {
                         },
                     )
                     .optional()?
-                    .ok_or_else(|| CoreError::NotFound("draft".into()))?;
+                    .ok_or_else(|| {
+                        CoreError::NotFound("this draft is no longer on this device".into())
+                    })?;
                 if !row.4 {
-                    return Err(CoreError::NotFound("draft".into()));
+                    return Err(CoreError::NotFound(
+                        "this message is no longer a draft".into(),
+                    ));
                 }
 
                 let send_inflight = conn.query_row(
@@ -5457,8 +5465,12 @@ impl Core {
         let (action_id, account_id) = self
             .db
             .write(move |conn| {
-                let row = repo::messages::get_row(conn, draft_id)?
-                    .ok_or_else(|| CoreError::NotFound("draft".into()))?;
+                let row = repo::messages::get_row(conn, draft_id)?.ok_or_else(|| {
+                    CoreError::NotFound(
+                        "the draft disappeared before it could be sent; the message is still in the composer"
+                            .into(),
+                    )
+                })?;
                 conn.execute(
                     "UPDATE pending_actions SET state = 'cancelled', finished_at = ?2
                      WHERE message_id = ?1 AND kind = 'save_draft' AND state = 'pending'",
@@ -11635,22 +11647,33 @@ mod draft_staging_tests {
         tokio::fs::write(&first_source, b"first").await.unwrap();
         tokio::fs::write(&second_source, b"second").await.unwrap();
 
-        assert!(
-            core.save_draft(draft_args(Some(999_999), &first_source, "first.txt"))
-                .await
-                .is_err()
-        );
+        // A composer id that does not match a draft row used to fail the
+        // save and throw the staged file away. The text is saved as a new
+        // draft instead.
+        let recovered = core
+            .save_draft(draft_args(Some(999_999), &first_source, "first.txt"))
+            .await
+            .unwrap();
+        assert_ne!(recovered, 999_999);
+
+        let mut interrupted = draft_args(None, &second_source, "second.txt");
+        interrupted.attachments.push(DraftAttachmentIn {
+            file_path: temp
+                .path()
+                .join("missing.txt")
+                .to_string_lossy()
+                .into_owned(),
+            filename: "missing.txt".into(),
+        });
+        assert!(core.save_draft(interrupted).await.is_err());
         assert_eq!(
             std::fs::read_dir(paths.draft_attachments_dir())
                 .unwrap()
                 .count(),
-            0
+            1
         );
 
-        let draft_id = core
-            .save_draft(draft_args(None, &first_source, "first.txt"))
-            .await
-            .unwrap();
+        let draft_id = recovered;
         let first_staged = core
             .db
             .read(move |conn| {
@@ -11681,6 +11704,77 @@ mod draft_staging_tests {
         assert_ne!(first_staged, second_staged);
         assert!(!std::path::Path::new(&first_staged).exists());
         assert_eq!(std::fs::read(second_staged).unwrap(), b"second");
+    }
+
+    #[tokio::test]
+    async fn a_missing_draft_is_saved_without_detaching_a_same_named_mailbox() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = Core::start_mail_ui(Paths::for_tests(temp.path()))
+            .await
+            .unwrap();
+        let sent_id = core
+            .db
+            .write(|conn| {
+                db::testutil::seed_account(conn);
+                conn.execute("UPDATE accounts SET mail_protocol='jmap' WHERE id=1", [])?;
+                conn.execute(
+                    "INSERT INTO folders (account_id, path, jmap_id, selectable)
+                     VALUES (1, 'Drafts', 'topic-drafts', 1)",
+                    [],
+                )?;
+                let (_, sent_id) =
+                    db::testutil::seed_message(conn, "me@test.dev", "already sent", false);
+                Ok(sent_id)
+            })
+            .await
+            .unwrap();
+        let mut args = draft_args(Some(sent_id), &temp.path().join("unused.txt"), "unused.txt");
+        args.attachments.clear();
+        args.subject = "kept".into();
+        args.body_text = "still here".into();
+        let draft_id = core.save_draft(args).await.unwrap();
+        assert_ne!(draft_id, sent_id);
+        core.db
+            .read(move |conn| {
+                let sent_is_draft: i64 = conn.query_row(
+                    "SELECT is_draft FROM messages WHERE id=?1",
+                    [sent_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(sent_is_draft, 0);
+                let (subject, is_draft): (String, i64) = conn.query_row(
+                    "SELECT subject, is_draft FROM messages WHERE id=?1",
+                    [draft_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(subject, "kept");
+                assert_eq!(is_draft, 1);
+                let (remote, role): (Option<String>, Option<String>) = conn.query_row(
+                    "SELECT jmap_id, role FROM folders WHERE account_id=1 AND path='Drafts'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(remote.as_deref(), Some("topic-drafts"));
+                assert!(role.is_none());
+                let home: String = conn.query_row(
+                    "SELECT f.path FROM messages m JOIN folders f ON f.id = m.folder_id
+                     WHERE m.id=?1",
+                    [draft_id],
+                    |row| row.get(0),
+                )?;
+                assert_ne!(home, "Drafts");
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT role FROM folders WHERE account_id=1 AND path=?1",
+                        [home],
+                        |row| row.get::<_, Option<String>>(0),
+                    )?,
+                    Some(roles::DRAFTS.into())
+                );
+                Ok(())
+            })
+            .await
+            .unwrap();
     }
 }
 

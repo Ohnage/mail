@@ -3215,12 +3215,8 @@ async fn finalize_sent_draft(
         .db
         .write(move |conn| {
             let tx = conn.transaction()?;
-            let sent_folder = match repo::folders::by_role(&tx, account_id, roles::SENT)? {
-                Some(folder) => folder.id,
-                None => {
-                    repo::folders::upsert(&tx, account_id, "SENT", Some("/"), Some(roles::SENT))?
-                }
-            };
+            let sent_folder =
+                repo::folders::ensure_local_role(&tx, account_id, roles::SENT, "SENT", Some("/"))?;
             let all_folder = match repo::folders::by_role(&tx, account_id, roles::ALL)? {
                 Some(folder) => folder.id,
                 None => repo::folders::upsert(

@@ -116,6 +116,33 @@ pub(crate) fn log_sync_batch(
         "{} {kind} batch account_id={account_id} messages={messages} elapsed_ms={elapsed_ms} messages_per_second={per_second:.1}\n",
         chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
     );
+    append_sync_log(data_dir, &line);
+}
+
+/// A body batch that saved nothing. Written even when the saved count is zero,
+/// because the desktop build does not keep a tracing log and a silent
+/// `sync.log` cannot be told apart from a hung download.
+pub(crate) fn log_sync_problem(
+    data_dir: &std::path::Path,
+    kind: &str,
+    account_id: i64,
+    failed: usize,
+    detail: &str,
+) {
+    if failed == 0 {
+        return;
+    }
+    let detail = detail.replace(['\n', '\r'], " ");
+    let detail = detail.chars().take(240).collect::<String>();
+    tracing::warn!(kind, account_id, failed, error = %detail, "body batch failed");
+    let line = format!(
+        "{} {kind} failure account_id={account_id} failed={failed} error={detail}\n",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+    );
+    append_sync_log(data_dir, &line);
+}
+
+fn append_sync_log(data_dir: &std::path::Path, line: &str) {
     static LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = LOG.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let path = data_dir.join("sync.log");

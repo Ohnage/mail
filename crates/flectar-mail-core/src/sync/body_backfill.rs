@@ -1,9 +1,10 @@
 //! Background download of message text for Gmail and JMAP.
 //!
 //! Headers are stored by each account's sync first. This loop then fills
-//! bodies for rows already on disk, newest first. JMAP asks for a few hundred
-//! messages in one `Email/get` (`bodyValues`). Gmail still fetches one message
-//! at a time, a few at once, and only when no JMAP bodies are waiting.
+//! bodies for rows already on disk, newest first. JMAP and Gmail each take
+//! their own newest page, so a large Gmail backlog cannot shrink a JMAP
+//! `Email/get`. JMAP asks for a few hundred messages in one call
+//! (`bodyValues`). Gmail still fetches one message at a time, a few at once.
 //! Opening a cached message reads SQLite and does not ask the server again.
 //! The progress banner is the UI's own two-second poll of the saved counts;
 //! this loop reports a batch, not each message.
@@ -46,31 +47,67 @@ pub(crate) fn spawn(ctx: SyncCtx) {
 
 async fn download_page(ctx: &SyncCtx) -> crate::error::Result<u64> {
     let now = now_ms();
-    let mut page = ctx
+    let (jmap, gmail) = ctx
         .db
         .read(move |conn| {
-            repo::messages::newest_uncached_remote_bodies(
+            let one_month = MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0);
+            let three_months = MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0);
+            let one_year = MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0);
+            let six_months = MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0);
+            // Separate queues. One shared newest-N page let ~100k uncached
+            // Gmail rows crowd JMAP down to the one or two JMAP ids that
+            // happened to be in that page.
+            let jmap = repo::messages::newest_uncached_remote_bodies(
                 conn,
                 now,
-                MailHistory::OneMonth.cutoff_ms_at(now).unwrap_or(0),
-                MailHistory::ThreeMonths.cutoff_ms_at(now).unwrap_or(0),
-                MailHistory::OneYear.cutoff_ms_at(now).unwrap_or(0),
-                MailHistory::SixMonths.cutoff_ms_at(now).unwrap_or(0),
+                one_month,
+                three_months,
+                one_year,
+                six_months,
                 PAGE,
-            )
+                repo::messages::RemoteBodySource::Jmap,
+            )?;
+            let gmail = repo::messages::newest_uncached_remote_bodies(
+                conn,
+                now,
+                one_month,
+                three_months,
+                one_year,
+                six_months,
+                i64::try_from(GMAIL_PAGE).unwrap_or(32),
+                repo::messages::RemoteBodySource::Gmail,
+            )?;
+            Ok((jmap, gmail))
         })
         .await?;
-    if page.is_empty() {
+    if jmap.is_empty() && gmail.is_empty() {
         return Ok(0);
     }
-    // Headers are already local. Finish JMAP bodies before spending the page
-    // on Gmail's one-request-per-message API.
-    if page.iter().any(|row| !row.gmail) {
-        page.retain(|row| !row.gmail);
-    } else {
-        page.truncate(GMAIL_PAGE);
-    }
 
+    let mut jobs = tokio::task::JoinSet::new();
+    if !jmap.is_empty() {
+        let ctx = ctx.clone();
+        jobs.spawn(async move { download_grouped(&ctx, jmap).await });
+    }
+    if !gmail.is_empty() {
+        let ctx = ctx.clone();
+        jobs.spawn(async move { download_grouped(&ctx, gmail).await });
+    }
+    let mut cached = 0u64;
+    while let Some(joined) = jobs.join_next().await {
+        match joined {
+            Ok(Ok(count)) => cached += count,
+            Ok(Err(error)) => tracing::warn!(error = %error, "body backfill page failed"),
+            Err(error) => tracing::warn!(error = %error, "body backfill task failed"),
+        }
+    }
+    Ok(cached)
+}
+
+async fn download_grouped(
+    ctx: &SyncCtx,
+    page: Vec<repo::messages::UncachedRemoteBody>,
+) -> crate::error::Result<u64> {
     let mut by_account: HashMap<i64, Vec<repo::messages::UncachedRemoteBody>> = HashMap::new();
     let mut order = Vec::new();
     for row in page {
@@ -133,10 +170,16 @@ async fn download_jmap(
 ) -> crate::error::Result<u64> {
     let ids = rows.iter().map(|row| row.message_id).collect::<Vec<_>>();
     let mut cached = 0u64;
+    let mut failed = 0usize;
+    let mut sample = String::new();
     for (message_id, result) in crate::jmap::sync::cache_message_bodies(ctx, config, &ids).await {
         match result {
             Ok(()) => cached += 1,
             Err(error) => {
+                failed += 1;
+                if sample.is_empty() {
+                    sample = error.clone();
+                }
                 tracing::warn!(
                     account_id,
                     message_id,
@@ -146,6 +189,15 @@ async fn download_jmap(
                 record_failure(ctx, message_id, &error).await;
             }
         }
+    }
+    if failed > 0 {
+        crate::sync::engine::log_sync_problem(
+            &ctx.paths.data_dir,
+            "jmap body",
+            account_id,
+            failed,
+            &sample,
+        );
     }
     Ok(cached)
 }
@@ -170,6 +222,8 @@ async fn download_gmail(
         .collect::<Vec<_>>();
     let started = std::time::Instant::now();
     let mut cached = 0u64;
+    let mut failed = 0usize;
+    let mut sample = String::new();
     for group in pending.chunks(GMAIL_CONCURRENCY) {
         let mut jobs = tokio::task::JoinSet::new();
         for row in group {
@@ -189,17 +243,24 @@ async fn download_gmail(
             match saved {
                 Ok(()) => cached += 1,
                 Err(error) => {
+                    failed += 1;
+                    let detail = error.to_string();
+                    if sample.is_empty() {
+                        sample.clone_from(&detail);
+                    }
                     tracing::warn!(
                         account_id,
                         message_id,
-                        error = %error,
+                        error = %detail,
                         "Gmail body was not saved"
                     );
                     let _ = ctx
                         .db
                         .write(move |conn| repo::messages::cancel_body_fetch(conn, message_id))
                         .await;
-                    record_failure(ctx, message_id, &error.to_string()).await;
+                    // The message row stays. A 404 postpones this id; it does
+                    // not delete mail or mark the body cached.
+                    record_failure(ctx, message_id, &detail).await;
                 }
             }
         }
@@ -211,6 +272,15 @@ async fn download_gmail(
         usize::try_from(cached).unwrap_or(0),
         started.elapsed(),
     );
+    if failed > 0 {
+        crate::sync::engine::log_sync_problem(
+            &ctx.paths.data_dir,
+            "gmail body",
+            account_id,
+            failed,
+            &sample,
+        );
+    }
     Ok(cached)
 }
 
@@ -250,11 +320,7 @@ async fn record_failure(ctx: &SyncCtx, message_id: i64, detail: &str) {
         .write(move |conn| {
             let now = now_ms();
             let attempts = repo::sync_failures::content_attempts(conn, message_id)?;
-            let delay = match attempts {
-                0..=4 => 60_000,
-                5..=19 => 15 * 60_000,
-                _ => 24 * 60 * 60_000,
-            };
+            let delay = body_retry_delay_ms(attempts, &detail);
             repo::sync_failures::record_content_at(
                 conn,
                 message_id,
@@ -266,5 +332,43 @@ async fn record_failure(ctx: &SyncCtx, message_id: i64, detail: &str) {
         .await;
     if let Err(error) = recorded {
         tracing::warn!(message_id, error = %error, "could not postpone a body retry");
+    }
+}
+
+/// How long to wait before the background downloader tries this message again.
+/// A confirmed provider 404 waits longer than a network error so missing ids
+/// do not sit at the head of the newest page every minute. The row is kept,
+/// and opening the message can still fetch it immediately.
+pub(crate) fn body_retry_delay_ms(attempts: i64, detail: &str) -> i64 {
+    if repo::sync_failures::is_provider_missing(detail) {
+        if attempts <= 0 {
+            15 * 60_000
+        } else {
+            24 * 60 * 60_000
+        }
+    } else {
+        match attempts {
+            0..=4 => 60_000,
+            5..=19 => 15 * 60_000,
+            _ => 24 * 60 * 60_000,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::body_retry_delay_ms;
+
+    #[test]
+    fn a_gmail_404_leaves_the_queue_without_becoming_permanent() {
+        let missing = "not found: Gmail resource: Requested entity was not found.";
+        assert_eq!(body_retry_delay_ms(0, missing), 15 * 60_000);
+        assert_eq!(body_retry_delay_ms(1, missing), 24 * 60 * 60_000);
+        assert_eq!(body_retry_delay_ms(11, missing), 24 * 60 * 60_000);
+        assert_eq!(body_retry_delay_ms(0, "network error: timed out"), 60_000);
+        assert_eq!(
+            body_retry_delay_ms(0, "the server no longer has this message"),
+            15 * 60_000
+        );
     }
 }

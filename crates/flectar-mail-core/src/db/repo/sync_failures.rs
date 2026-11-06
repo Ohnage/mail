@@ -191,6 +191,36 @@ pub fn clear_content(conn: &Connection, message_id: i64) -> Result<bool> {
     )? > 0)
 }
 
+/// Gmail `messages.get` answered 404. The local row stays; this is not a
+/// deletion. The prefix matches `CoreError::NotFound("Gmail resource: …")`.
+pub const GMAIL_MISSING_PREFIX: &str = "not found: Gmail resource:";
+
+/// JMAP `Email/get` omitted this id. The local row stays until header sync
+/// says the message is gone or returns it with a new blob.
+pub const JMAP_MISSING_ERROR: &str = "the server no longer has this message";
+
+/// The provider said this specific remote id is gone. Other "not found"
+/// errors (a missing local row, a folder) are not this case.
+pub fn is_provider_missing(error: &str) -> bool {
+    error.starts_with(GMAIL_MISSING_PREFIX) || error == JMAP_MISSING_ERROR
+}
+
+/// Drop a provider-missing hold so a body fetch can run again. Used when the
+/// server lists the message under a new blob. A repeated listing of the same
+/// id does not call this: that would undo the backoff on every header pass.
+pub fn clear_provider_missing(conn: &Connection, message_id: i64) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM sync_failures
+         WHERE stage = 'content' AND message_id = ?1
+           AND (last_error = ?2 OR last_error LIKE ?3)",
+        params![
+            message_id,
+            JMAP_MISSING_ERROR,
+            format!("{GMAIL_MISSING_PREFIX}%")
+        ],
+    )? > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,5 +279,37 @@ mod tests {
         assert_eq!(content_attempts(&c, message_id).unwrap(), 1);
         record_content_at(&c, message_id, None, "decode", 20).unwrap();
         assert_eq!(content_attempts(&c, message_id).unwrap(), 2);
+    }
+
+    #[test]
+    fn provider_missing_clears_only_that_error_and_keeps_the_message() {
+        let c = testutil::conn();
+        testutil::seed_account(&c);
+        let (_, missing) = testutil::seed_message(&c, "a@test.dev", "Gone", false);
+        let (_, other) = testutil::seed_message(&c, "a@test.dev", "Slow", false);
+        record_content_at(
+            &c,
+            missing,
+            Some(50),
+            "not found: Gmail resource: Requested entity was not found.",
+            10,
+        )
+        .unwrap();
+        record_content_at(&c, other, Some(50), "network error: timed out", 10).unwrap();
+
+        assert!(is_provider_missing(
+            "not found: Gmail resource: Requested entity was not found."
+        ));
+        assert!(is_provider_missing(JMAP_MISSING_ERROR));
+        assert!(!is_provider_missing("not found: message 4"));
+        assert!(clear_provider_missing(&c, missing).unwrap());
+        assert!(!clear_provider_missing(&c, other).unwrap());
+        assert_eq!(content_attempts(&c, missing).unwrap(), 0);
+        assert_eq!(content_attempts(&c, other).unwrap(), 1);
+        assert!(
+            c.query_row::<i64, _, _>("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+                .unwrap()
+                == 2
+        );
     }
 }

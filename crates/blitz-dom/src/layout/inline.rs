@@ -716,9 +716,12 @@ impl LayoutPassState<'_> {
                     YieldData::MaxHeightExceeded(_) => {
                         // We never constrain line height, so this means the
                         // measured content is unrepresentable. Retrying without
-                        // changing breaker state would loop forever. Let the
-                        // embedding application recover from the layout failure.
-                        panic!("Inline content exceeded the line breaker's height limit");
+                        // changing breaker state would loop forever. Stop this
+                        // container and keep the lines already broken. Panicking
+                        // unwinds through the half-built breaker; on Windows that
+                        // faults (access violation) before the reader can switch
+                        // to plain text, and the process dies.
+                        break;
                     }
                     YieldData::InlineBoxBreak(box_break_data) => {
                         let state = breaker.state_mut();

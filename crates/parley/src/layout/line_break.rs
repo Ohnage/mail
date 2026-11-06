@@ -239,6 +239,10 @@ impl BreakerState {
 
     #[inline(always)]
     fn add_line_height(&mut self, height: f32) {
+        // Non-finite metrics (a huge author length that overflowed to infinity)
+        // are taller than `line_max_height` and would yield `MaxHeightExceeded`
+        // forever. Drop them so the line still finishes.
+        let height = if height.is_finite() { height } else { 0.0 };
         self.line.running_line_height = self.line.running_line_height.max(height);
         self.line.max_height_exceeded = self.line.running_line_height > self.line_max_height;
     }
@@ -495,7 +499,14 @@ impl<'a, B: Brush> BreakLines<'a, B> {
                     let inline_box = &self.layout.data.inline_boxes[item.index];
 
                     let (width_contribution, height_contribution) = match inline_box.kind {
-                        InlineBoxKind::InFlow => (inline_box.width, inline_box.height),
+                        InlineBoxKind::InFlow => {
+                            let height = if inline_box.height.is_finite() {
+                                inline_box.height
+                            } else {
+                                0.0
+                            };
+                            (inline_box.width, height)
+                        }
                         InlineBoxKind::OutOfFlow => (0.0, 0.0),
                         // If the box is a `CustomOutOfFlow` box then we yield control flow back to the caller.
                         // It is then the caller's responsibility to handle placement of the box.

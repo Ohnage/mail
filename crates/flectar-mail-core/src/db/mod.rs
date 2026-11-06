@@ -128,7 +128,17 @@ fn spawn_conn_thread(
                             }
                             Ok(())
                         })();
-                        job(result.map(|()| connection.as_mut().unwrap()));
+                        // A panic inside a read (a bad message body, for example)
+                        // must not kill this thread. Later opens would then fail
+                        // with "db thread gone" and the UI can crash following them.
+                        let panicked =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                job(result.map(|()| connection.as_mut().unwrap()));
+                            }))
+                            .is_err();
+                        if panicked && let Some(conn) = connection.as_mut() {
+                            let _ = conn.execute_batch("ROLLBACK");
+                        }
                     }
                 }
             }
@@ -490,7 +500,21 @@ impl Db {
     {
         let (reply_tx, reply_rx) = oneshot::channel();
         tx.send(Command::Run(Box::new(move |conn| {
-            let _ = reply_tx.send(conn.and_then(f));
+            let value = match conn {
+                Ok(conn) => {
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(conn))) {
+                        Ok(value) => value,
+                        Err(_) => {
+                            let _ = conn.execute_batch("ROLLBACK");
+                            Err(CoreError::Other(
+                                "opening this message failed without closing the mailbox".into(),
+                            ))
+                        }
+                    }
+                }
+                Err(error) => Err(error),
+            };
+            let _ = reply_tx.send(value);
         })))
         .await
         .map_err(|_| CoreError::Other("db thread gone".into()))?;
@@ -665,6 +689,27 @@ mod connection_profile_tests {
         assert_eq!(usage.len(), 1);
         assert_eq!(usage[0].usage.cache_limit_kib, 2_048);
         assert_eq!(usage[0].usage.mmap_limit_bytes, 0);
+    }
+
+    #[tokio::test]
+    async fn a_panicking_read_returns_an_error_and_later_reads_still_work() {
+        let temp = tempfile::tempdir().unwrap();
+        let mail = Db::open(&temp.path().join("mail.db")).unwrap();
+        let error = mail
+            .read(|_| -> super::Result<()> { panic!("bad message body") })
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("without closing the mailbox"),
+            "{error}"
+        );
+        let one = mail
+            .read(|conn| -> super::Result<i64> {
+                Ok(conn.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?)
+            })
+            .await
+            .unwrap();
+        assert_eq!(one, 1);
     }
 
     #[tokio::test]

@@ -306,31 +306,37 @@ pub fn plan_bodystructure(bs: &async_imap::imap_proto::BodyStructure<'_>) -> Mim
         }
     }
 
-    fn walk(bs: &BodyStructure<'_>, path: &mut Vec<u32>, plan: &mut MimePlan) {
+    // Heap stack. A multipart chain used to recurse, and a few hundred levels
+    // overflow the sync thread. Past this depth the remaining parts are left
+    // out of the plan; opening the message continues with what was readable.
+    const MAX_BODYSTRUCTURE_DEPTH: usize = 32;
+    let mut stack = vec![(bs, Vec::<u32>::new(), 0_usize)];
+    let mut plan = MimePlan::default();
+    while let Some((bs, path, depth)) = stack.pop() {
+        if depth > MAX_BODYSTRUCTURE_DEPTH {
+            continue;
+        }
         match bs {
             BodyStructure::Multipart { bodies, .. } => {
-                for (index, body) in bodies.iter().enumerate() {
-                    path.push((index + 1) as u32);
-                    walk(body, path, plan);
-                    path.pop();
+                for (index, body) in bodies.iter().enumerate().rev() {
+                    let mut child_path = path.clone();
+                    child_path.push((index + 1) as u32);
+                    stack.push((body, child_path, depth + 1));
                 }
             }
             BodyStructure::Basic { common, other, .. }
             | BodyStructure::Text { common, other, .. } => {
-                add_single(common, other, path, plan);
+                add_single(common, other, &path, &mut plan);
             }
             BodyStructure::Message { common, other, .. } => {
                 // message/rfc822 is normally a forwarded-message attachment.
                 // Treat it atomically; recursing would require the special
                 // RFC 3501 MESSAGE section-numbering rules and would bulk-fetch
                 // content the user did not ask to open.
-                add_single(common, other, path, plan);
+                add_single(common, other, &path, &mut plan);
             }
         }
     }
-
-    let mut plan = MimePlan::default();
-    walk(bs, &mut Vec::new(), &mut plan);
     plan
 }
 

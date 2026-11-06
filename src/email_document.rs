@@ -4,7 +4,11 @@ use std::cell::RefCell;
 
 pub const MAX_HTML_BYTES: usize = 24 * 1024 * 1024;
 const MAX_TAGS: usize = 20_000;
-const MAX_DEPTH: usize = 96;
+// The Windows UI thread stack is 1 MB. Style and layout recurse per element,
+// so a 96-deep message walks off the guard page (access violation) before
+// `catch_unwind` can show plain text. Real mail in the fixtures nests about
+// 23 levels; anything deeper is shown as text.
+const MAX_DEPTH: usize = 32;
 const MAX_TEXT_BYTES: usize = 1_000_000;
 
 pub fn escape(text: &str) -> String {
@@ -222,7 +226,7 @@ fn excessive_css(css: &str) -> bool {
 
 fn css_tokens_excessive(parser: &mut cssparser::Parser<'_>, depth: usize) -> bool {
     use cssparser::Token as CssToken;
-    if depth > 64 {
+    if depth > 32 {
         return true;
     }
     while let Ok(token) = parser.next() {
@@ -507,8 +511,10 @@ mod tests {
 
     #[test]
     fn limits_and_export_policy() {
-        let html = format!("{}text{}", "<div>".repeat(100), "</div>".repeat(100));
-        assert!(bounded_html(&html).1.is_some());
+        let shallow = format!("{}ok{}", "<div>".repeat(20), "</div>".repeat(20));
+        assert!(bounded_html(&shallow).1.is_none(), "ordinary nesting stays HTML");
+        let html = format!("{}text{}", "<div>".repeat(40), "</div>".repeat(40));
+        assert!(bounded_html(&html).1.is_some(), "deep nesting stays off the UI stack");
         let exported = export_html(
             "<meta http-equiv='refresh' content='0;url=https://evil.test'><p>Hello</p><script>bad()</script>",
             false,

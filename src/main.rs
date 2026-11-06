@@ -4045,8 +4045,20 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     runtime.spawn(latest_load::run(
         body_request_rx,
         |(core, row, selected_message_id)| async move {
-            let result = core.load_conversation(&row, selected_message_id).await;
-            (row.id, result)
+            let id = row.id;
+            // Isolate the read. A panic while loading one message used to kill
+            // this worker, so every later open hung, or abort the process when
+            // it happened on the UI thread's follow-up. The pane shows the error
+            // and the rest of the mailbox stays up.
+            let joined = tokio::task::spawn(async move {
+                core.load_conversation(&row, selected_message_id).await
+            })
+            .await;
+            let result = match joined {
+                Ok(result) => result,
+                Err(_) => Err("This message could not be opened.".to_owned()),
+            };
+            (id, result)
         },
         move |generation, (id, result)| {
             let updates = body_updates.clone();
@@ -5057,70 +5069,96 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let Some(app) = message_load_app.upgrade() else {
                 return;
             };
-            match update.result {
-                Ok(conversation) => {
-                    let is_selected = {
-                        let mut state = message_load_state.borrow_mut();
-                        let is_selected =
-                            state.selected_id == Some(update.id) && !state.preview_closed;
-                        if is_selected {
-                            // A restored tab reopens the message it had open
-                            // when its conversation first loads.
-                            let restored = state
-                                .restore_thread_message
-                                .take_if(|(conversation, _)| *conversation == update.id)
-                                .filter(|_| state.conversation_owner_id != Some(update.id))
-                                .map(|(_, message)| message);
-                            let selected_message_id = restored.or_else(|| {
-                                state
-                                    .conversation_messages
-                                    .get(state.conversation_selected_index)
-                                    .map(|message| message.id)
-                            });
-                            state.conversation_owner_id = Some(update.id);
-                            state.conversation_messages = conversation.messages;
-                            state.conversation_selected_index = selected_message_id
-                                .and_then(|id| {
+            let update_id = update.id;
+            // Layout of one message can still panic in native code. Catch it
+            // here so the reading pane shows the error and the window stays up.
+            let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match update.result {
+                    Ok(conversation) => {
+                        let is_selected = {
+                            let mut state = message_load_state.borrow_mut();
+                            let is_selected =
+                                state.selected_id == Some(update.id) && !state.preview_closed;
+                            if is_selected {
+                                // A restored tab reopens the message it had open
+                                // when its conversation first loads.
+                                let restored = state
+                                    .restore_thread_message
+                                    .take_if(|(conversation, _)| *conversation == update.id)
+                                    .filter(|_| state.conversation_owner_id != Some(update.id))
+                                    .map(|(_, message)| message);
+                                let selected_message_id = restored.or_else(|| {
                                     state
                                         .conversation_messages
-                                        .iter()
-                                        .position(|message| message.id == id)
-                                })
-                                .unwrap_or_else(|| {
-                                    state.conversation_messages.len().saturating_sub(1)
+                                        .get(state.conversation_selected_index)
+                                        .map(|message| message.id)
                                 });
-                            let any_body_pending = state
-                                .conversation_messages
-                                .iter()
-                                .any(|message| message.body_pending);
-                            if let Some(current) = state
-                                .messages
-                                .iter_mut()
-                                .find(|current| current.id == update.id)
-                            {
-                                current.body_pending = any_body_pending;
+                                state.conversation_owner_id = Some(update.id);
+                                state.conversation_messages = conversation.messages;
+                                state.conversation_selected_index = selected_message_id
+                                    .and_then(|id| {
+                                        state
+                                            .conversation_messages
+                                            .iter()
+                                            .position(|message| message.id == id)
+                                    })
+                                    .unwrap_or_else(|| {
+                                        state.conversation_messages.len().saturating_sub(1)
+                                    });
+                                let any_body_pending = state
+                                    .conversation_messages
+                                    .iter()
+                                    .any(|message| message.body_pending);
+                                if let Some(current) = state
+                                    .messages
+                                    .iter_mut()
+                                    .find(|current| current.id == update.id)
+                                {
+                                    current.body_pending = any_body_pending;
+                                }
                             }
+                            is_selected
+                        };
+                        // A user may select another row while this load is in flight.
+                        // Keep only the selected thread and project its metadata before
+                        // rendering the one expanded body.
+                        if is_selected
+                            && let Err(error) =
+                                render_current(&app, &message_load_state, &message_load_runtime)
+                        {
+                            let reader = app.global::<EmailReader>();
+                            reader.set_body_pending(false);
+                            reader.set_notice(error.clone().into());
+                            app.set_text_mode(true);
+                            app.set_render_status(UiMessage::detail(
+                                "Message refresh failed: {}",
+                                error,
+                            ));
                         }
-                        is_selected
-                    };
-                    // A user may select another row while this load is in flight.
-                    // Keep only the selected thread and project its metadata before
-                    // rendering the one expanded body.
-                    if is_selected
-                        && let Err(error) =
-                            render_current(&app, &message_load_state, &message_load_runtime)
-                    {
-                        app.set_render_status(UiMessage::detail(
-                            "Message refresh failed: {}",
-                            error,
-                        ));
+                    }
+                    Err(error) => {
+                        if message_load_state.borrow().selected_id == Some(update.id) {
+                            let reader = app.global::<EmailReader>();
+                            reader.set_body_pending(false);
+                            reader.set_notice(error.clone().into());
+                            app.set_text_mode(true);
+                            app.set_render_status(UiMessage::detail(
+                                "Message load failed: {}",
+                                error,
+                            ));
+                        }
                     }
                 }
-                Err(error) => {
-                    if message_load_state.borrow().selected_id == Some(update.id) {
-                        app.set_render_status(UiMessage::detail("Message load failed: {}", error));
-                    }
-                }
+            }));
+            if opened.is_err() && message_load_state.borrow().selected_id == Some(update_id) {
+                let reader = app.global::<EmailReader>();
+                reader.set_body_pending(false);
+                reader.set_notice("This message could not be opened.".into());
+                app.set_text_mode(true);
+                app.set_render_status(UiMessage::detail(
+                    "Message load failed: {}",
+                    "This message could not be opened.",
+                ));
             }
         }
     });

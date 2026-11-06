@@ -51,6 +51,10 @@ const MAX_GMAIL_PAGE_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_GMAIL_LABELS: usize = 10_000;
 const MAX_GMAIL_HEADERS_BYTES: usize = 256 * 1024;
 const MAX_GMAIL_MIME_PARTS: usize = 2_000;
+// A chain of parts used to recurse on the worker stack. A few hundred nested
+// parts overflow it, and a stack overflow aborts the process (Windows reports
+// that as 0xc0000409, or as an access violation on the guard page).
+const MAX_GMAIL_MIME_DEPTH: usize = 32;
 const MAX_HISTORY_THREADS_PER_PAGE: usize = 10_000;
 const HISTORY_THREAD_BATCH: usize = 4;
 const MAX_HISTORY_MESSAGES_PER_BATCH: usize = 10_000;
@@ -2074,82 +2078,81 @@ struct PartSpec {
 }
 
 fn collect_part_specs(part: &Value, output: &mut Vec<PartSpec>) -> Result<()> {
+    // Heap stack. The previous recursive walk overflowed the worker stack on
+    // a deeply nested message and aborted the process while it was opening.
+    let mut stack = vec![(part, 0_usize)];
     let mut visited = 0_usize;
-    collect_part_specs_inner(part, output, &mut visited)
-}
-
-fn collect_part_specs_inner(
-    part: &Value,
-    output: &mut Vec<PartSpec>,
-    visited: &mut usize,
-) -> Result<()> {
-    *visited += 1;
-    if *visited > MAX_GMAIL_MIME_PARTS {
-        return Err(CoreError::Mime(format!(
-            "Gmail MIME tree exceeds the {MAX_GMAIL_MIME_PARTS}-part safety limit"
-        )));
-    }
-    let mime_type = part
-        .get("mimeType")
-        .and_then(Value::as_str)
-        .unwrap_or("application/octet-stream")
-        .to_ascii_lowercase();
-    let filename = part
-        .get("filename")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-    let headers = part_headers(part);
-    let disposition = headers
-        .get("content-disposition")
-        .map(String::as_str)
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let charset = headers.get("content-type").and_then(|value| {
-        value.split(';').skip(1).find_map(|parameter| {
-            let (name, value) = parameter.trim().split_once('=')?;
-            name.trim()
-                .eq_ignore_ascii_case("charset")
-                .then(|| value.trim().trim_matches(['\'', '"']).to_owned())
-        })
-    });
-    let content_id = headers
-        .get("content-id")
-        .map(|value| value.trim().trim_matches(['<', '>']).to_owned())
-        .filter(|value| !value.is_empty());
-    let body = part.get("body").unwrap_or(&Value::Null);
-    let has_body = body.get("data").and_then(Value::as_str).is_some()
-        || body.get("attachmentId").and_then(Value::as_str).is_some();
-    if has_body {
-        let is_attachment = filename.is_some() || disposition.starts_with("attachment");
-        output.push(PartSpec {
-            part_id: part
-                .get("partId")
-                .and_then(Value::as_str)
-                .unwrap_or("0")
-                .to_owned(),
-            mime_type,
-            filename,
-            content_id: content_id.clone(),
-            is_inline: disposition.starts_with("inline")
-                || (content_id.is_some() && !disposition.starts_with("attachment")),
-            is_attachment,
-            charset,
-            provider_attachment_id: body
-                .get("attachmentId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            encoded_data: body.get("data").and_then(Value::as_str).map(str::to_owned),
-            size: body.get("size").and_then(Value::as_i64).unwrap_or(0),
+    while let Some((part, depth)) = stack.pop() {
+        visited += 1;
+        if visited > MAX_GMAIL_MIME_PARTS {
+            return Err(CoreError::Mime(format!(
+                "Gmail MIME tree exceeds the {MAX_GMAIL_MIME_PARTS}-part safety limit"
+            )));
+        }
+        if depth > MAX_GMAIL_MIME_DEPTH {
+            return Err(CoreError::Mime(format!(
+                "Gmail MIME tree exceeds the {MAX_GMAIL_MIME_DEPTH}-level safety limit"
+            )));
+        }
+        let mime_type = part
+            .get("mimeType")
+            .and_then(Value::as_str)
+            .unwrap_or("application/octet-stream")
+            .to_ascii_lowercase();
+        let filename = part
+            .get("filename")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let headers = part_headers(part);
+        let disposition = headers
+            .get("content-disposition")
+            .map(String::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let charset = headers.get("content-type").and_then(|value| {
+            value.split(';').skip(1).find_map(|parameter| {
+                let (name, value) = parameter.trim().split_once('=')?;
+                name.trim()
+                    .eq_ignore_ascii_case("charset")
+                    .then(|| value.trim().trim_matches(['\'', '"']).to_owned())
+            })
         });
-    }
-    for child in part
-        .get("parts")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        collect_part_specs_inner(child, output, visited)?;
+        let content_id = headers
+            .get("content-id")
+            .map(|value| value.trim().trim_matches(['<', '>']).to_owned())
+            .filter(|value| !value.is_empty());
+        let body = part.get("body").unwrap_or(&Value::Null);
+        let has_body = body.get("data").and_then(Value::as_str).is_some()
+            || body.get("attachmentId").and_then(Value::as_str).is_some();
+        if has_body {
+            let is_attachment = filename.is_some() || disposition.starts_with("attachment");
+            output.push(PartSpec {
+                part_id: part
+                    .get("partId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("0")
+                    .to_owned(),
+                mime_type,
+                filename,
+                content_id: content_id.clone(),
+                is_inline: disposition.starts_with("inline")
+                    || (content_id.is_some() && !disposition.starts_with("attachment")),
+                is_attachment,
+                charset,
+                provider_attachment_id: body
+                    .get("attachmentId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                encoded_data: body.get("data").and_then(Value::as_str).map(str::to_owned),
+                size: body.get("size").and_then(Value::as_i64).unwrap_or(0),
+            });
+        }
+        if let Some(children) = part.get("parts").and_then(Value::as_array) {
+            for child in children.iter().rev() {
+                stack.push((child, depth + 1));
+            }
+        }
     }
     Ok(())
 }
@@ -4283,6 +4286,27 @@ mod tests {
         );
         assert_eq!(parts[1].filename.as_deref(), Some("pixel.png"));
         assert!(!parts[1].is_inline);
+    }
+
+    #[test]
+    fn deeply_nested_gmail_mime_is_rejected_on_the_heap() {
+        let mut payload = json!({
+            "mimeType": "text/plain",
+            "body": { "data": "aGVsbG8", "size": 5 }
+        });
+        for _ in 0..5 {
+            payload = json!({ "mimeType": "multipart/mixed", "parts": [payload] });
+        }
+        let mut parts = Vec::new();
+        collect_part_specs(&payload, &mut parts).unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].mime_type, "text/plain");
+
+        for _ in 0..40 {
+            payload = json!({ "mimeType": "multipart/mixed", "parts": [payload] });
+        }
+        let error = collect_part_specs(&payload, &mut parts).unwrap_err();
+        assert!(error.to_string().contains("level"), "{error}");
     }
 
     #[test]

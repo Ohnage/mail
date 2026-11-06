@@ -1829,7 +1829,7 @@ fn prepare_email_html_at_with_font_ctx(
     let mut count = 0usize;
     while let Some((id, depth)) = stack.pop() {
         count += 1;
-        if depth > 96 || count > 30_000 {
+        if depth > 48 || count > 30_000 {
             return Err("Message structure exceeds rendering limits. Use plain text.".into());
         }
         if let Some(node) = document.get_node(id) {

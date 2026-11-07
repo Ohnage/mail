@@ -104,6 +104,10 @@ export component MailView inherits FocusScope {
     // The shown list's offset, saved with the tab when it is left.
     private property <length> list-scroll-offset: -(root.single-pane ? compact-list-pane.scroll-y : desktop-list-pane.scroll-y);
     changed list-scroll-offset => { TabsUi.list-offset = root.list-scroll-offset; }
+    private property <length> active-row-height: root.single-pane ? compact-list-pane.listed-row-height : desktop-list-pane.listed-row-height;
+    private property <length> active-header-height: root.single-pane ? compact-list-pane.listed-header-height : desktop-list-pane.listed-header-height;
+    changed active-row-height => { TabsUi.list-row-height = root.active-row-height; }
+    changed active-header-height => { TabsUi.list-header-height = root.active-header-height; }
     private property <length> list-pane-maximum-width: max(
         LayoutMetrics.list-pane-width,
         root.available-width - root.desktop-sidebar-width - LayoutMetrics.divider-width - LayoutMetrics.detail-pane-min-width
@@ -248,6 +252,8 @@ export component MailView inherits FocusScope {
     init => {
         // A new mail view starts at the top; an earlier view's offset is stale.
         TabsUi.list-offset = root.list-scroll-offset;
+        TabsUi.list-row-height = root.active-row-height;
+        TabsUi.list-header-height = root.active-header-height;
         if root.single-pane && root.compact-page == "message" { root.focus-reader(); }
         else { root.focus-list(false); }
     }

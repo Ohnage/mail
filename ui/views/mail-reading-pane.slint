@@ -573,6 +573,11 @@ export component MailReadingPane inherits FocusScope {
 
     changed transition-message-id => { root.restart-content-reveal(); }
     changed selected-thread-index => {
+        // Background refresh can move the same message inside its thread.
+        // Only a different message starts at the top.
+        if EmailReader.anchor-message-id >= 0 && EmailReader.anchor-message-id == EmailReader.message-id {
+            return;
+        }
         root.restart-content-reveal();
         root.syncing-accordion-scroll = true;
         root.email-scroll-y = 0px;

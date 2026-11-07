@@ -19,6 +19,7 @@ slint::slint! {
         in-out property <[MailListEntry]> entries: [];
         in-out property <string> scope: "Unified Inbox";
         out property <length> offset: -pane.scroll-y;
+        out property <length> row-height: pane.listed-row-height;
         init => { MotionSettings.enabled = false; }
 
         pane := MailListPane {
@@ -111,7 +112,7 @@ fn shown_tabs_scroll_the_mail_list_back() {
     };
     let restore = |offset: f32| restore_for(ui.get_scope().as_str(), offset);
 
-    // Message rows are 96px, so 50 of them reach 4800px.
+    // Fifty rows are taller than this window, so a saved offset can land mid-list.
     resize(&entries, 50);
     advance(Duration::from_millis(8));
     restore(1500.0);
@@ -143,14 +144,19 @@ fn shown_tabs_scroll_the_mail_list_back() {
     assert_eq!(ui.get_offset(), 0.0);
 
     // A position past the loaded rows is reached as more rows arrive.
+    // The target is an exact number of rows, past twenty and inside fifty,
+    // so a 60px headless row and a taller font both land on it.
+    let row = ui.get_row_height();
+    assert!(row > 1.0, "row height {row}");
+    let past_short_list = row * 35.0;
     resize(&entries, 20);
     advance(Duration::from_millis(8));
-    restore(3000.0);
+    restore(past_short_list);
     advance(Duration::from_millis(8));
-    assert!(ui.get_offset() < 3000.0);
+    assert!(ui.get_offset() < past_short_list);
     resize(&entries, 50);
     advance(Duration::from_millis(8));
-    assert_eq!(ui.get_offset(), 3000.0);
+    assert_eq!(ui.get_offset(), past_short_list);
 
     // Scrolling by hand ends the restore: rows that arrive later leave the
     // list where the user put it.
@@ -170,4 +176,54 @@ fn shown_tabs_scroll_the_mail_list_back() {
     resize(&entries, 50);
     advance(Duration::from_millis(8));
     assert_eq!(ui.get_offset(), scrolled);
+}
+
+#[test]
+fn an_inserted_row_keeps_the_scrolled_message_in_view() {
+    let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+    let now = Rc::new(Cell::new(Duration::ZERO));
+    slint::platform::set_platform(Box::new(Clock {
+        window: window.clone(),
+        now: now.clone(),
+    }))
+    .unwrap();
+    let ui = TabScrollHarness::new().unwrap();
+    ui.window().set_size(slint::PhysicalSize::new(400, 480));
+    ui.show().unwrap();
+    let tabs = ui.global::<TabsUi>();
+    let advance = |by: Duration| {
+        let mut pixels = vec![slint::Rgb8Pixel::default(); 400 * 480];
+        for _ in 0..4 {
+            now.set(now.get() + by / 4);
+            slint::platform::update_timers_and_animations();
+            window.draw_if_needed(|renderer| {
+                renderer.render(&mut pixels, 400);
+            });
+        }
+    };
+    let entries = Rc::new(VecModel::<MailListEntry>::default());
+    ui.set_entries(ModelRc::from(entries.clone()));
+    resize(&entries, 40);
+    advance(Duration::from_millis(20));
+    let row = ui.get_row_height();
+    assert!(row > 1.0, "row height {row}");
+    tabs.set_list_hold(row * 12.0);
+    tabs.set_list_hold_request(1);
+    advance(Duration::from_millis(40));
+    let offset = ui.get_offset();
+    assert!(
+        (offset - row * 12.0).abs() < 1.0,
+        "offset {offset} row {row}"
+    );
+    entries.insert(0, entry(100));
+    advance(Duration::from_millis(20));
+    tabs.set_list_hold(offset + row);
+    tabs.set_list_hold_request(2);
+    advance(Duration::from_millis(40));
+    let after = ui.get_offset();
+    assert!(
+        (after - (offset + row)).abs() < 1.0,
+        "the inserted row must not pull the viewport up, before {offset} after {after} row {row} hold {}",
+        tabs.get_list_hold()
+    );
 }

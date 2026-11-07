@@ -55,6 +55,13 @@ export global TabsUi {
     in-out property <length> list-restore: -1px;
     in-out property <string> list-restore-view;
     in-out property <int> list-restore-request;
+    // Row geometry of the visible list, and a scroll position to reapply after
+    // a background refresh inserts rows above the viewport. A negative hold
+    // means the list should keep whatever the user is doing.
+    in-out property <length> list-row-height: 0px;
+    in-out property <length> list-header-height: 0px;
+    in-out property <length> list-hold: -1px;
+    in-out property <int> list-hold-request: 0;
     // Re-apply the active tab once local mail storage is ready.
     callback restore-active();
     // Forget every tab and its saved state, leaving one Inbox tab.

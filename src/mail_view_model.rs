@@ -2,6 +2,8 @@
 
 #[cfg(test)]
 mod removal_tests;
+#[cfg(test)]
+mod scroll_tests;
 
 use super::*;
 use chrono::{Datelike, Timelike};
@@ -513,6 +515,7 @@ pub(super) fn render_current(
             Rc::clone(&state.mail_list_entries),
         )
     };
+    let list_anchor = capture_list_anchor(app, &mail_list_entries);
     reconcile_model_rows_by(&email_rows, projected_rows, |row| row.id, same_email_row);
     reconcile_model_rows_by(
         &mail_list_entries,
@@ -520,6 +523,7 @@ pub(super) fn render_current(
         mail_list_entry_key,
         same_mail_list_entry,
     );
+    restore_list_anchor(app, &mail_list_entries, list_anchor);
     app.set_mail_selection_count(checked_ids.len() as i32);
     refresh_sidebar(state);
     app.set_selected_scope_title(
@@ -592,6 +596,8 @@ pub(super) fn render_current(
         if conversation_ready {
             display_email.subject = thread_subject;
         }
+        app.global::<EmailReader>()
+            .set_anchor_message_id(display_email.id);
         app.set_selected_thread_index(if conversation_ready {
             i32::try_from(conversation_selected_index).unwrap_or(i32::MAX)
         } else {
@@ -649,6 +655,7 @@ pub(super) fn render_current(
         app.set_has_selection(false);
         app.set_remote_images_blocked(false);
         state.borrow().conversation_rows.set_vec(Vec::new());
+        app.global::<EmailReader>().set_anchor_message_id(-1);
         app.set_selected_thread_index(0);
         app.set_render_status(UiMessage::plain(
             "Mail core is ready for account synchronization and message actions.",
@@ -1163,6 +1170,87 @@ pub(super) fn apply_selected_favicon(app: &AppWindow, icons: Option<&FaviconImag
     );
 }
 
+struct ListAnchor {
+    id: i32,
+    into: f32,
+}
+
+fn list_metrics(app: &AppWindow) -> Option<(f32, f32)> {
+    let ui = app.global::<TabsUi>();
+    let row = ui.get_list_row_height();
+    if row <= 1.0 {
+        return None;
+    }
+    let header = ui.get_list_header_height();
+    Some((row, if header > 1.0 { header } else { row }))
+}
+
+fn listed_entry_height(entry: &MailListEntry, row: f32, header: f32) -> f32 {
+    if entry.is_header {
+        header
+    } else if entry.show_row {
+        row
+    } else {
+        0.0
+    }
+}
+
+/// The message under the current list viewport, so a refresh can put it back.
+fn capture_list_anchor(
+    app: &AppWindow,
+    model: &impl slint::Model<Data = MailListEntry>,
+) -> Option<ListAnchor> {
+    let (row, header) = list_metrics(app)?;
+    let ui = app.global::<TabsUi>();
+    let offset = ui.get_list_offset();
+    if offset <= 1.0 || ui.get_list_restore() >= 0.0 {
+        return None;
+    }
+    let mut y = 0.0;
+    for index in 0..model.row_count() {
+        let entry = model.row_data(index)?;
+        let height = listed_entry_height(&entry, row, header);
+        if !entry.is_header && entry.show_row && entry.email.id >= 0 && y + height > offset + 0.5 {
+            return Some(ListAnchor {
+                id: entry.email.id,
+                into: (offset - y).clamp(0.0, height),
+            });
+        }
+        y += height;
+    }
+    None
+}
+
+fn restore_list_anchor(
+    app: &AppWindow,
+    model: &impl slint::Model<Data = MailListEntry>,
+    anchor: Option<ListAnchor>,
+) {
+    let Some(anchor) = anchor else {
+        return;
+    };
+    let Some((row, header)) = list_metrics(app) else {
+        return;
+    };
+    let ui = app.global::<TabsUi>();
+    if ui.get_list_restore() >= 0.0 {
+        return;
+    }
+    let mut y = 0.0;
+    for index in 0..model.row_count() {
+        let Some(entry) = model.row_data(index) else {
+            continue;
+        };
+        let height = listed_entry_height(&entry, row, header);
+        if !entry.is_header && entry.show_row && entry.email.id == anchor.id {
+            ui.set_list_hold(y + anchor.into.min(height));
+            ui.set_list_hold_request(ui.get_list_hold_request().wrapping_add(1));
+            return;
+        }
+        y += height;
+    }
+}
+
 pub(super) fn refresh_rows_only(
     app: &AppWindow,
     state: &Rc<RefCell<InboxState>>,
@@ -1250,6 +1338,7 @@ pub(super) fn refresh_rows_only(
         state.selected_id = selected_id;
         state.checked_ids.clone_from(&checked_ids);
     }
+    let list_anchor = capture_list_anchor(app, &mail_list_entries);
     reconcile_model_rows_by(&email_rows, projected_rows, |row| row.id, same_email_row);
     reconcile_model_rows_by(
         &mail_list_entries,
@@ -1257,6 +1346,7 @@ pub(super) fn refresh_rows_only(
         mail_list_entry_key,
         same_mail_list_entry,
     );
+    restore_list_anchor(app, &mail_list_entries, list_anchor);
     app.set_mail_selection_count(checked_ids.len() as i32);
     app.set_selected_account_uses_labels(selected_email.as_ref().is_some_and(|email| {
         state.borrow().connected_accounts.iter().any(|account| {

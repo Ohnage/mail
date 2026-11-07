@@ -519,6 +519,9 @@ export global EmailReader {
     in-out property <[ReaderImage]> images;
     in-out property <int> revision: -1;
     in-out property <int> message-id: -1;
+    // The message whose body is about to be shown. A thread-index change for
+    // this same id is a refresh, not a request to jump back to the top.
+    in-out property <int> anchor-message-id: -1;
     callback ensure-body(int);
     callback retry-images();
     in-out property <int> failed-images;

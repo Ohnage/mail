@@ -156,8 +156,13 @@ pub(super) fn apply_email(
     app.set_selected_sender_verification(email.sender_verification.clone().into());
     let reader = app.global::<EmailReader>();
     reader.set_body_pending(email.body_pending);
-    reader.set_authored_text(email.text.clone().unwrap_or_default().into());
     let same_message = reader.get_message_id() == email.id;
+    // A header or progress refresh must not swap a laid-out body for the short
+    // preview. That shrinks the document and the scroller clamps back to the top.
+    if same_message && email.body_pending && email_renderer.borrow().loaded_key.is_some() {
+        return Ok(());
+    }
+    reader.set_authored_text(email.text.clone().unwrap_or_default().into());
     let mut scroll = if same_message {
         app.get_email_scroll_y()
     } else {

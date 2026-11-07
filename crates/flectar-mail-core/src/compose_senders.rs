@@ -8,7 +8,9 @@
 //! authorize, and a wildcard is an authorization, not a From address.
 
 use crate::brand_registry::classify_receiving_address;
-use crate::models::{AddressRule, AddressView, BusinessTab, MailProfile, SenderIdentity};
+use crate::models::{
+    AddressRule, AddressView, AddressViewSource, BusinessTab, MailProfile, SenderIdentity,
+};
 use crate::recipient_match::email_matches;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -115,9 +117,15 @@ pub fn compose_groups(
                     Candidate::exact(account, identity, identity.email.clone()),
                 );
             } else if identity.is_wildcard() {
-                // A wildcard authorizes a domain. Only addresses already tied
-                // to this mailbox are offered, not the rest of the registry.
+                // A wildcard authorizes a domain. Registry and manual addresses
+                // tied to this mailbox can be sent. The provider receiving
+                // catalog is not a From list: exact identities already name
+                // what that account may send, and expanding every cached view
+                // dumps the whole catalog into the menu.
                 for view in address_views {
+                    if view.source == AddressViewSource::Provider {
+                        continue;
+                    }
                     if view_hosted_by(view, account, profiles) && identity.authorizes(&view.address)
                     {
                         consider(
@@ -193,12 +201,11 @@ pub fn compose_groups(
 
 /// The account that may submit `email`, when a group offers it.
 pub fn transport_account(groups: &[ComposeGroup], email: &str) -> Option<i64> {
-    let email = email.trim();
     groups.iter().find_map(|group| {
         group
             .senders
             .iter()
-            .find(|sender| sender.email.eq_ignore_ascii_case(email))
+            .find(|sender| same_sender_email(&sender.email, email))
             .map(|sender| sender.account_id)
     })
 }
@@ -215,7 +222,7 @@ pub fn compose_group_index(
             group
                 .senders
                 .iter()
-                .any(|sender| sender.email.eq_ignore_ascii_case(requested_email))
+                .any(|sender| same_sender_email(&sender.email, requested_email))
         })
     {
         return index;
@@ -383,7 +390,7 @@ pub fn sender_account_id(group: &ComposeGroup, email: &str) -> Option<i64> {
     group
         .senders
         .iter()
-        .find(|sender| sender.email.eq_ignore_ascii_case(email))
+        .find(|sender| same_sender_email(&sender.email, email))
         .map(|sender| sender.account_id)
 }
 
@@ -457,8 +464,76 @@ impl Candidate {
     }
 }
 
-fn consider(chosen: &mut BTreeMap<String, Candidate>, candidate: Candidate) {
-    let key = candidate.email.to_ascii_lowercase();
+/// Trimmed address and its case-insensitive key. Display-name forms
+/// (`Name <email>`) and surrounding space collapse to the address itself.
+fn normalized_sender(email: &str) -> Option<(String, String)> {
+    let email = email.trim();
+    let email = email.rsplit_once('<').map_or(email, |(_, rest)| {
+        rest.split('>').next().unwrap_or(rest).trim()
+    });
+    let (local, domain) = email.rsplit_once('@')?;
+    let local = local.trim();
+    let domain = domain.trim();
+    if local.is_empty() || local == "*" || domain.is_empty() {
+        return None;
+    }
+    let visible = format!("{local}@{domain}");
+    Some((visible.to_ascii_lowercase(), visible))
+}
+
+/// One visible From address. Case and surrounding space do not make a second row.
+pub fn same_sender_email(left: &str, right: &str) -> bool {
+    match (normalized_sender(left), normalized_sender(right)) {
+        (Some((left, _)), Some((right, _))) => left == right,
+        _ => false,
+    }
+}
+
+/// Selectable identities, one per address. A provider default beats a primary,
+/// which beats a higher account id. Wildcards and unverified rows are omitted.
+pub fn unique_selectable_identities(identities: Vec<SenderIdentity>) -> Vec<SenderIdentity> {
+    let mut chosen: BTreeMap<String, SenderIdentity> = BTreeMap::new();
+    for mut identity in identities {
+        if !identity.is_selectable() {
+            continue;
+        }
+        let Some((key, visible)) = normalized_sender(&identity.email) else {
+            continue;
+        };
+        identity.email = visible;
+        match chosen.get(&key) {
+            Some(current) if !selectable_prefer(&identity, current) => {}
+            _ => {
+                chosen.insert(key, identity);
+            }
+        }
+    }
+    let mut values = chosen.into_values().collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        left.email
+            .to_ascii_lowercase()
+            .cmp(&right.email.to_ascii_lowercase())
+    });
+    values
+}
+
+fn selectable_prefer(candidate: &SenderIdentity, current: &SenderIdentity) -> bool {
+    match (candidate.is_provider_default, current.is_provider_default) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => match (candidate.is_primary, current.is_primary) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => candidate.account_id < current.account_id,
+        },
+    }
+}
+
+fn consider(chosen: &mut BTreeMap<String, Candidate>, mut candidate: Candidate) {
+    let Some((key, visible)) = normalized_sender(&candidate.email) else {
+        return;
+    };
+    candidate.email = visible;
     match chosen.get(&key) {
         Some(current) if !candidate.prefer(current) => {}
         _ => {
@@ -883,5 +958,125 @@ mod tests {
             transport_account(&groups, "contact@mentinkmemorial.org"),
             Some(7)
         );
+    }
+
+    #[test]
+    fn repeated_addresses_collapse_and_the_provider_catalog_stays_out() {
+        let (tabs, mut views, rules, mut accounts) = fixture();
+        accounts[0]
+            .identities
+            .push(identity(7, "  Sales@MentinkMemorial.org  ", "accepted"));
+        accounts[0].identities.push(identity(
+            7,
+            "Tim Mentink <contact@mentinkmemorial.org>",
+            "accepted",
+        ));
+        let mut named = identity(7, "desk@mentinkmedia.com", "accepted");
+        named.display_name = Some("Mentink Media".into());
+        let mut other_named = identity(7, "hello.desk@mentinkmedia.com", "accepted");
+        other_named.display_name = Some("Mentink Media".into());
+        accounts[0].identities.push(named);
+        accounts[0].identities.push(other_named);
+        views.push(AddressView {
+            id: 40,
+            address: "  HELLO@mentinkmedia.com ".into(),
+            source_account_emails: vec!["inbox@mentinkmedia.com".into()],
+            profile_id: Some("mentink-media".into()),
+            source: AddressViewSource::Registry,
+        });
+        views.push(AddressView {
+            id: 41,
+            address: "manual@mentinkmedia.com".into(),
+            source_account_emails: vec!["inbox@mentinkmedia.com".into()],
+            profile_id: Some("mentink-media".into()),
+            source: AddressViewSource::Manual,
+        });
+        for index in 0..2_000 {
+            views.push(AddressView {
+                id: 1_000 + index,
+                address: format!("alias{index}@mentinkmedia.com"),
+                source_account_emails: vec!["inbox@mentinkmedia.com".into()],
+                profile_id: Some("mentink-media".into()),
+                source: AddressViewSource::Provider,
+            });
+        }
+        let groups = compose_groups(&tabs, &views, &rules, &accounts, &[], &[]);
+        let media = group(&groups, "mentink-media");
+        let sales = media
+            .senders
+            .iter()
+            .filter(|sender| same_sender_email(&sender.email, "sales@mentinkmemorial.org"))
+            .collect::<Vec<_>>();
+        assert_eq!(sales.len(), 1, "case and space must not repeat an address");
+        assert_eq!(sales[0].account_id, 7);
+        assert_eq!(sales[0].email, "sales@mentinkmemorial.org");
+        assert_eq!(
+            media
+                .senders
+                .iter()
+                .filter(|sender| same_sender_email(&sender.email, "hello@mentinkmedia.com"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            media
+                .senders
+                .iter()
+                .filter(|sender| same_sender_email(&sender.email, "contact@mentinkmemorial.org"))
+                .count(),
+            1
+        );
+        let named_rows = media
+            .senders
+            .iter()
+            .filter(|sender| sender.display_name.as_deref() == Some("Mentink Media"))
+            .map(|sender| sender.email.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            named_rows,
+            vec!["desk@mentinkmedia.com", "hello.desk@mentinkmedia.com"]
+        );
+        assert!(emails(media).contains(&"manual@mentinkmedia.com"));
+        assert!(
+            media
+                .senders
+                .iter()
+                .all(|sender| !sender.email.starts_with("alias")),
+            "the provider receiving catalog is not a From menu"
+        );
+        assert!(
+            media.senders.len() < 20,
+            "a group stays the addresses it owns"
+        );
+        assert!(transport_account(&groups, "pending@mentinkmemorial.org").is_none());
+        assert!(transport_account(&groups, "alias0@mentinkmedia.com").is_none());
+        assert!(transport_account(&groups, "*@mentinkmedia.com").is_none());
+        assert_eq!(
+            transport_account(&groups, "  HELLO@mentinkmedia.com "),
+            Some(7)
+        );
+
+        let mut duplicated = identity(7, " Desk@MentinkMedia.com ", "accepted");
+        duplicated.display_name = Some("Other name".into());
+        duplicated.is_primary = true;
+        let mut provider_default = identity(7, "desk@mentinkmedia.com", "accepted");
+        provider_default.display_name = Some("Mentink Media".into());
+        provider_default.is_provider_default = true;
+        let unique = unique_selectable_identities(vec![
+            duplicated,
+            provider_default,
+            identity(7, "*@mentinkmedia.com", "accepted"),
+            identity(7, "pending@mentinkmedia.com", "pending"),
+            identity(9, "other@mentinkmedia.com", "accepted"),
+        ]);
+        assert_eq!(
+            unique
+                .iter()
+                .map(|identity| identity.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["desk@mentinkmedia.com", "other@mentinkmedia.com"]
+        );
+        assert!(unique[0].is_provider_default);
+        assert_eq!(unique[0].display_name.as_deref(), Some("Mentink Media"));
     }
 }

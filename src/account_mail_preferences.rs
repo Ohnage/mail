@@ -238,7 +238,7 @@ fn publish_group_senders(
             group
                 .senders
                 .iter()
-                .position(|sender| sender.email.eq_ignore_ascii_case(requested))
+                .position(|sender| compose_senders::same_sender_email(&sender.email, requested))
         })
         .flatten()
         .unwrap_or(0);
@@ -1433,13 +1433,15 @@ fn register_composer(
                         let requested = ui.get_composer_sender_email().to_string();
                         let identities = {
                             let all = identities;
-                            let mut selectable = verified_identities(&all);
+                            let mut selectable = compose_senders::unique_selectable_identities(
+                                verified_identities(&all),
+                            );
                             // A reply to an address under a server wildcard
                             // (`*@domain`) answers from that exact address.
                             if !requested.is_empty()
-                                && !selectable
-                                    .iter()
-                                    .any(|identity| identity.email.eq_ignore_ascii_case(&requested))
+                                && !selectable.iter().any(|identity| {
+                                    compose_senders::same_sender_email(&identity.email, &requested)
+                                })
                                 && let Some(wildcard) = all.iter().find(|identity| {
                                     identity.is_verified()
                                         && identity.is_wildcard()
@@ -1447,7 +1449,7 @@ fn register_composer(
                                 })
                             {
                                 selectable.push(SenderIdentity {
-                                    email: requested.clone(),
+                                    email: requested.trim().to_owned(),
                                     is_primary: false,
                                     is_provider_default: false,
                                     ..wildcard.clone()
@@ -1480,14 +1482,14 @@ fn register_composer(
                         let sender_index = (!requested.is_empty())
                             .then(|| {
                                 identities.iter().position(|identity| {
-                                    identity.email.eq_ignore_ascii_case(&requested)
+                                    compose_senders::same_sender_email(&identity.email, &requested)
                                 })
                             })
                             .flatten()
                             .or_else(|| {
                                 default_email.and_then(|email| {
                                     identities.iter().position(|identity| {
-                                        identity.email.eq_ignore_ascii_case(email)
+                                        compose_senders::same_sender_email(&identity.email, email)
                                     })
                                 })
                             })
@@ -1579,7 +1581,7 @@ fn register_composer(
         let requested = if group
             .senders
             .iter()
-            .any(|sender| sender.email.eq_ignore_ascii_case(&current))
+            .any(|sender| compose_senders::same_sender_email(&sender.email, &current))
         {
             current
         } else {
@@ -1626,7 +1628,7 @@ fn register_composer(
         let choices = picker.all.borrow();
         let Some(position) = choices
             .iter()
-            .position(|choice| choice.email.eq_ignore_ascii_case(&email))
+            .position(|choice| compose_senders::same_sender_email(&choice.email, &email))
         else {
             return;
         };

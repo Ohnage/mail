@@ -368,6 +368,8 @@ export component MailListPane inherits FocusScope {
     out property <bool> keyboard-focused: list-keyboard.has-focus;
     out property <bool> keyboard-focus-visible: list-keyboard.focus-visible;
     out property <length> scroll-y: mail-list-scroll.content-y;
+    out property <length> listed-row-height: root.message-row-height;
+    out property <length> listed-header-height: root.group-row-height;
     private property <int> keyboard-entry-index: -1;
     // Message rows share one height so keyboard paging can compute positions.
     // Each line keeps its 12px design and grows with the platform font.
@@ -392,6 +394,8 @@ export component MailListPane inherits FocusScope {
     label-probe := LabelChip { visible: false; compact: true; name: "Long label name"; }
 
     function reveal-target(target: MailNavigationTarget) {
+        root.hold-armed = false;
+        TabsUi.list-hold = -1px;
         if mail-list-scroll.visible-height <= 0px { return; }
         let top = target.preceding_headers * root.group-row-height
             + target.preceding_messages * root.message-row-height;
@@ -488,6 +492,8 @@ export component MailListPane inherits FocusScope {
     function reset-pagination() {
         root.keyboard-email-id = -1;
         root.keyboard-entry-index = -1;
+        root.hold-armed = false;
+        TabsUi.list-hold = -1px;
         mail-list-scroll.content-y = 0px;
         pagination.reset();
         // Going to another mailbox drops a position meant for the last one.
@@ -533,8 +539,36 @@ export component MailListPane inherits FocusScope {
         restore-settle.stop();
         root.restore-scroll();
     }
-    changed list-content-height => { root.restore-scroll(); }
+    changed list-content-height => {
+        root.restore-scroll();
+        if root.hold-armed { root.apply-hold(); }
+    }
     init => { root.restore-scroll(); }
+    // A refresh can insert mail above the viewport. Keep that anchor until the
+    // user scrolls; ListView's own layout pass runs after the model update.
+    private property <int> hold-request: TabsUi.list-hold-request;
+    private property <bool> hold-armed: false;
+    function apply-hold() {
+        if !root.hold-armed || TabsUi.list-restore >= 0px || TabsUi.list-hold < 0px || mail-list-scroll.visible-height <= 0px {
+            return;
+        }
+        let bottom = max(0px, mail-list-scroll.content-height - mail-list-scroll.visible-height);
+        mail-list-scroll.content-y = -min(TabsUi.list-hold, bottom);
+    }
+    changed hold-request => {
+        root.hold-armed = TabsUi.list-hold >= 0px;
+        root.apply-hold();
+        hold-refine.start();
+        hold-refine.restart();
+    }
+    hold-refine := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.stop();
+            root.apply-hold();
+        }
+    }
     restore-refine := Timer {
         interval: 1ms;
         running: false;
@@ -881,6 +915,8 @@ export component MailListPane inherits FocusScope {
                             accessible-delegate-focus: list-keyboard.has-focus ? root.keyboard-entry-index : -1;
                             scrolled => {
                                 TabsUi.list-restore = -1px;
+                                TabsUi.list-hold = -1px;
+                                root.hold-armed = false;
                                 pagination.user-scrolled();
                             }
 

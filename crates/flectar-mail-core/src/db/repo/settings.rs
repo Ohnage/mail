@@ -37,6 +37,9 @@ pub fn set(conn: &Connection, settings: &Settings) -> Result<()> {
         );
     }
     let json = serde_json::to_string(&value)?;
+    if let Some(path) = database_file(conn) {
+        backup_previous(conn, &path)?;
+    }
     conn.execute(
         "INSERT INTO app_settings (key, value) VALUES ('settings', ?1)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -49,6 +52,34 @@ pub fn set(conn: &Connection, settings: &Settings) -> Result<()> {
         if conn.is_autocommit() {
             crate::settings_mirror::flush_pending();
         }
+    }
+    Ok(())
+}
+
+fn backup_previous(conn: &Connection, db_file: &std::path::Path) -> Result<()> {
+    let previous: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'settings'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let path = db_file
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("mirror")
+        .join("settings.previous.json");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(&temporary, previous)?;
+    if std::fs::rename(&temporary, &path).is_err() {
+        std::fs::remove_file(&path)?;
+        std::fs::rename(&temporary, &path)?;
     }
     Ok(())
 }
@@ -329,5 +360,73 @@ mod tests {
         .unwrap();
 
         assert!(get(&c).is_err());
+    }
+
+    #[test]
+    fn saving_the_open_tab_keeps_the_catalog_and_the_tab_list() {
+        let conn = testutil::conn();
+        let settings = Settings {
+            business_tabs_customized: true,
+            business_tabs: vec![
+                serde_json::from_value(serde_json::json!({"id": "tab-5", "name": "TM"})).unwrap(),
+                serde_json::from_value(serde_json::json!({"id": "media", "name": "Mentink Media"}))
+                    .unwrap(),
+            ],
+            active_business_tab: Some("tab-5".into()),
+            address_views: vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": 1,
+                    "address": "tim@mentinkmemorial.org"
+                }))
+                .unwrap(),
+            ],
+            ..Settings::default()
+        };
+        set(&conn, &settings).unwrap();
+        let mut stored = get(&conn).unwrap();
+        stored.active_business_tab = Some("media".into());
+        stored.active_mail_profile = None;
+        let views = stored.address_views.clone();
+        let tabs = stored.business_tabs.clone();
+        set(&conn, &stored).unwrap();
+        let again = get(&conn).unwrap();
+        assert_eq!(again.business_tabs, tabs);
+        assert_eq!(again.address_views, views);
+        assert_eq!(again.active_business_tab.as_deref(), Some("media"));
+    }
+
+    #[test]
+    fn a_settings_write_keeps_the_previous_document() {
+        let dir = std::env::temp_dir().join(format!(
+            "flectar-settings-backup-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_file = dir.join("flectar-mail.db");
+        let mut conn = rusqlite::Connection::open(&db_file).unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        crate::db::migrations::run(&mut conn).unwrap();
+        let first = Settings {
+            business_tabs_customized: true,
+            business_tabs: vec![
+                serde_json::from_value(serde_json::json!({"id": "tab-5", "name": "TM"})).unwrap(),
+            ],
+            ..Settings::default()
+        };
+        set(&conn, &first).unwrap();
+        set(&conn, &Settings::default()).unwrap();
+        let previous =
+            std::fs::read_to_string(dir.join("mirror").join("settings.previous.json")).unwrap();
+        assert!(previous.contains("TM"));
+        let mirror_previous =
+            std::fs::read_to_string(dir.join("mirror").join("settings.mirror.previous.json"))
+                .unwrap();
+        assert!(mirror_previous.contains("TM"));
+        assert!(get(&conn).unwrap().business_tabs.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

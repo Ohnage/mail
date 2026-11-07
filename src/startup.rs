@@ -577,6 +577,8 @@ pub(crate) enum StartupUpdate {
         snapshot: Box<WarmStartSnapshot>,
         applied: tokio::sync::oneshot::Sender<()>,
     },
+    /// Saved preferences, including company tabs, before catalog work.
+    Preferences(Box<Settings>),
     Ready(Result<Box<StartupSnapshot>, String>),
     MailMetadata(Result<mail::MailMetadata, String>),
     Calendar {
@@ -628,9 +630,17 @@ pub(crate) async fn load_startup_snapshot(
     oauth_redirects: flectar_mail_core::oauth::redirect::OAuthRedirectBrokerHandle,
     preferred_scope: Scope,
     metrics: &StartupMetrics,
+    preferences: &crate::UiSender<StartupUpdate>,
 ) -> Result<StartupSnapshot, String> {
     let core = CoreMailSource::start(paths, credentials, oauth_redirects).await?;
     metrics.emit("core_opened", serde_json::Value::Null);
+    // Company tabs live in this document, beside the receiving catalog. Paint
+    // them before that catalog is merged so a restart does not wait on it.
+    if let Ok(saved) = core.load_settings().await {
+        let _ = preferences
+            .send(StartupUpdate::Preferences(Box::new(saved)))
+            .await;
+    }
     // The first page shows only the active profile's accounts.
     let mut settings = match core.refresh_inbox_catalog().await {
         Ok(settings) => Some(settings),
@@ -815,6 +825,43 @@ pub(crate) fn refresh_oauth_availability(app: &AppWindow) {
     use flectar_mail_core::{models::Provider, oauth::providers::resolve_credentials};
     app.set_google_oauth_available(resolve_credentials(Provider::Gmail).is_ok());
     app.set_microsoft_oauth_available(resolve_credentials(Provider::Microsoft).is_ok());
+}
+
+/// Show the saved company tabs and the other preferences that do not depend
+/// on the receiving catalog. An empty, uncustomized document leaves tabs that
+/// are already on screen in place.
+pub(crate) fn publish_saved_preferences(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    settings: &Settings,
+) {
+    let incoming_authoritative =
+        settings.business_tabs_customized || !settings.business_tabs.is_empty();
+    let keep_painted = {
+        let mut state = state.borrow_mut();
+        let painted = !state.account_presentation.business_tabs.is_empty();
+        let keep_painted = painted && !incoming_authoritative;
+        if !keep_painted {
+            let presentation = &mut state.account_presentation;
+            presentation.business_tabs = settings.business_tabs.clone();
+            presentation.active_business_tab = settings.active_business_tab.clone();
+            presentation.profiles = settings.mail_profiles.clone();
+            presentation.active_profile = if settings.active_business_tab.is_some() {
+                None
+            } else {
+                settings.active_mail_profile.clone()
+            };
+            presentation.inbox_accounts = settings.inbox_accounts.clone();
+            presentation.show_message_preview = settings.show_message_preview;
+            presentation.show_markers = settings.show_account_badges;
+        }
+        keep_painted
+    };
+    apply_settings(app, settings);
+    if keep_painted {
+        app.set_show_tabs(true);
+    }
+    crate::account_controller::refresh_connected_accounts(app, state);
 }
 
 pub(crate) fn apply_settings(app: &AppWindow, settings: &Settings) {
@@ -1450,5 +1497,79 @@ mod warm_start_tests {
         // Caches written before profiles filtered mail show every account.
         assert_eq!(snapshot.profile_accounts, None);
         assert_eq!(snapshot.grouping, MailGrouping::Conversations);
+    }
+
+    #[test]
+    fn saved_company_tabs_paint_without_a_catalog_warm_start_or_network() {
+        std::thread::Builder::new()
+            .name("saved-company-tabs".into())
+            .spawn(saved_company_tabs_paint_without_a_catalog_warm_start_or_network_body)
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    fn saved_company_tabs_paint_without_a_catalog_warm_start_or_network_body() {
+        let harness = Harness::new();
+        let settings = Settings {
+            show_tabs: true,
+            business_tabs_customized: true,
+            active_business_tab: Some("tab-5".into()),
+            business_tabs: vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "tab-5",
+                    "name": "TM",
+                    "profileIds": ["tm"]
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "id": "media",
+                    "name": "Mentink Media",
+                    "profileIds": ["media"]
+                }))
+                .unwrap(),
+            ],
+            mail_profiles: vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "media",
+                    "name": "Mentink Media",
+                    "color": "#111111"
+                }))
+                .unwrap(),
+            ],
+            ..Settings::default()
+        };
+        publish_saved_preferences(&harness.app, &harness.state, &settings);
+        let tabs = harness.app.get_business_tabs();
+        assert_eq!(tabs.row_count(), 2);
+        assert_eq!(tabs.row_data(0).unwrap().name.as_str(), "TM");
+        assert_eq!(tabs.row_data(1).unwrap().name.as_str(), "Mentink Media");
+        assert!(tabs.row_data(0).unwrap().active);
+        assert!(harness.app.get_show_tabs());
+        let _ = harness.render("saved-company-tabs");
+        assert!(
+            harness
+                .app
+                .global::<crate::WindowChrome>()
+                .get_top_bar()
+        );
+
+        let empty = Settings {
+            mirror_updated_at: 99,
+            show_tabs: false,
+            ..Settings::default()
+        };
+        publish_saved_preferences(&harness.app, &harness.state, &empty);
+        let tabs = harness.app.get_business_tabs();
+        assert_eq!(tabs.row_count(), 2);
+        assert_eq!(tabs.row_data(0).unwrap().name.as_str(), "TM");
+        assert_eq!(tabs.row_data(1).unwrap().name.as_str(), "Mentink Media");
+        assert!(harness.app.get_show_tabs());
+        assert!(
+            harness
+                .app
+                .global::<crate::WindowChrome>()
+                .get_top_bar()
+        );
     }
 }

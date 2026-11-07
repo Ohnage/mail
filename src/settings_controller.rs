@@ -1252,19 +1252,41 @@ pub(super) fn register_settings_preference_callbacks(
         let Some(core) = state_for_tab.borrow().core.clone() else {
             return;
         };
-        let tab_id = (!tab_id.trim().is_empty()).then(|| tab_id.to_string());
-        match runtime_for_tab.block_on(core.set_active_business_tab(tab_id)) {
-            Ok(settings) => apply_account_presentation_settings(
-                &app,
-                &state_for_tab,
-                &runtime_for_tab,
-                &settings,
-            ),
-            Err(error) => app.set_sync_status(UiMessage::detail(
+        let requested = (!tab_id.trim().is_empty()).then(|| tab_id.to_string());
+        let known = {
+            let state = state_for_tab.borrow();
+            match &requested {
+                Some(id) => state
+                    .account_presentation
+                    .business_tabs
+                    .iter()
+                    .any(|tab| tab.id == *id),
+                None => true,
+            }
+        };
+        if !known {
+            app.set_sync_status(UiMessage::detail(
                 "Could not open that business tab: {}",
-                error,
-            )),
+                format!("business tab {}", requested.unwrap_or_default()),
+            ));
+            return;
         }
+        // The open tab is already in memory. Paint it and read the local page
+        // for that company without rewriting the receiving catalog on this thread.
+        {
+            let mut state = state_for_tab.borrow_mut();
+            state.account_presentation.active_business_tab = requested.clone();
+            if requested.is_some() {
+                state.account_presentation.active_profile = None;
+            }
+        }
+        refresh_connected_accounts(&app, &state_for_tab);
+        app.invoke_mail_profile_changed();
+        runtime_for_tab.spawn(async move {
+            if let Err(error) = core.set_active_business_tab(requested).await {
+                tracing::warn!(%error, "could not save the open business tab");
+            }
+        });
     });
 
     let app_weak = app.as_weak();

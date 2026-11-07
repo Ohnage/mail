@@ -1220,8 +1220,11 @@ export component AppWindow inherits Window {
     // window controls; the system frame drops it and the mail sidebar takes
     // the profile switcher.
     private property <bool> tabs-on: root.show_tabs && root.has-mail;
-    private property <bool> top-bar: !root.compact-layout && root.has-mail
-        && (root.tabs-on || WindowChrome.controls-visible);
+    // Saved company tabs are local preferences. Show them before accounts or
+    // the network are available; the loading shell stays until then otherwise.
+    private property <bool> saved-tabs: root.show_tabs && root.business_tabs.length > 0;
+    private property <bool> top-bar: !root.compact-layout && (root.has-mail || root.saved-tabs)
+        && (root.show_tabs || WindowChrome.controls-visible);
     changed tabs-on => { root.sync-window-chrome(); }
     // A tone apart from the workspace, so the active tab can open into it.
     private property <color> tab-strip-bg: AppTheme.sidebar-tint.mix(AppTheme.title, 0.94);
@@ -1475,7 +1478,7 @@ export component AppWindow inherits Window {
 
     // Account discovery is asynchronous. Paint a small initial view while
     // neither the cached mailbox nor the onboarding decision is available.
-    if !root.startup_ready && !root.startup_failed && !root.has-mail : Rectangle {
+    if !root.startup_ready && !root.startup_failed && !root.has-mail && !root.saved-tabs : Rectangle {
         x: root.content-x;
         y: root.content-y;
         width: root.content-width;

@@ -830,14 +830,24 @@ impl Core {
         }
 
         // Make saved OAuth app registrations available before any actor
-        // needs a token refresh. A newer mirror file from another computer
-        // replaces these preferences first and keeps secrets stored here.
+        // needs a token refresh. A newer mirror file overlays its keys and
+        // keeps secrets stored here. A file that still has the customized
+        // company tabs restores them when the database copy lost that list.
         let mut settings = core.db.read(|conn| repo::settings::get(conn)).await?;
-        if let Some(merged) = settings_mirror::merged_if_newer(&core.paths.db_file(), &settings) {
+        let db_file = core.paths.db_file();
+        if let Some(merged) = settings_mirror::merged_if_newer(&db_file, &settings) {
             core.settings_mirror_applied
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             core.db
                 .write(move |conn| repo::settings::set(conn, &merged))
+                .await?;
+            settings = core.db.read(|conn| repo::settings::get(conn)).await?;
+        }
+        if let Some(restored) = settings_mirror::restore_dropped_customizations(&db_file, &settings)
+        {
+            tracing::warn!("restored company tabs from the settings mirror");
+            core.db
+                .write(move |conn| repo::settings::set(conn, &restored))
                 .await?;
             settings = core.db.read(|conn| repo::settings::get(conn)).await?;
         }

@@ -133,6 +133,7 @@ use startup::{
     PendingCoreUpdates, StartupCalendarSnapshot, StartupSnapshot, StartupUpdate,
     WarmStartCacheWriter, WarmStartCursor, WarmStartProjection, WarmStartSnapshot, apply_settings,
     apply_warm_start_snapshot, load_startup_calendar_snapshot, load_startup_mail_metadata,
+    publish_saved_preferences,
     load_startup_snapshot, load_warm_start_snapshot, spawn_core_event_listener,
 };
 use startup_metrics::StartupMetrics;
@@ -2432,6 +2433,7 @@ fn spawn_startup_load(
             oauth_redirects,
             preferred_scope,
             &metrics,
+            &startup_tx,
         )
         .await;
         metrics.emit(
@@ -5459,8 +5461,17 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     startup_metrics_for_ui
                         .schedule_rendered_frame(app.as_weak(), "warm_cache_frame");
                     Timer::single_shot(Duration::from_millis(16), move || {
-                        let _ = applied.send(());
-                    });
+                    let _ = applied.send(());
+                });
+                }
+                StartupUpdate::Preferences(settings) => {
+                    publish_saved_preferences(&app, &startup_state, &settings);
+                    startup_metrics_for_ui.emit_once(
+                        "saved_preferences_applied",
+                        serde_json::json!({
+                            "tabs": app.get_business_tabs().row_count(),
+                        }),
+                    );
                 }
                 StartupUpdate::Ready(result) => {
                     let snapshot = match result {
@@ -5509,8 +5520,17 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         // The first page already shows the saved profile's
                         // accounts; the scope and sidebar follow them too.
                         if let Some(settings) = settings.as_ref() {
+                            let incoming_authoritative = settings.business_tabs_customized
+                                || !settings.business_tabs.is_empty();
+                            let painted = state.account_presentation.business_tabs.clone();
+                            let painted_active =
+                                state.account_presentation.active_business_tab.clone();
                             state.account_presentation =
                                 AccountPresentationSettings::from_settings(settings);
+                            if !incoming_authoritative && !painted.is_empty() {
+                                state.account_presentation.business_tabs = painted;
+                                state.account_presentation.active_business_tab = painted_active;
+                            }
                             let data_dir = state.core.as_ref().unwrap().data_dir();
                             state.account_presentation.load_logos(&data_dir);
                         }
@@ -5587,6 +5607,16 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
                     if let Some(settings) = settings.as_ref() {
                         apply_settings(&app, settings);
+                        if !settings.business_tabs_customized
+                            && settings.business_tabs.is_empty()
+                            && !startup_state
+                                .borrow()
+                                .account_presentation
+                                .business_tabs
+                                .is_empty()
+                        {
+                            app.set_show_tabs(true);
+                        }
                         #[cfg(any(mobile, feature = "flatpak"))]
                         app.set_close_to_tray(false);
                         if let Some(tray) =

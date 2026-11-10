@@ -43,46 +43,68 @@ impl AccountPresentationSettings {
     }
 
     pub(super) fn inbox_members(&self, account: &InboxAccount) -> Vec<i64> {
+        // The saved id list is authoritative. Scanning every address view to
+        // re-derive it is O(views × ids) and hangs sidebar rebuilds when one
+        // named account covers tens of thousands of addresses.
+        if !account.address_view_ids.is_empty() {
+            return account.address_view_ids.clone();
+        }
+        let Some(profile) = account.automatic_profile.as_ref() else {
+            return Vec::new();
+        };
         self.address_views
             .iter()
-            .filter(|view| {
-                account.address_view_ids.contains(&view.id)
-                    || account
-                        .automatic_profile
-                        .as_ref()
-                        .is_some_and(|id| view.profile_id.as_ref() == Some(id))
-            })
+            .filter(|view| view.profile_id.as_ref() == Some(profile))
             .map(|view| view.id)
             .collect()
     }
 
+    pub(super) fn inbox_member_count(&self, account: &InboxAccount) -> usize {
+        if !account.address_view_ids.is_empty() {
+            return account.address_view_ids.len();
+        }
+        self.inbox_members(account).len()
+    }
+
     pub(super) fn inbox_scope(&self, account: &InboxAccount) -> MailScope {
-        let ids = self
-            .inbox_members(account)
-            .into_iter()
-            .collect::<HashSet<_>>();
-        MailScope {
-            match_any: true,
-            or_account_ids: flectar_mail_core::inbox_accounts::mailbox_ids(
-                account,
-                &self.profiles,
-            ),
-            address_inboxes: self
-                .address_views
+        const ALIAS_INBOX_CEILING: usize = 512;
+        let mailbox_ids =
+            flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles);
+        let member_ids = self.inbox_members(account);
+        let prefer_group = member_ids.len() > ALIAS_INBOX_CEILING
+            && !self.address_rules.is_empty()
+            && account
+                .automatic_profile
+                .as_ref()
+                .or(account.profile_id.as_ref())
+                .is_some();
+        let address_inboxes = if prefer_group {
+            Vec::new()
+        } else {
+            let ids = member_ids.into_iter().collect::<HashSet<_>>();
+            self.address_views
                 .iter()
                 .filter(|view| ids.contains(&view.id))
                 .map(|view| self.address_filter(view))
-                .collect(),
-            address_groups: account
-                .automatic_profile
-                .as_ref()
-                .map(|id| {
-                    vec![AddressGroupScope {
-                        profile_ids: vec![id.clone()],
-                        rules: self.address_rules.clone(),
-                    }]
-                })
-                .unwrap_or_default(),
+                .collect()
+        };
+        let address_groups = account
+            .automatic_profile
+            .as_ref()
+            .or(account.profile_id.as_ref())
+            .filter(|_| prefer_group || account.automatic_profile.is_some())
+            .map(|id| {
+                vec![AddressGroupScope {
+                    profile_ids: vec![id.clone()],
+                    rules: self.address_rules.clone(),
+                }]
+            })
+            .unwrap_or_default();
+        MailScope {
+            match_any: true,
+            or_account_ids: mailbox_ids,
+            address_inboxes,
+            address_groups,
             ..Default::default()
         }
     }
@@ -140,7 +162,7 @@ impl AccountPresentationSettings {
             detail: format!(
                 "{} mailboxes · {} addresses",
                 flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles).len(),
-                self.inbox_members(account).len()
+                self.inbox_member_count(account)
             )
             .into(),
             initials: avatar_initials(&account.name).into(),
@@ -309,6 +331,76 @@ mod tests {
         assert_ne!(
             company,
             accounts.iter().map(|account| account.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn company_tab_switch_stays_cheap_with_tens_of_thousands_of_address_views() {
+        let mut p = presentation();
+        p.business_tabs = serde_json::from_value(serde_json::json!([
+            {"id":"tab-5","name":"TM","accountIds":[7]},
+            {"id":"pixelated-cities","name":"Pixelated Cities","profileIds":["pixelated-cities"],"accountIds":[8]}
+        ]))
+        .unwrap();
+        p.profiles = vec![flectar_mail_core::models::MailProfile {
+            id: "pixelated-cities".into(),
+            name: "Pixelated Cities".into(),
+            color: "#112233".into(),
+            account_ids: vec![8],
+            logo: None,
+        }];
+        p.address_rules = vec![flectar_mail_core::models::AddressRule {
+            profile_id: "pixelated-cities".into(),
+            addresses: Vec::new(),
+            domains: vec!["pixelated.cities".into()],
+        }];
+        p.address_views = (0..20_000)
+            .map(|index| flectar_mail_core::models::AddressView {
+                id: i64::from(index + 1),
+                address: format!("city{index}@pixelated.cities"),
+                source_account_emails: vec!["hub@pixelated.cities".into()],
+                profile_id: Some("pixelated-cities".into()),
+                source: Default::default(),
+            })
+            .collect();
+        p.connected_account_emails
+            .insert("hub@pixelated.cities".into(), 8);
+        p.active_business_tab = Some("pixelated-cities".into());
+        let started = std::time::Instant::now();
+        let (sidebar, _, scope) = p.view_scope();
+        let elapsed = started.elapsed();
+        assert_eq!(sidebar, Some(vec![8]));
+        assert!(
+            scope.address_inboxes.len() <= 512,
+            "tab switch must not explode address_inboxes ({})",
+            scope.address_inboxes.len()
+        );
+        assert!(
+            !scope.address_groups.is_empty() || scope.or_account_ids == vec![8],
+            "large catalogs fall back to mailbox/group scope"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "view_scope took {elapsed:?} with {} address views",
+            p.address_views.len()
+        );
+        let account = InboxAccount {
+            id: -9,
+            name: "Pixelated Cities".into(),
+            icon: None,
+            color: None,
+            account_ids: vec![8],
+            address_view_ids: (1..=20_000).collect(),
+            automatic_profile: Some("pixelated-cities".into()),
+            profile_id: Some("pixelated-cities".into()),
+        };
+        let started = std::time::Instant::now();
+        let detail = p.inbox_choice(&account).detail.to_string();
+        let elapsed = started.elapsed();
+        assert!(detail.contains("20000 addresses"));
+        assert!(
+            elapsed < std::time::Duration::from_millis(50),
+            "inbox_choice took {elapsed:?}"
         );
     }
 }

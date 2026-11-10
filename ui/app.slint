@@ -857,6 +857,10 @@ export component AppWindow inherits Window {
     callback suspend-rendering(bool);
     in property <bool> startup_ready: false;
     in property <bool> startup_failed: false;
+    // Local-readiness stages only (tabs → accounts/folders → mail). Never a
+    // server-sync gate; progress stays honest and may stall until Ready.
+    in property <string> startup_stage: "Opening local storage…";
+    in property <float> startup_progress: 0.08;
     in property <LocalizedMessage> startup-message;
     property <string> startup_error: I18n.ui-message(root.startup-message.key, root.startup-message.argument, root.startup-message.second_argument, root.startup-message.third_argument);
     in property <string> startup_diagnostic_id: "";
@@ -1476,23 +1480,25 @@ export component AppWindow inherits Window {
         height: WindowChrome.band-height;
     }
 
-    // Account discovery is asynchronous. Paint a small initial view while
-    // neither the cached mailbox nor the onboarding decision is available.
-    if !root.startup_ready && !root.startup_failed && !root.has-mail && !root.saved-tabs : Rectangle {
+    // Local-readiness loader: stages for tabs, accounts/folders, and the first
+    // local mail page. It never waits on server sync and does not invent
+    // progress past the last real milestone.
+    if !root.startup_ready && !root.startup_failed : Rectangle {
         x: root.content-x;
         y: root.content-y;
         width: root.content-width;
         height: root.content-height;
         background: root.page-bg;
+        z: 15000;
         accessible-role: groupbox;
         accessible-label: I18n.loading-local-data();
 
         VerticalLayout {
-            width: max(240px, self.preferred-width).min(parent.width - 32px);
-            height: 92px;
+            width: max(280px, self.preferred-width).min(parent.width - 32px);
+            height: self.preferred-height;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
-            spacing: 12px;
+            spacing: 14px;
             Text {
                 text: "Flectar Mail";
                 color: root.title-color;
@@ -1501,10 +1507,31 @@ export component AppWindow inherits Window {
                 horizontal-alignment: center;
             }
             Text {
-                text: I18n.loading-local-data();
-                color: root.muted-text;
+                text: root.startup_stage;
+                color: root.body-text;
                 font-size: TypeScale.body;
                 horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            Text {
+                text: I18n.loading-local-data();
+                color: root.muted-text;
+                font-size: TypeScale.secondary;
+                horizontal-alignment: center;
+            }
+            Rectangle {
+                height: 6px;
+                border-radius: 3px;
+                background: root.border;
+                Rectangle {
+                    x: 0px;
+                    y: 0px;
+                    height: parent.height;
+                    width: max(8px, parent.width * root.startup_progress);
+                    border-radius: 3px;
+                    background: root.accent;
+                    animate width { duration: 280ms; easing: ease-out; }
+                }
             }
             LoadingSkeletonBlock {
                 height: 4px;

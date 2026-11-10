@@ -449,7 +449,15 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             ) && row.mailbox.account_id <= 0
         });
     }
-    let rows = place_named_account_rows(business_tab, rows, address_rows);
+    let accounts_open = filtering
+        || !state
+            .collapsed_sidebar_sections
+            .contains(if business_tab {
+                "mailboxes"
+            } else {
+                "accounts-heading"
+            });
+    let rows = place_named_account_rows(rows, if accounts_open { address_rows } else { Vec::new() });
     // Model notifications can synchronously inspect application state.
     let model = Rc::clone(&state.sidebar_rows);
     let animation = Rc::clone(&state.sidebar_animation);
@@ -457,23 +465,23 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
     animation.reconcile(&model, rows, animate);
 }
 
-/// On a business tab the named accounts sit directly under Company Inbox.
-/// Elsewhere they stay at the top of the sidebar.
+/// Named accounts belong under the collapsible Accounts section (below Folders
+/// on a company tab, or the ACCOUNTS heading on All accounts) — not above the
+/// folder tree.
 fn place_named_account_rows(
-    business_tab: bool,
-    mut rows: Vec<SidebarRow>,
+    rows: Vec<SidebarRow>,
     mut address_rows: Vec<SidebarRow>,
 ) -> Vec<SidebarRow> {
-    if !business_tab {
-        address_rows.append(&mut rows);
-        return address_rows;
+    if address_rows.is_empty() {
+        return rows;
     }
     let mut merged = Vec::with_capacity(rows.len() + address_rows.len());
     let mut placed = false;
     for row in rows {
-        let inbox = row.kind == SidebarRowKind::UnifiedInbox && row.key.as_str() == "company-inbox";
+        let accounts = row.kind == SidebarRowKind::AccountsHeading
+            && matches!(row.key.as_str(), "mailboxes" | "accounts-heading");
         merged.push(row);
-        if inbox {
+        if accounts {
             merged.append(&mut address_rows);
             placed = true;
         }
@@ -733,8 +741,14 @@ fn make_sidebar_rows(
         SidebarLayout::Unified => {
             let mut rows = unified_rows(unified);
             rows.extend(shared);
-            rows.push(row(SidebarRowKind::AccountsHeading, "accounts-heading"));
-            rows.extend(accounts);
+            rows.push(section(
+                SidebarRowKind::AccountsHeading,
+                "accounts-heading",
+                collapsed,
+            ));
+            if !collapsed.contains("accounts-heading") {
+                rows.extend(accounts);
+            }
             rows
         }
         // Mail kept on this device comes last, after what the account shares.
@@ -851,7 +865,7 @@ fn pinned_tag_rows(
 }
 
 /// Company layout: one inbox, tab-wide special mailboxes, one folder tree,
-/// one tag list, then the per-account rows under a collapsed Mailboxes section.
+/// one tag list, then the per-account rows under a collapsed Accounts section.
 #[allow(clippy::too_many_arguments)]
 fn make_company_sidebar_rows(
     mailboxes: Vec<MailboxRow>,
@@ -1730,14 +1744,16 @@ mod tests {
     }
 
     #[test]
-    fn named_accounts_follow_company_inbox_on_a_business_tab() {
+    fn named_accounts_sit_under_the_accounts_section() {
         let company = vec![
             row(Kind::UnifiedHeading, "company-heading"),
             row(Kind::UnifiedInbox, "company-inbox"),
             row(Kind::UnifiedMailbox, "unified:Sent"),
+            row(Kind::AccountsHeading, "company-folders"),
+            row(Kind::AccountsHeading, "mailboxes"),
         ];
         let named = vec![row(Kind::AddressInbox, "inbox-account:-7")];
-        let rows = place_named_account_rows(true, company, named);
+        let rows = place_named_account_rows(company, named);
         assert_eq!(
             rows.iter()
                 .map(|row| row.key.to_string())
@@ -1745,16 +1761,30 @@ mod tests {
             vec![
                 "company-heading",
                 "company-inbox",
-                "inbox-account:-7",
                 "unified:Sent",
+                "company-folders",
+                "mailboxes",
+                "inbox-account:-7",
             ]
         );
         let plain = place_named_account_rows(
-            false,
-            vec![row(Kind::Account, "account:1")],
+            vec![
+                row(Kind::AccountsHeading, "accounts-heading"),
+                row(Kind::Account, "account:1"),
+            ],
             vec![row(Kind::AddressInbox, "inbox-account:-7")],
         );
-        assert_eq!(plain[0].key.as_str(), "inbox-account:-7");
+        assert_eq!(
+            plain
+                .iter()
+                .map(|row| row.key.to_string())
+                .collect::<Vec<_>>(),
+            vec![
+                "accounts-heading",
+                "inbox-account:-7",
+                "account:1",
+            ]
+        );
     }
 
     #[test]

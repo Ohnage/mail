@@ -262,11 +262,18 @@ pub fn shared_tab_scope(
     }
     catalog.sort_unstable();
     catalog.dedup();
+    let hosted = HostedAddressIndex::build(address_views, profiles);
     let tim_hosts = catalog
         .iter()
         .copied()
         .filter(|id| {
-            hosted_addresses(address_views, profiles, account_emails, &[*id])
+            let email = account_emails
+                .iter()
+                .find(|(account_id, _)| account_id == id)
+                .map(|(_, email)| email.as_str())
+                .unwrap_or("");
+            hosted
+                .for_mailbox(*id, email)
                 .iter()
                 .any(|address| is_tim_address(Some(tim), address))
         })
@@ -297,9 +304,11 @@ pub fn shared_tab_scope(
     if split.is_empty() {
         return None;
     }
-    let tim_addresses = hosted_addresses(address_views, profiles, account_emails, &split)
-        .into_iter()
+    let split_addresses = hosted.for_mailboxes(&split, account_emails);
+    let tim_addresses = split_addresses
+        .iter()
         .filter(|address| is_tim_address(Some(tim), address))
+        .cloned()
         .collect::<Vec<_>>();
     if tim_addresses.is_empty() {
         return None;
@@ -319,10 +328,18 @@ pub fn shared_tab_scope(
             addresses: tim_addresses,
         });
     } else {
-        let keep = hosted_addresses(address_views, profiles, account_emails, &split)
+        let mut keep = split_addresses
             .into_iter()
             .filter(|address| !is_tim_address(Some(tim), address))
             .collect::<Vec<_>>();
+        // ponytail: listing tens of thousands of keep addresses freezes the UI
+        // thread and blows past SQLite bind limits. Omit-only still hides
+        // Tim-named mail; dual-recipient company+Tim rows then stay on TM only
+        // until keep uses a profile-group matcher.
+        const KEEP_ADDRESS_CEILING: usize = 512;
+        if keep.len() > KEEP_ADDRESS_CEILING {
+            keep.clear();
+        }
         scope.remainder_mail = Some(RemainderMail {
             account_ids: split,
             omit_addresses: tim_addresses,
@@ -337,53 +354,83 @@ fn other_tab_has(tabs: &[TabMailboxSet], tim_id: &str, mailbox_id: i64) -> bool 
         .any(|tab| tab.id != tim_id && tab.mailbox_ids.contains(&mailbox_id))
 }
 
-fn hosted_addresses(
-    views: &[AddressView],
-    profiles: &[MailProfile],
-    account_emails: &[(i64, String)],
-    account_ids: &[i64],
-) -> Vec<String> {
-    let mut addresses = Vec::new();
-    for id in account_ids {
-        let email = account_emails
-            .iter()
-            .find(|(account_id, _)| account_id == id)
-            .map(|(_, email)| email.as_str())
-            .unwrap_or("");
-        for view in views {
-            if !view_hosted_by_mailbox(view, *id, email, profiles) {
-                continue;
-            }
-            let address = view.address.trim().to_ascii_lowercase();
-            if address.is_empty() || addresses.iter().any(|kept: &String| kept == &address) {
-                continue;
-            }
-            addresses.push(address);
-        }
-    }
-    addresses.sort();
-    addresses
+/// Index of receiving addresses by mailbox email and by profile.
+///
+/// Built once per tab switch so shared-mailbox splits stay O(views + mailboxes)
+/// instead of scanning every address for every mailbox (and O(n²) linear dedup
+/// when one mailbox hosts tens of thousands of addresses).
+struct HostedAddressIndex<'a> {
+    by_email: BTreeMap<String, Vec<&'a str>>,
+    by_profile: BTreeMap<&'a str, Vec<&'a str>>,
+    profiles: &'a [MailProfile],
 }
 
-fn view_hosted_by_mailbox(
-    view: &AddressView,
-    account_id: i64,
-    account_email: &str,
-    profiles: &[MailProfile],
-) -> bool {
-    if !account_email.is_empty()
-        && view
-            .source_account_emails
-            .iter()
-            .any(|email| email.eq_ignore_ascii_case(account_email))
-    {
-        return true;
+impl<'a> HostedAddressIndex<'a> {
+    fn build(views: &'a [AddressView], profiles: &'a [MailProfile]) -> Self {
+        let mut by_email: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+        let mut by_profile: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        for view in views {
+            let address = view.address.trim();
+            if address.is_empty() {
+                continue;
+            }
+            for email in &view.source_account_emails {
+                let key = email.trim().to_ascii_lowercase();
+                if key.is_empty() {
+                    continue;
+                }
+                by_email.entry(key).or_default().push(address);
+            }
+            if let Some(profile_id) = view.profile_id.as_deref() {
+                by_profile.entry(profile_id).or_default().push(address);
+            }
+        }
+        Self {
+            by_email,
+            by_profile,
+            profiles,
+        }
     }
-    view.profile_id.as_ref().is_some_and(|profile_id| {
-        profiles
-            .iter()
-            .any(|profile| profile.id == *profile_id && profile.account_ids.contains(&account_id))
-    })
+
+    fn for_mailbox(&self, account_id: i64, account_email: &str) -> Vec<String> {
+        let mut addresses = BTreeSet::new();
+        let email = account_email.trim().to_ascii_lowercase();
+        if !email.is_empty()
+            && let Some(hosted) = self.by_email.get(&email)
+        {
+            for address in hosted {
+                addresses.insert(address.to_ascii_lowercase());
+            }
+        }
+        for profile in self.profiles {
+            if !profile.account_ids.contains(&account_id) {
+                continue;
+            }
+            if let Some(hosted) = self.by_profile.get(profile.id.as_str()) {
+                for address in hosted {
+                    addresses.insert(address.to_ascii_lowercase());
+                }
+            }
+        }
+        addresses.into_iter().collect()
+    }
+
+    fn for_mailboxes(
+        &self,
+        account_ids: &[i64],
+        account_emails: &[(i64, String)],
+    ) -> Vec<String> {
+        let mut addresses = BTreeSet::new();
+        for id in account_ids {
+            let email = account_emails
+                .iter()
+                .find(|(account_id, _)| account_id == id)
+                .map(|(_, email)| email.as_str())
+                .unwrap_or("");
+            addresses.extend(self.for_mailbox(*id, email));
+        }
+        addresses.into_iter().collect()
+    }
 }
 
 pub fn sender_account_id(group: &ComposeGroup, email: &str) -> Option<i64> {
@@ -910,6 +957,86 @@ mod tests {
         assert!(
             shared_tab_scope(&tabs, &sets, &[2, 293], "tab-5", &[], &profiles, &emails).is_none(),
             "without a hosted Tim address, shared mail is not hidden"
+        );
+    }
+
+    #[test]
+    fn shared_tab_scope_stays_cheap_with_tens_of_thousands_of_address_views() {
+        let tabs: Vec<BusinessTab> = serde_json::from_value(serde_json::json!([
+            {"id":"tab-5","name":"TM","accountIds":[2,293]},
+            {"id":"pixelated-cities","name":"Pixelated Cities","profileIds":["pixelated-cities"],"accountIds":[99]}
+        ]))
+        .unwrap();
+        let sets = [
+            TabMailboxSet {
+                id: "tab-5".into(),
+                mailbox_ids: vec![2, 293],
+            },
+            TabMailboxSet {
+                id: "pixelated-cities".into(),
+                mailbox_ids: vec![99, 293],
+            },
+        ];
+        let mut views = Vec::with_capacity(20_000);
+        views.push(AddressView {
+            id: 1,
+            address: "tim@mentinkmemorial.org".into(),
+            source_account_emails: vec!["storage@mentinkmemorial.org".into()],
+            profile_id: Some("mentink-memorial".into()),
+            source: Default::default(),
+        });
+        for index in 0..20_000 {
+            views.push(AddressView {
+                id: i64::from(index + 2),
+                address: format!("city{index}@pixelated.cities"),
+                source_account_emails: vec!["hub@pixelated.cities".into()],
+                profile_id: Some("pixelated-cities".into()),
+                source: Default::default(),
+            });
+        }
+        let profiles = vec![
+            MailProfile {
+                id: "mentink-memorial".into(),
+                name: "Mentink Memorial".into(),
+                color: "#000".into(),
+                account_ids: vec![293],
+                logo: None,
+            },
+            MailProfile {
+                id: "pixelated-cities".into(),
+                name: "Pixelated Cities".into(),
+                color: "#000".into(),
+                account_ids: vec![99],
+                logo: None,
+            },
+        ];
+        let emails = [
+            (293_i64, "storage@mentinkmemorial.org".into()),
+            (99_i64, "hub@pixelated.cities".into()),
+            (2_i64, "tim@example.test".into()),
+        ];
+        let started = std::time::Instant::now();
+        let media = shared_tab_scope(
+            &tabs,
+            &sets,
+            &[2, 293],
+            "pixelated-cities",
+            &views,
+            &profiles,
+            &emails,
+        )
+        .expect("shared memorial storage still splits");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "tab-switch shared scope took {elapsed:?} with {} address views",
+            views.len()
+        );
+        let remainder = media.remainder_mail.expect("company remainder");
+        assert_eq!(remainder.omit_addresses, vec!["tim@mentinkmemorial.org"]);
+        assert!(
+            remainder.keep_addresses.len() <= 512,
+            "keep list must not explode to tens of thousands of binds"
         );
     }
 

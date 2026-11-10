@@ -779,6 +779,15 @@ fn from_in(
     binds: &mut Vec<String>,
     first_bind: usize,
 ) -> String {
+    // A giant IN (...) list blocks the UI thread while SQLite prepares the
+    // statement. json_each keeps one bind regardless of catalog size.
+    if addresses.len() > 64 {
+        let index = first_bind + binds.len();
+        binds.push(serde_json::to_string(addresses).expect("from addresses serialize"));
+        return format!(
+            "EXISTS (SELECT 1 FROM json_each(?{index}) WHERE value = LOWER(COALESCE({alias}.from_addr, '')))"
+        );
+    }
     let mut placeholders = Vec::new();
     for address in addresses {
         let index = first_bind + binds.len();

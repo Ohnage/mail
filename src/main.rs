@@ -736,15 +736,24 @@ impl AccountPresentationSettings {
                 MailScope::default(),
             ),
         };
-        let aliases = self
-            .visible_address_views()
-            .into_iter()
-            .map(|view| self.address_filter(view))
-            .collect::<Vec<_>>();
+        // Exploding tens of thousands of profile aliases into address_inboxes
+        // freezes the UI thread on every company-tab switch. Prefer the tab's
+        // mailboxes / address groups, and only list explicit or small sets.
+        const ALIAS_INBOX_CEILING: usize = 512;
+        let visible = self.visible_address_views();
         let automatic_addresses = tab.account_ids.is_none()
             && (!self.address_views.is_empty() || !self.address_rules.is_empty())
             && matches!(tab.resolved_scope(), "profiles" | "accounts");
-        if aliases.is_empty() && !automatic_addresses {
+        let list_aliases = tab.address_view_ids.is_some() || visible.len() <= ALIAS_INBOX_CEILING;
+        let aliases = if list_aliases {
+            visible
+                .into_iter()
+                .map(|view| self.address_filter(view))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        if aliases.is_empty() && !automatic_addresses && list_aliases {
             let (sidebar, query, scope) = result;
             return (sidebar, query, self.finish_shared_scope(scope));
         }
@@ -762,7 +771,11 @@ impl AccountPresentationSettings {
             _ => {}
         }
         scope.address_inboxes = aliases;
-        if automatic_addresses && tab.address_view_ids.is_none() && !self.address_rules.is_empty() {
+        if (automatic_addresses || !list_aliases)
+            && tab.address_view_ids.is_none()
+            && !self.address_rules.is_empty()
+            && !tab.profile_ids.is_empty()
+        {
             scope.address_groups = vec![flectar_mail_core::recipient_match::AddressGroupScope {
                 profile_ids: tab.profile_ids.clone(),
                 rules: self.address_rules.clone(),
@@ -5449,6 +5462,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 StartupUpdate::Warm { snapshot, applied } => {
                     let snapshot = *snapshot;
                     let saved_at_ms = snapshot.saved_at_ms;
+                    app.set_startup_stage("Loading accounts and folders…".into());
+                    app.set_startup_progress(0.45);
                     apply_warm_start_snapshot(&app, &startup_state, &startup_runtime, snapshot);
                     startup_metrics_for_ui.emit_once(
                         "warm_cache_applied",
@@ -5465,6 +5480,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 });
                 }
                 StartupUpdate::Preferences(settings) => {
+                    app.set_startup_stage("Loading saved tabs…".into());
+                    app.set_startup_progress(0.25);
                     publish_saved_preferences(&app, &startup_state, &settings);
                     startup_metrics_for_ui.emit_once(
                         "saved_preferences_applied",
@@ -5629,9 +5646,13 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         startup_state.borrow().remote_images_enabled,
                     );
 
+                    app.set_startup_stage("Loading local mail…".into());
+                    app.set_startup_progress(0.85);
                     apply_local_mail(&app, &startup_state, local_mail);
                     refresh_rows_only(&app, &startup_state, &startup_runtime);
                     refresh_list_metadata(&app, &startup_state);
+                    app.set_startup_stage("Local data ready".into());
+                    app.set_startup_progress(1.0);
                     app.set_startup_hydrated(true);
                     app.set_startup_ready(true);
                     app.invoke_product_changed(app.get_active_view());
@@ -5874,10 +5895,13 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
     let retry_tx = startup_tx.clone();
     let retry_app = app.as_weak();
     let retry_metrics = startup_metrics.clone();
+    // Local readiness only: retry reopens storage. It must not wait on sync.
     app.on_retry_startup(move || {
         if let Some(app) = retry_app.upgrade() {
             app.set_startup_ready(false);
             app.set_startup_failed(false);
+            app.set_startup_stage("Opening local storage…".into());
+            app.set_startup_progress(0.08);
             app.set_sync_status(UiMessage::plain("Loading local data…"));
         }
         spawn_startup_load(

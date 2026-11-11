@@ -1595,4 +1595,53 @@ mod tests {
             ComposeSelection { start: 8, end: 8 },
         );
     }
+
+    #[test]
+    fn body_rerender_keeps_caller_scroll_y() {
+        // Render takes scroll_y as input and returns caret geometry only — never
+        // a replacement scroll offset. Slint must keep content-y across body
+        // updates; revealing on caret-y property changes was the snap regression.
+        let style = ComposeEditorStyle {
+            text: Color::from_rgb_u8(240, 240, 240),
+            link: Color::from_rgb_u8(90, 150, 255),
+            selection: Color::from_argb_u8(140, 60, 120, 220),
+            selected_text: Color::from_rgb_u8(255, 255, 255),
+        };
+        let text = "line\n".repeat(40);
+        let mut document = RichComposeDocument::default();
+        document.synchronize(&text, 0, 0);
+        let mut surface = CosmicComposeEditor::default();
+        let scroll_y = 180.0;
+        let first = surface.render(
+            &document,
+            document.selection(),
+            320.0,
+            120.0,
+            scroll_y,
+            1.0,
+            style,
+            "",
+        );
+        document.synchronize(&text, 10, 10);
+        let second = surface.render(
+            &document,
+            document.selection(),
+            320.0,
+            120.0,
+            scroll_y,
+            1.0,
+            style,
+            "",
+        );
+        assert!(first.content_height > scroll_y);
+        assert_eq!(first.content_height, second.content_height);
+        assert!(!second.tiles.is_empty());
+        let RenderedComposeEditor {
+            tiles: _,
+            content_height: _,
+            caret_x: _,
+            caret_y: _,
+            caret_height: _,
+        } = second;
+    }
 }

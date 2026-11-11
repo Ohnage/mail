@@ -99,22 +99,21 @@ export component EmailComposer inherits Rectangle {
     private property <bool> can-send: !root.sending && root.selected-account-id > 0 && root.to != "" && root.body != "" && AccountMailPreferences.composer-preferences-ready;
 
     function apply-format(kind: string) {
+        // Toolbar clicks steal focus and collapse TextInput offsets. Prefer the
+        // last document selection the host already mirrored into these props.
+        let start = root.selection-start;
+        let end = root.selection-end;
         if (kind == "link") {
-            if (body-input.anchor-position-byte-offset == body-input.cursor-position_byte_offset) {
+            if (start == end) {
                 return;
             }
-            root.link-selection-start = body-input.anchor-position-byte-offset;
-            root.link-selection-end = body-input.cursor-position_byte_offset;
+            root.link-selection-start = start;
+            root.link-selection-end = end;
             root.link-url = root.active-link-url;
             root.link-editor-open = true;
             return;
         }
-        root.format-requested(
-            kind,
-            root.body,
-            body-input.anchor-position-byte-offset,
-            body-input.cursor-position_byte-offset,
-        );
+        root.format-requested(kind, root.body, start, end);
         body-input.set-selection-offsets(root.selection-start, root.selection-end);
         body-input.focus();
     }
@@ -179,8 +178,8 @@ export component EmailComposer inherits Rectangle {
     }
     changed body-color => { root.editor-layout-changed(); }
     changed accent-color => { root.editor-layout-changed(); }
-    changed editor-caret-y => { root.reveal-editor-caret(); }
-    changed editor-caret-height => { root.reveal-editor-caret(); }
+    // Do not reveal on Rust caret property updates: scroll-driven tile layout
+    // rewrites caret-y and that loop snaps the viewport back to the caret.
 
     editor-scroll-layout-timer := Timer {
         interval: 1ms;

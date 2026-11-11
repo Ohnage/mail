@@ -474,7 +474,15 @@ impl RichComposeDocument {
 
         let mut html = String::with_capacity(self.text.len());
         let mut open_list: Option<BlockKind> = None;
+        let mut plain_open = false;
         let mut line_start = 0;
+
+        let close_plain = |html: &mut String, plain_open: &mut bool| {
+            if *plain_open {
+                html.push_str("</div>");
+                *plain_open = false;
+            }
+        };
 
         for line in self.text.split('\n') {
             let prefix = block_prefix_text(line);
@@ -486,12 +494,14 @@ impl RichComposeDocument {
             let content = line_start + skip..line_start + line.len();
             match block {
                 Some(kind @ (BlockKind::Bullet | BlockKind::Number)) => {
+                    close_plain(&mut html, &mut plain_open);
                     ensure_list(&mut html, &mut open_list, kind);
                     html.push_str("<li>");
                     append_inline_html(&mut html, &self.text, &self.styles, content);
                     html.push_str("</li>");
                 }
                 Some(BlockKind::Quote) => {
+                    close_plain(&mut html, &mut plain_open);
                     html.push_str("<blockquote>");
                     if content.is_empty() {
                         html.push_str("<br>");
@@ -501,17 +511,22 @@ impl RichComposeDocument {
                     html.push_str("</blockquote>");
                 }
                 None => {
-                    html.push_str("<div>");
-                    if content.is_empty() {
+                    // One <div> with <br> separators — a div-per-line plus
+                    // <br> for blanks decoded as three newlines in readers.
+                    if plain_open {
                         html.push_str("<br>");
                     } else {
+                        html.push_str("<div>");
+                        plain_open = true;
+                    }
+                    if !content.is_empty() {
                         append_inline_html(&mut html, &self.text, &self.styles, content);
                     }
-                    html.push_str("</div>");
                 }
             }
             line_start += line.len() + 1;
         }
+        close_plain(&mut html, &mut plain_open);
         close_list(&mut html, &mut open_list);
         Some(html)
     }
@@ -1385,6 +1400,21 @@ mod tests {
     }
 
     #[test]
+    fn blank_line_html_does_not_triple_newlines_when_decoded() {
+        let mut document = RichComposeDocument::default();
+        document.synchronize("Para one\n\nPara two", 0, 0);
+        let html = document.body_html().unwrap();
+        assert_eq!(html, "<div>Para one<br><br>Para two</div>");
+        // Readers that map <br> to \\n must not invent a third blank line.
+        let decoded = html
+            .replace("<div>", "")
+            .replace("</div>", "")
+            .replace("<br>", "\n");
+        assert_eq!(decoded, "Para one\n\nPara two");
+        assert!(!decoded.contains("\n\n\n"));
+    }
+
+    #[test]
     fn html_export_preserves_all_marks_and_escaped_unicode() {
         let text = "<&\"'é👩‍🚀>";
         let mut document = RichComposeDocument::default();
@@ -1833,7 +1863,7 @@ mod tests {
         document.history("undo").unwrap();
         assert_eq!(
             document.body_html().as_deref(),
-            Some("<div>One</div><div>Two</div>")
+            Some("<div>One<br>Two</div>")
         );
         document.history("redo").unwrap();
         assert_eq!(
@@ -2072,11 +2102,11 @@ mod tests {
         let mut document = RichComposeDocument::default();
         let initial = "אבג e\u{301} 👩‍🚀\nمرحبا";
         let appended = format!("{initial}!");
-        let plain_html = "<div>אבג e\u{301} 👩‍🚀</div><div>مرحبا</div>";
-        let bold_html = "<div><strong>אבג</strong> e\u{301} 👩‍🚀</div><div>مرحبا</div>";
-        let link_html = "<div><strong>אבג</strong> e\u{301} <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a></div><div>مرحبا</div>";
-        let italic_html = "<div><strong>אבג</strong> <em>e\u{301}</em> <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a></div><div>مرحبا</div>";
-        let appended_html = "<div><strong>אבג</strong> <em>e\u{301}</em> <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a></div><div>مرحبا!</div>";
+        let plain_html = "<div>אבג e\u{301} 👩‍🚀<br>مرحبا</div>";
+        let bold_html = "<div><strong>אבג</strong> e\u{301} 👩‍🚀<br>مرحبا</div>";
+        let link_html = "<div><strong>אבג</strong> e\u{301} <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a><br>مرحبا</div>";
+        let italic_html = "<div><strong>אבג</strong> <em>e\u{301}</em> <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a><br>مرحبا</div>";
+        let appended_html = "<div><strong>אבג</strong> <em>e\u{301}</em> <a href=\"https://example.org/a?b=1&amp;c=2\">👩‍🚀</a><br>مرحبا!</div>";
         let href = "https://example.org/a?b=1&c=2";
         let plain_runs = [(0..33, 0, None)];
         let bold_runs = [(0..6, BOLD, None), (6..33, 0, None)];
@@ -2154,7 +2184,7 @@ mod tests {
         let continued = "• שלום\n• مرحبا\n• Cafe\u{301}\n• ";
         let numbered = "1. שלום\n2. مرحبا\n3. Cafe\u{301}\n4. ";
         let quoted = "│ שלום\n│ مرحبا\n│ Cafe\u{301}\n│ ";
-        let plain_html = "<div>שלום</div><div>مرحبا</div><div>Cafe\u{301}</div>";
+        let plain_html = "<div>שלום<br>مرحبا<br>Cafe\u{301}</div>";
         let bullet_html = "<ul><li>שלום</li><li>مرحبا</li><li>Cafe\u{301}</li></ul>";
         let continued_html = "<ul><li>שלום</li><li>مرحبا</li><li>Cafe\u{301}</li><li></li></ul>";
         let numbered_html = "<ol><li>שלום</li><li>مرحبا</li><li>Cafe\u{301}</li><li></li></ol>";

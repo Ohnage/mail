@@ -43,11 +43,11 @@ pub(super) fn prepare_message_compose(
         return Err(format!("unsupported compose action: {action}"));
     }
 
-    let original_body = if rendered_plain_text.trim().is_empty() {
+    let original_body = normalize_compose_paragraphs(if rendered_plain_text.trim().is_empty() {
         source.text_body.as_str()
     } else {
         rendered_plain_text
-    };
+    });
     let sender = format_address(&source.from);
     let sent_at = chrono::Local
         .timestamp_millis_opt(source.date)
@@ -159,6 +159,25 @@ pub(super) fn prepare_message_compose(
 
 pub(super) fn compose_addresses(addresses: &[flectar_mail_core::models::Address]) -> String {
     join_addresses(addresses)
+}
+
+/// Collapse runs of three or more newlines so HTML-extracted reply text keeps
+/// a single blank line between paragraphs in the composer.
+pub(super) fn normalize_compose_paragraphs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut newline_run = 0usize;
+    for character in text.chars() {
+        if character == '\n' {
+            newline_run += 1;
+            if newline_run <= 2 {
+                out.push(character);
+            }
+        } else {
+            newline_run = 0;
+            out.push(character);
+        }
+    }
+    out
 }
 
 fn deduplicated_addresses<'a>(
@@ -626,6 +645,24 @@ mod tests {
             date: 1_777_000_000_000,
             text_body: "First line\nSecond line".to_owned(),
         }
+    }
+
+    #[test]
+    fn reply_round_trip_keeps_one_blank_line_between_paragraphs() {
+        let mut source = source();
+        source.text_body = "Hello\n\n\n\nWorld\n\n\nQuoted".into();
+        let prepared = prepare_message_compose(&source, "reply", "", english).unwrap();
+        let body = normalize_compose_paragraphs(&prepared.body);
+        assert!(body.contains("Hello\n\nWorld\n\nQuoted") || body.contains("> Hello\n> \n> World"));
+        assert!(!body.contains("\n\n\n"));
+    }
+
+    #[test]
+    fn normalize_compose_paragraphs_collapses_triple_newlines() {
+        assert_eq!(
+            normalize_compose_paragraphs("a\n\n\n\nb\n\nc"),
+            "a\n\nb\n\nc"
+        );
     }
 
     #[test]

@@ -851,6 +851,21 @@ pub fn mime_plan(conn: &Connection, id: i64) -> Result<Option<MimePlan>> {
         .map_err(Into::into)
 }
 
+/// Stored Delivered-To / X-Original-To addresses, when header parsing ran.
+pub fn delivery_recipients(conn: &Connection, id: i64) -> Result<Vec<Address>> {
+    let json: Option<String> = conn
+        .query_row(
+            "SELECT delivery_recipients_json FROM messages WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match json {
+        Some(json) => Ok(serde_json::from_str(&json).unwrap_or_default()),
+        None => Ok(Vec::new()),
+    }
+}
+
 /// Whether real header parsing has examined delivery hints for this message.
 /// NULL is unknown; an empty JSON list is a real parse with no delivery fields.
 pub fn delivery_recipients_known(conn: &Connection, id: i64) -> Result<bool> {

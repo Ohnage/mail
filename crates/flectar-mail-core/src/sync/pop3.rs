@@ -10,7 +10,7 @@
 //! was.
 
 use super::engine::{
-    PriorityFetchCmd, RestoreRequest, SyncCmd, SyncCtx, configured_sync_interval, set_state,
+    PriorityFetchCmd, RestoreRequest, SyncCmd, SyncCtx, configured_sync_interval_for, set_state,
     set_state_error,
 };
 use super::ingest::{self, Delivery, Importer};
@@ -84,7 +84,7 @@ pub(crate) async fn run(ctx: SyncCtx, mut config: AccountConfig, mut inputs: Inp
                     let next = match synced {
                         Synced::Complete => {
                             finish(&mut waiters, Ok(()));
-                            Instant::now() + configured_sync_interval(&ctx.db).await
+                            Instant::now() + configured_sync_interval_for(&ctx.db, account_id).await
                         }
                         Synced::Partial => {
                             finish(&mut waiters, Ok(()));
@@ -112,7 +112,7 @@ pub(crate) async fn run(ctx: SyncCtx, mut config: AccountConfig, mut inputs: Inp
                 Err(Failure::Busy(message)) => {
                     set_state_error(&ctx, account_id, "offline", &message).await;
                     finish(&mut waiters, Err(message));
-                    Some(Instant::now() + configured_sync_interval(&ctx.db).await)
+                    Some(Instant::now() + configured_sync_interval_for(&ctx.db, account_id).await)
                 }
                 Err(Failure::Other(error)) => {
                     tracing::warn!(account_id, %error, "POP3 sync failed");

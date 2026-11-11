@@ -1198,6 +1198,7 @@ struct InboxState {
     /// Company-view mailboxes for the open business tab. `None` off a tab.
     company_account_ids: Option<Vec<i64>>,
     folder_unreads: HashMap<i64, i64>,
+    folders_with_mail: HashSet<i64>,
     company_mailboxes: Vec<mail::MailboxEntry>,
     /// The open business tab changed during the latest profile sync.
     opened_business_tab: bool,
@@ -1981,6 +1982,7 @@ impl InboxState {
             profile_accounts: None,
             company_account_ids: None,
             folder_unreads: HashMap::new(),
+            folders_with_mail: HashSet::new(),
             company_mailboxes: Vec::new(),
             opened_business_tab: false,
             calendar_connections: Vec::new(),
@@ -4294,6 +4296,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 state.unified_mailboxes = metadata.unified_mailboxes;
                 state.inbox_count = metadata.inbox_count;
                 state.folder_unreads = metadata.folder_unreads.clone();
+                state.folders_with_mail = metadata.folders_with_mail.clone();
                 if let Some(parent_id) = update.reveal_parent_id {
                     state.initialized_sidebar_folders.insert(parent_id);
                     state.collapsed_folder_ids.remove(&parent_id);
@@ -4929,6 +4932,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     state.unified_mailboxes = metadata.unified_mailboxes;
                     state.inbox_count = metadata.inbox_count;
                     state.folder_unreads = metadata.folder_unreads.clone();
+                state.folders_with_mail = metadata.folders_with_mail.clone();
                     drop(state);
                     if local_mail_changed {
                         // Its section is named at once; its size follows.
@@ -5000,11 +5004,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 }
             });
         }
+        // Badge COUNTs share the DB with the page load. Wait until the list
+        // page finishes so a company-tab switch paints local rows first.
         if mail_active
             && mail_metadata_refresh_requested_for_core.get()
             && metadata_delay.is_none()
             && !mail_metadata_refresh_in_progress_for_core.get()
             && !mail_work::actions_pending(&mail_update_state.borrow())
+            && !mail_work::loading(&mail_update_state.borrow())
         {
             let (using_core, core, scope) = {
                 let state = mail_update_state.borrow();
@@ -5701,6 +5708,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             state.unified_mailboxes = metadata.unified_mailboxes;
                             state.inbox_count = metadata.inbox_count;
                 state.folder_unreads = metadata.folder_unreads.clone();
+                state.folders_with_mail = metadata.folders_with_mail.clone();
                         }
                         refresh_list_metadata(&app, &startup_state);
                     }
@@ -6097,6 +6105,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         state.unified_mailboxes = metadata.unified_mailboxes;
                         state.inbox_count = metadata.inbox_count;
                         state.folder_unreads = metadata.folder_unreads.clone();
+                state.folders_with_mail = metadata.folders_with_mail.clone();
                     }
                     let current = removal.scope == state.scope && removal.query == state.query;
                     let has_page = removal.page.is_some();
@@ -6683,6 +6692,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             state.unified_mailboxes = metadata.unified_mailboxes;
                             state.inbox_count = metadata.inbox_count;
                             state.folder_unreads = metadata.folder_unreads.clone();
+                state.folders_with_mail = metadata.folders_with_mail.clone();
                         }
                     }
                     if let Err(error) =

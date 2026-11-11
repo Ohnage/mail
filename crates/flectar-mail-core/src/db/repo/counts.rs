@@ -18,7 +18,6 @@ const INBOX_BADGE_SQL: &str = "SELECT t.account_id, COUNT(*)
                   AND m.folder_id IN (SELECT id FROM folders WHERE role = 'inbox')
            ) OR EXISTS (
                 SELECT 1 FROM messages m
-                JOIN accounts ma ON ma.id = m.account_id AND ma.provider = 'gmail'
                 JOIN message_folders mf ON mf.message_id = m.id
                 JOIN folders f ON f.id = mf.folder_id
                 WHERE m.thread_id = t.id AND f.role = 'inbox'
@@ -37,11 +36,11 @@ const INBOX_MESSAGE_BADGE_SQL: &str = "SELECT m.account_id, COUNT(*)
            AND m.thread_id IS NOT NULL
            AND s.thread_id IS NULL
            AND (m.folder_id IN (SELECT id FROM folders WHERE role = 'inbox')
-                OR (a.provider = 'gmail' AND EXISTS (
+                OR EXISTS (
                      SELECT 1 FROM message_folders mf
                      JOIN folders f ON f.id = mf.folder_id
                      WHERE mf.message_id = m.id AND f.role = 'inbox'
-                )))
+                ))
          GROUP BY m.account_id";
 
 /// Query-plan details for the inbox badge path used by `mailbox_badge_counts`.
@@ -97,7 +96,6 @@ impl Q {
                       WHERE m.thread_id = t.id AND f.role = ?{0})
               OR EXISTS (
                     SELECT 1 FROM messages m
-                    JOIN accounts ma ON ma.id = m.account_id AND ma.provider = 'gmail'
                     JOIN message_folders mf ON mf.message_id = m.id
                     JOIN folders f ON f.id = mf.folder_id
                     WHERE m.thread_id = t.id AND f.role = ?{0}
@@ -228,7 +226,6 @@ pub fn unread_counts(
                           WHERE m.thread_id = t.id AND m.is_draft = 1 AND f.role = 'drafts')
                   OR EXISTS (
                         SELECT 1 FROM messages m
-                        JOIN accounts ma ON ma.id = m.account_id AND ma.provider = 'gmail'
                         JOIN message_folders mf ON mf.message_id = m.id
                         JOIN folders f ON f.id = mf.folder_id
                         WHERE m.thread_id = t.id AND m.is_draft = 1 AND f.role = 'drafts'
@@ -351,7 +348,6 @@ pub fn mailbox_badge_counts_filtered(
              FROM folders f
              JOIN message_folders mf ON mf.folder_id = f.id
              JOIN messages m ON m.id = mf.message_id
-             JOIN accounts a ON a.id = m.account_id AND a.provider = 'gmail'
              WHERE f.role = 'drafts' AND m.is_draft = 1 AND m.thread_id IS NOT NULL
          )
          GROUP BY account_id"
@@ -416,14 +412,17 @@ pub fn folder_unread_counts_for(
              SELECT m.folder_id AS folder_id, m.thread_id AS thread_id
              FROM messages m
              JOIN threads t ON t.id = m.thread_id
-             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL{filter}
+             JOIN folders f ON f.id = m.folder_id
+             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL
+               AND COALESCE(f.role, '') != 'all'{filter}
              UNION
              SELECT mf.folder_id, m.thread_id
              FROM message_folders mf
              JOIN messages m ON m.id = mf.message_id
              JOIN threads t ON t.id = m.thread_id
-             JOIN accounts a ON a.id = m.account_id AND a.provider = 'gmail'
-             WHERE t.unread_count > 0{filter}
+             JOIN folders f ON f.id = mf.folder_id
+             WHERE t.unread_count > 0
+               AND COALESCE(f.role, '') != 'all'{filter}
          )
          GROUP BY folder_id"
     ))?;

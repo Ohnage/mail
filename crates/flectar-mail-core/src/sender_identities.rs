@@ -74,6 +74,47 @@ impl Core {
         self.resolve_sender_identity(account_id, None).await
     }
 
+    /// Every selectable From identity on the same mail profile as `account_id`,
+    /// including send-only city hubs that share the Pixelated Cities profile.
+    pub async fn list_profile_sender_identities(
+        &self,
+        account_id: i64,
+    ) -> Result<Vec<SenderIdentity>> {
+        self.db
+            .write(move |conn| {
+                let settings = repo::settings::get(conn)?;
+                let sibling_ids = settings
+                    .mail_profiles
+                    .iter()
+                    .find(|profile| profile.account_ids.contains(&account_id))
+                    .map(|profile| profile.account_ids.clone())
+                    .unwrap_or_else(|| vec![account_id]);
+                let mut identities = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for sibling_id in sibling_ids {
+                    let Some(account) = repo::accounts::get_config(conn, sibling_id)? else {
+                        continue;
+                    };
+                    repo::sender_identities::ensure_primary(conn, &account)?;
+                    for identity in repo::sender_identities::list(conn, sibling_id)? {
+                        let key = identity.email.to_ascii_lowercase();
+                        if seen.insert(key) {
+                            identities.push(identity);
+                        }
+                    }
+                }
+                Ok(identities)
+            })
+            .await
+    }
+
+    /// Delivered-To / X-Original-To addresses recovered for a message, if any.
+    pub async fn message_delivery_recipients(&self, message_id: i64) -> Result<Vec<Address>> {
+        self.db
+            .read(move |conn| repo::messages::delivery_recipients(conn, message_id))
+            .await
+    }
+
     /// Refresh identities using the account provider and return every saved
     /// identity, including manual addresses the provider does not list.
     /// Providers without a discoverable identity endpoint expose their

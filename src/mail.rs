@@ -188,6 +188,9 @@ pub struct ComposeSource {
     pub from: Address,
     pub to: Vec<Address>,
     pub cc: Vec<Address>,
+    /// Delivered-To / X-Original-To when known; used so reply-From can match
+    /// a city hub address that only appears in delivery headers.
+    pub delivery_recipients: Vec<Address>,
     pub subject: String,
     pub date: i64,
     pub text_body: String,
@@ -258,6 +261,9 @@ pub struct MailMetadata {
     pub unified_mailboxes: Vec<MailboxEntry>,
     /// Unread threads per folder, used to total a merged folder.
     pub folder_unreads: std::collections::HashMap<i64, i64>,
+    /// Folders that hold mail for the open company tab. Empty hub trees stay
+    /// out of the default sidebar; search can still surface them.
+    pub folders_with_mail: std::collections::HashSet<i64>,
     /// The account of local mail, which an import creates.
     pub local_mail: Option<i64>,
 }
@@ -773,6 +779,24 @@ impl CoreMailSource {
         self.core.notify_ui_ready();
     }
 
+    async fn list_folders_for_profile(
+        &self,
+        profile: Option<&[i64]>,
+    ) -> Result<Vec<FolderInfo>, String> {
+        match profile {
+            Some(ids) => self
+                .core
+                .list_folders_for_accounts(ids.to_vec())
+                .await
+                .map_err(|error| error.to_string()),
+            None => self
+                .core
+                .list_folders(None)
+                .await
+                .map_err(|error| error.to_string()),
+        }
+    }
+
     pub async fn load_page(
         &self,
         scope: Scope,
@@ -789,17 +813,13 @@ impl CoreMailSource {
             .list_accounts()
             .await
             .map_err(|error| error.to_string())?;
-        let mut folders = self
-            .core
-            .list_folders(None)
-            .await
-            .map_err(|error| error.to_string())?;
         let local_mail = self.load_local_mail_account().await?;
         let include_local_mail = self
             .include_local_mail
             .load(std::sync::atomic::Ordering::Acquire);
         let profile = with_local_mail(profile, local_mail, include_local_mail);
         let account_filter = with_local_mail(account_filter, local_mail, include_local_mail);
+        let mut folders = self.list_folders_for_profile(profile.as_deref()).await?;
         let all_accounts = accounts.clone();
         retain_profile_accounts(profile.as_deref(), &mut accounts, &mut folders);
         self.load_page_with_context(PageLoadContext {
@@ -844,7 +864,7 @@ impl CoreMailSource {
             .load(std::sync::atomic::Ordering::Acquire);
         let profile = with_local_mail(profile, local_mail, include_local_mail);
         let account_filter = with_local_mail(account_filter, local_mail, include_local_mail);
-        let (scope, page) = match self.core.list_folders(None).await {
+        let (scope, page) = match self.list_folders_for_profile(profile.as_deref()).await {
             Ok(mut folders) => {
                 retain_profile_accounts(profile.as_deref(), &mut shown, &mut folders);
                 let mut labels = self.core.list_labels().await.unwrap_or_default();
@@ -922,16 +942,12 @@ impl CoreMailSource {
             .list_accounts()
             .await
             .map_err(|error| error.to_string())?;
-        let mut folders = self
-            .core
-            .list_folders(None)
-            .await
-            .map_err(|error| error.to_string())?;
         let local_mail = self.load_local_mail_account().await?;
         let include_local_mail = self
             .include_local_mail
             .load(std::sync::atomic::Ordering::Acquire);
         let profile = with_local_mail(profile, local_mail, include_local_mail);
+        let mut folders = self.list_folders_for_profile(profile.as_deref()).await?;
         retain_profile_accounts(profile.as_deref(), &mut accounts, &mut folders);
         self.load_mail_metadata_with_context(
             scope,
@@ -1044,6 +1060,14 @@ impl CoreMailSource {
         } else {
             std::collections::HashMap::new()
         };
+        let folders_with_mail = if let Some(company) = company.as_deref() {
+            self.core
+                .folder_ids_with_mail(company.to_vec())
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            std::collections::HashSet::new()
+        };
         Ok(MailMetadata {
             account_revision: self.account_revision(),
             scope,
@@ -1054,6 +1078,7 @@ impl CoreMailSource {
             mailboxes: mailbox_entries_with_counts(accounts, folders, local_mail, &badges),
             unified_mailboxes: unified_mailbox_entries(&inbox_badges),
             folder_unreads,
+            folders_with_mail,
             local_mail,
         })
     }
@@ -1458,11 +1483,32 @@ impl CoreMailSource {
             }
         };
 
-        let sender_identities = self
+        let mut sender_identities = self
             .core
             .list_sender_identities(account.id)
             .await
             .map_err(|error| error.to_string())?;
+        // Hub@ replies need every city hub From identity on the same company
+        // profile, including send-only accounts that no longer sync mail.
+        if let Ok(extra) = self
+            .core
+            .list_profile_sender_identities(account.id)
+            .await
+        {
+            for identity in extra {
+                if !sender_identities
+                    .iter()
+                    .any(|existing| existing.email.eq_ignore_ascii_case(&identity.email))
+                {
+                    sender_identities.push(identity);
+                }
+            }
+        }
+        let delivery_recipients = self
+            .core
+            .message_delivery_recipients(message.id)
+            .await
+            .unwrap_or_default();
         let default_sender_email = self
             .core
             .default_sender_identity(account.id)
@@ -1479,6 +1525,7 @@ impl CoreMailSource {
             from: message.from.clone(),
             to: message.to.clone(),
             cc: message.cc.clone(),
+            delivery_recipients,
             subject: message.subject.clone(),
             date: message.date,
             text_body: message
@@ -2912,7 +2959,9 @@ const fn standard_mailbox_role(mailbox: StandardMailbox) -> Option<&'static str>
 fn is_standard_folder(folder: &FolderInfo) -> bool {
     matches!(
         folder.role.as_deref(),
-        Some("inbox" | "sent" | "archive" | "spam" | "trash" | "drafts")
+        // Gmail All Mail duplicates every INBOX message; never treat it as a
+        // company custom folder or count it beside Inbox.
+        Some("inbox" | "sent" | "archive" | "spam" | "trash" | "drafts" | "all")
     )
 }
 

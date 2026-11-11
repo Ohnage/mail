@@ -20,6 +20,18 @@ pub fn is_hub_address(email: &str) -> bool {
     address_local_part(email).eq_ignore_ascii_case("hub")
 }
 
+/// The Pixelated Cities company mailbox that receives routed city mail.
+pub fn is_pixelated_cities_hub(email: &str) -> bool {
+    if !is_hub_address(email) {
+        return false;
+    }
+    let Some((_, domain)) = email.trim().rsplit_once('@') else {
+        return false;
+    };
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    domain == "pixelatedcities.com" || domain == "pixelated.cities"
+}
+
 /// Only `inbox@` starts excluded. Every other address, including `hub@`, starts included.
 pub fn default_excluded_from_company_views(email: &str) -> bool {
     address_local_part(email).eq_ignore_ascii_case("inbox")
@@ -75,6 +87,8 @@ pub struct FolderLeaf {
     pub folder_id: i64,
     pub path: String,
     pub unread: i64,
+    /// True when the folder holds at least one cached message.
+    pub has_mail: bool,
 }
 
 /// Folders that share a path, in tree order.
@@ -87,6 +101,7 @@ pub struct MergedFolder {
     pub parent_id: i64,
     pub has_children: bool,
     pub unread: i64,
+    pub has_mail: bool,
     pub members: Vec<(i64, i64)>,
 }
 
@@ -133,6 +148,7 @@ pub fn merge_folders(folders: &[FolderLeaf]) -> Vec<MergedFolder> {
             parent_id,
             has_children: child_keys.contains_key(key.as_str()),
             unread: members.iter().map(|member| member.unread.max(0)).sum(),
+            has_mail: members.iter().any(|member| member.has_mail),
             members: members
                 .iter()
                 .map(|member| (member.account_id, member.folder_id))
@@ -185,6 +201,40 @@ pub fn merge_folders(folders: &[FolderLeaf]) -> Vec<MergedFolder> {
     orphans.sort_by_key(|node| node.label.to_lowercase());
     ordered.extend(orphans);
     ordered
+}
+
+/// Drop empty hub trees while keeping ancestors of folders that hold mail.
+/// Search / "show empty" callers skip this and keep the full merged tree.
+pub fn prune_empty_folders(nodes: Vec<MergedFolder>) -> Vec<MergedFolder> {
+    let by_id = nodes
+        .iter()
+        .map(|node| (node.id, node.parent_id))
+        .collect::<HashMap<_, _>>();
+    let mut keep = HashSet::new();
+    for node in &nodes {
+        if node.unread > 0 || node.has_mail {
+            let mut cur = Some(node.id);
+            while let Some(id) = cur {
+                if !keep.insert(id) {
+                    break;
+                }
+                cur = by_id.get(&id).copied().filter(|&parent| parent >= 0);
+            }
+        }
+    }
+    let mut pruned = nodes
+        .into_iter()
+        .filter(|node| keep.contains(&node.id))
+        .collect::<Vec<_>>();
+    let parents_with_children = pruned
+        .iter()
+        .filter(|node| node.parent_id >= 0)
+        .map(|node| node.parent_id)
+        .collect::<HashSet<_>>();
+    for node in &mut pruned {
+        node.has_children = parents_with_children.contains(&node.id);
+    }
+    pruned
 }
 
 /// The folder on `account_id` with this path, if that account already has it.
@@ -515,13 +565,94 @@ pub fn tag_display(keyword: &str, name: &str, stored_colors: &[&str]) -> (String
 mod tests {
     use super::*;
 
+    #[test]
+    fn pixelated_cities_hub_matches_owner_and_fixture_domains() {
+        assert!(is_pixelated_cities_hub("hub@pixelatedcities.com"));
+        assert!(is_pixelated_cities_hub("Hub@Pixelated.Cities"));
+        assert!(!is_pixelated_cities_hub("chicago@pixelatedcities.com"));
+        assert!(!is_pixelated_cities_hub("hub@example.com"));
+    }
+
     fn leaf(account: i64, folder: i64, path: &str, unread: i64) -> FolderLeaf {
         FolderLeaf {
             account_id: account,
             folder_id: folder,
             path: path.to_owned(),
             unread,
+            has_mail: true,
         }
+    }
+
+    #[test]
+    fn pixelated_hub_tree_keeps_cities_parent_and_status_folders() {
+        let mut leaves = vec![
+            FolderLeaf {
+                account_id: 1,
+                folder_id: 1,
+                path: crate::pixelated_hub::cities_parent().into(),
+                unread: 0,
+                has_mail: false,
+            },
+            FolderLeaf {
+                account_id: 1,
+                folder_id: 2,
+                path: format!("{}/Jackson", crate::pixelated_hub::cities_parent()),
+                unread: 1,
+                has_mail: true,
+            },
+        ];
+        for (index, name) in crate::pixelated_hub::status_folder_names().enumerate() {
+            leaves.push(FolderLeaf {
+                account_id: 1,
+                folder_id: 100 + index as i64,
+                path: name.into(),
+                unread: 0,
+                has_mail: name == "Action Items",
+            });
+        }
+        let pruned = prune_empty_folders(merge_folders(&leaves));
+        let paths = pruned
+            .iter()
+            .map(|node| node.path.as_str())
+            .collect::<Vec<_>>();
+        assert!(paths.contains(&crate::pixelated_hub::cities_parent()));
+        assert!(paths.iter().any(|path| path.ends_with("/Jackson")));
+        assert!(paths.contains(&"Action Items"));
+        assert!(!paths.iter().any(|path| *path == "Archive"));
+        assert_eq!(crate::pixelated_hub::city_count(), 273);
+    }
+
+    #[test]
+    fn prune_empty_folders_keeps_ancestors_of_mail() {
+        let merged = merge_folders(&[
+            FolderLeaf {
+                account_id: 1,
+                folder_id: 1,
+                path: "Topics".into(),
+                unread: 0,
+                has_mail: false,
+            },
+            FolderLeaf {
+                account_id: 1,
+                folder_id: 2,
+                path: "Topics/Empty".into(),
+                unread: 0,
+                has_mail: false,
+            },
+            FolderLeaf {
+                account_id: 1,
+                folder_id: 3,
+                path: "Topics/Live".into(),
+                unread: 0,
+                has_mail: true,
+            },
+        ]);
+        let pruned = prune_empty_folders(merged);
+        let paths = pruned
+            .iter()
+            .map(|node| node.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["Topics", "Topics/Live"]);
     }
 
     #[test]

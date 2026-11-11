@@ -645,6 +645,84 @@ pub fn migrate_default_project_tab(settings: &mut Settings) -> bool {
     true
 }
 
+/// Catalog version after Pixelated Cities is scoped to hub@ only.
+pub const ADDRESS_CATALOG_PIXELATED_HUB: u32 = 2;
+
+/// One-time: Pixelated Cities tab lists only hub@; city hubs stay as send-only
+/// From identities. Other tabs, names, colors, and credentials are untouched.
+pub fn migrate_pixelated_cities_hub_only(
+    settings: &mut Settings,
+    accounts: &[(i64, String)],
+) -> bool {
+    migrate_default_project_tab(settings);
+    if settings.address_catalog_version >= ADDRESS_CATALOG_PIXELATED_HUB {
+        return false;
+    }
+    if let Some(hub_id) = accounts
+        .iter()
+        .find(|(_, email)| crate::company_view::is_pixelated_cities_hub(email))
+        .map(|(id, _)| *id)
+        && let Some(tab) = settings
+            .business_tabs
+            .iter_mut()
+            .find(|tab| tab.id == "pixelated-cities")
+    {
+        tab.account_ids = Some(vec![hub_id]);
+    }
+    settings.address_catalog_version = ADDRESS_CATALOG_PIXELATED_HUB;
+    true
+}
+
+/// City hub account ids that must not sync mail when the PC tab is hub-scoped.
+pub fn pixelated_cities_send_only_account_ids(
+    settings: &Settings,
+    accounts: &[(i64, String)],
+) -> Vec<i64> {
+    let Some(&(hub_id, _)) = accounts
+        .iter()
+        .find(|(_, email)| crate::company_view::is_pixelated_cities_hub(email))
+    else {
+        return Vec::new();
+    };
+    let Some(tab) = settings
+        .business_tabs
+        .iter()
+        .find(|tab| tab.id == "pixelated-cities")
+    else {
+        return Vec::new();
+    };
+    let Some(ids) = tab.account_ids.as_ref() else {
+        return Vec::new();
+    };
+    if ids.as_slice() != [hub_id] {
+        return Vec::new();
+    }
+    let mut city_ids = settings
+        .mail_profiles
+        .iter()
+        .filter(|profile| profile.id == "pixelated-cities")
+        .flat_map(|profile| profile.account_ids.iter().copied())
+        .filter(|id| *id != hub_id)
+        .collect::<Vec<_>>();
+    if city_ids.is_empty() {
+        city_ids = accounts
+            .iter()
+            .filter(|(id, email)| {
+                *id != hub_id
+                    && !crate::company_view::is_pixelated_cities_hub(email)
+                    && email.rsplit_once('@').is_some_and(|(_, domain)| {
+                        let domain = domain.trim().to_ascii_lowercase();
+                        domain == "pixelatedcities.com" || domain == "pixelated.cities"
+                    })
+            })
+            .map(|(id, _)| *id)
+            .collect();
+    }
+    city_ids.sort_unstable();
+    city_ids.dedup();
+    city_ids
+}
+
 /// Merge cached receiving suggestions; never calls provider discovery or changes senders.
 pub fn merge_cached_address_views(
     settings: &mut Settings,
@@ -2260,5 +2338,81 @@ mod tests {
             again.settings.brand_registry_backup
         );
         assert!(IMPORTER_DIGEST_PREFIX.contains("flectar-brand-importer/3"));
+    }
+
+    #[test]
+    fn pixelated_cities_hub_migration_scopes_tab_and_marks_cities_send_only() {
+        let mut settings = Settings::default();
+        settings.address_catalog_version = 1;
+        settings.business_tabs = vec![
+            BusinessTab {
+                id: "tim".into(),
+                name: "TM".into(),
+                show_name: true,
+                icon: None,
+                color: Some("#111111".into()),
+                account_ids: Some(vec![1]),
+                address_view_ids: None,
+                profile_ids: vec!["tim-personal".into()],
+                recipient_patterns: Vec::new(),
+                scope: String::new(),
+                sender_addresses: Vec::new(),
+                sender_names: Vec::new(),
+                sender_domains: Vec::new(),
+            },
+            BusinessTab {
+                id: "pixelated-cities".into(),
+                name: "Pixelated Cities".into(),
+                show_name: true,
+                icon: None,
+                color: Some("#8b5cf6".into()),
+                account_ids: Some(vec![10, 11, 12]),
+                address_view_ids: None,
+                profile_ids: vec!["pixelated-cities".into()],
+                recipient_patterns: Vec::new(),
+                scope: String::new(),
+                sender_addresses: Vec::new(),
+                sender_names: Vec::new(),
+                sender_domains: Vec::new(),
+            },
+        ];
+        settings.mail_profiles = vec![MailProfile {
+            id: "pixelated-cities".into(),
+            name: "Pixelated Cities".into(),
+            color: "#8b5cf6".into(),
+            account_ids: vec![10, 11, 12],
+            logo: None,
+        }];
+        let accounts = vec![
+            (10, "hub@pixelatedcities.com".into()),
+            (11, "chicago@pixelatedcities.com".into()),
+            (12, "detroit@pixelatedcities.com".into()),
+            (1, "tmentink@gmail.com".into()),
+        ];
+        let other_tabs = settings.business_tabs.clone();
+        assert!(migrate_pixelated_cities_hub_only(&mut settings, &accounts));
+        assert_eq!(
+            settings.address_catalog_version,
+            ADDRESS_CATALOG_PIXELATED_HUB
+        );
+        let pc = settings
+            .business_tabs
+            .iter()
+            .find(|tab| tab.id == "pixelated-cities")
+            .unwrap();
+        assert_eq!(pc.account_ids.as_deref(), Some([10].as_slice()));
+        assert_eq!(pc.color.as_deref(), Some("#8b5cf6"));
+        let tim = settings
+            .business_tabs
+            .iter()
+            .find(|tab| tab.id == "tim")
+            .unwrap();
+        assert_eq!(tim.account_ids, other_tabs[0].account_ids);
+        assert_eq!(tim.color, other_tabs[0].color);
+        assert_eq!(
+            pixelated_cities_send_only_account_ids(&settings, &accounts),
+            vec![11, 12]
+        );
+        assert!(!migrate_pixelated_cities_hub_only(&mut settings, &accounts));
     }
 }

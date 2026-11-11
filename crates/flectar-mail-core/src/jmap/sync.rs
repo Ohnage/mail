@@ -6,9 +6,12 @@ use crate::db::repo::messages::NewMessage;
 use crate::error::{CoreError, Result};
 use crate::events::CoreEvent;
 use crate::jmap::client::{self, ConnectedClient};
-use crate::models::{AccountConfig, Address, MailProtocol, SenderDeliveryStatus, now_ms, roles};
+use crate::models::{
+    AccountConfig, Address, AuthKind, MailProtocol, SenderDeliveryStatus, now_ms, roles,
+};
+use crate::smtp;
 use crate::sync::engine::{
-    PriorityFetchCmd, SyncCmd, SyncCtx, configured_sync_interval, set_state, set_state_error,
+    PriorityFetchCmd, SyncCmd, SyncCtx, configured_sync_interval_for, set_state, set_state_error,
 };
 use futures::{FutureExt, Stream, StreamExt};
 use jmap_client::core::error::MethodErrorType;
@@ -85,6 +88,7 @@ async fn actor(
     // Kept from one sync to the next, with its connection. A failed sync or a
     // changed Session makes the next one connect again.
     let mut session: Option<ConnectedClient> = None;
+    let mut run_actions = false;
     loop {
         while let Ok(cmd) = rx.try_recv() {
             match cmd {
@@ -92,12 +96,36 @@ async fn actor(
                 SyncCmd::SyncNow {
                     complete: Some(done),
                 } => waiters.push(done),
+                SyncCmd::RunActions => run_actions = true,
                 _ => {}
             }
         }
         if settings.has_changed().unwrap_or(false) {
             config.settings = settings.borrow_and_update().clone();
         }
+        // Send-only accounts stay idle until a submit wakes them, so ~280 city
+        // hubs do not open JMAP sessions on startup.
+        if !config.settings.sync_mail && waiters.is_empty() && !run_actions {
+            tokio::select! {
+                command = rx.recv() => match command {
+                    None | Some(SyncCmd::Shutdown) => return,
+                    Some(SyncCmd::SyncNow { complete: Some(done) }) => {
+                        waiters.push(done);
+                    }
+                    Some(SyncCmd::RunActions) => run_actions = true,
+                    Some(_) => {}
+                },
+                changed = settings.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    config.settings = settings.borrow_and_update().clone();
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)) => {}
+            }
+            continue;
+        }
+        run_actions = false;
         let _sync_slot = crate::sync::engine::reserve_account_sync().await;
         let reused = session.take();
         let outcome = async {
@@ -122,8 +150,12 @@ async fn actor(
                 }
             }
             set_state(&ctx, config.id, "syncing").await;
-            sync_mailboxes(&ctx, config.id, &connected).await?;
-            sync_emails(&ctx, &config, &connected).await?;
+            // Send-only city hubs keep credentials and EmailSubmission; they
+            // must not poll mailboxes or download folder trees.
+            if config.settings.sync_mail {
+                sync_mailboxes(&ctx, config.id, &connected).await?;
+                sync_emails(&ctx, &config, &connected).await?;
+            }
             execute_actions(&ctx, &config, &connected).await?;
             Ok::<ConnectedClient, CoreError>(connected)
         }
@@ -151,7 +183,12 @@ async fn actor(
             }
         };
         drop(_sync_slot);
-        let normal = configured_sync_interval(&ctx.db).await;
+        let normal = if config.settings.sync_mail {
+            configured_sync_interval_for(&ctx.db, config.id).await
+        } else {
+            // Send-only: wake on submit, not mailbox polling.
+            std::time::Duration::from_secs(24 * 60 * 60)
+        };
         let delay = if retry == 1 {
             normal
         } else {
@@ -160,7 +197,9 @@ async fn actor(
         let deadline = tokio::time::sleep(delay);
         tokio::pin!(deadline);
         let mut push = None;
-        if let Some(connected) = &connected {
+        if config.settings.sync_mail
+            && let Some(connected) = &connected
+        {
             // RFC 8620 EventSource gives Stalwart an immediate new-mail path;
             // the selected periodic interval remains the correctness backstop.
             match connected
@@ -2258,20 +2297,169 @@ async fn action_is_inflight(ctx: &SyncCtx, action_id: i64) -> Result<bool> {
         .await
 }
 
+/// City From addresses are not among hub@'s JMAP identities. They submit over
+/// SMTP as hub@ (Addendum 5), then the raw message is imported into Sent.
+pub(crate) fn city_from_uses_hub_smtp(sender_email: &str) -> bool {
+    crate::pixelated_hub::is_city_from_address(sender_email)
+}
+
+async fn send_city_via_hub_smtp(
+    ctx: &SyncCtx,
+    config: &AccountConfig,
+    c: &ConnectedClient,
+    action: &repo::actions::PendingAction,
+    draft_id: i64,
+    sender_email: &str,
+) -> Result<()> {
+    if config.smtp_host.trim().is_empty() || config.smtp_port == 0 {
+        return Err(CoreError::Smtp(
+            "hub@ SMTP submission (mail.mentinkmedia.com:587 STARTTLS) is not configured".into(),
+        ));
+    }
+    let (_message_id, raw) = build_draft_message(ctx, config, c, draft_id).await?;
+    let detail = ctx
+        .db
+        .read(move |conn| repo::messages::detail(conn, draft_id))
+        .await?;
+    let bcc = ctx
+        .db
+        .read(move |conn| {
+            let bcc_json: String = conn.query_row(
+                "SELECT bcc_json FROM messages WHERE id=?1",
+                params![draft_id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str::<Vec<Address>>(&bcc_json).unwrap_or_default())
+        })
+        .await?;
+    let recipients: Vec<String> = detail
+        .to
+        .iter()
+        .chain(detail.cc.iter())
+        .chain(bcc.iter())
+        .map(|address| address.email.clone())
+        .collect();
+    if recipients.is_empty() {
+        return Err(CoreError::Smtp("no recipients".into()));
+    }
+    let auth = match config.auth_kind {
+        AuthKind::Password => smtp::SmtpAuth::Password(
+            credentials::load_async(ctx.credentials.clone(), config.id, Slot::Password).await?,
+        ),
+        AuthKind::Oauth2 => {
+            smtp::SmtpAuth::XOAuth2(ctx.tokens.access_token(config.id, config.provider).await?)
+        }
+    };
+    smtp::send_raw(config, &auth, sender_email, &recipients, &raw).await?;
+
+    let sent_mailbox =
+        ensure_role_mailbox(ctx, config.id, c, roles::SENT, "Sent", Role::Sent).await?;
+    let mut uploaded = c
+        .upload(raw, "message/rfc822")
+        .await
+        .map_err(client::map_error)?;
+    let blob_id = uploaded.take_blob_id();
+    let mut request = c.request();
+    let import = request
+        .import_email()
+        .account_id(&c.account_id)
+        .email(blob_id)
+        .mailbox_ids([sent_mailbox.clone()])
+        .keywords(["$seen"])
+        .received_at(now_ms() / 1000);
+    let create_id = import.create_id();
+    let imported = c
+        .send_single::<EmailImportResponse>(request)
+        .await
+        .map_err(client::map_error)?
+        .created(&create_id)
+        .map_err(client::map_error)?;
+    let remote = imported
+        .id()
+        .ok_or_else(|| CoreError::Jmap("Sent Email/import returned no id".into()))?
+        .to_owned();
+    persist_remote_draft(
+        ctx,
+        draft_id,
+        remote,
+        imported.blob_id().map(str::to_owned),
+        imported.thread_id().map(str::to_owned),
+    )
+    .await?;
+
+    let sent_folder_id = ctx
+        .db
+        .read({
+            let account_id = config.id;
+            move |conn| {
+                Ok(repo::folders::by_jmap_role(conn, account_id, roles::SENT)?
+                    .map(|folder| folder.id))
+            }
+        })
+        .await?
+        .ok_or_else(|| CoreError::Jmap("local Sent mailbox projection is missing".into()))?;
+    let account_id = config.id;
+    let action_id = action.id;
+    let sent_at = now_ms();
+    let (thread_id, staged_paths) = ctx
+        .db
+        .write(move |conn| {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "UPDATE messages SET is_draft=0,is_outgoing=1,is_read=1,
+                  folder_id=?2,date=?3 WHERE id=?1",
+                params![draft_id, sent_folder_id, sent_at],
+            )?;
+            repo::gmail::set_message_folders(&tx, draft_id, &[sent_folder_id])?;
+            tx.execute(
+                "DELETE FROM drafts_meta WHERE message_id = ?1",
+                params![draft_id],
+            )?;
+            let staged_paths = repo::messages::take_draft_attachment_paths(&tx, draft_id)?;
+            let tid: Option<i64> =
+                repo::messages::get_row(&tx, draft_id)?.and_then(|row| row.thread_id);
+            if let Some(tid) = tid {
+                repo::threads::recompute(&tx, tid)?;
+            }
+            repo::search::index_message(&tx, draft_id)?;
+            repo::contacts::record_sent_recipients(&tx, account_id, draft_id, sent_at)?;
+            repo::actions::set_state(&tx, action_id, "done", None)?;
+            tx.commit()?;
+            Ok((tid, staged_paths))
+        })
+        .await?;
+    for path in staged_paths {
+        crate::remove_staged_attachment(&ctx.paths.draft_attachments_dir(), &path).await;
+    }
+    if let Some(tid) = thread_id {
+        ctx.bus.emit(CoreEvent::MailUpdated {
+            thread_ids: vec![tid],
+        });
+    }
+    Ok(())
+}
+
 async fn send_action(
     ctx: &SyncCtx,
     config: &AccountConfig,
     c: &ConnectedClient,
     action: &repo::actions::PendingAction,
 ) -> Result<()> {
+    let draft_id = action.payload["draftId"]
+        .as_i64()
+        .ok_or_else(|| CoreError::Jmap("send action has no draftId".into()))?;
+    let sender_email = ctx
+        .db
+        .read(move |conn| Ok(repo::messages::detail(conn, draft_id)?.from.email))
+        .await?;
+    if city_from_uses_hub_smtp(&sender_email) {
+        return send_city_via_hub_smtp(ctx, config, c, action, draft_id, &sender_email).await;
+    }
     if !c.supports_submission {
         return Err(CoreError::Jmap(
             "server does not advertise JMAP EmailSubmission".into(),
         ));
     }
-    let draft_id = action.payload["draftId"]
-        .as_i64()
-        .ok_or_else(|| CoreError::Jmap("send action has no draftId".into()))?;
     let submission_accepted = action.payload["jmapSubmissionAccepted"]
         .as_bool()
         .unwrap_or(false);
@@ -2320,10 +2508,6 @@ async fn send_action(
             .ids()
             .is_empty();
     if !already_submitted {
-        let sender_email = ctx
-            .db
-            .read(move |conn| Ok(repo::messages::detail(conn, draft_id)?.from.email))
-            .await?;
         let mut identity_request = c.request();
         identity_request.get_identity().account_id(&c.account_id);
         let identities = c
@@ -3307,6 +3491,19 @@ mod tests {
             .unwrap();
         assert!(updates.contains_key(&format!("#{create_id}")));
         assert!(!updates.contains_key("email-1"));
+    }
+}
+
+#[cfg(test)]
+mod city_smtp_routing_tests {
+    use super::*;
+
+    #[test]
+    fn city_from_uses_hub_smtp_while_hub_stays_on_jmap() {
+        assert!(city_from_uses_hub_smtp("hub@jacksonmichigan.org"));
+        assert!(city_from_uses_hub_smtp("Hub@AnnArborMichigan.org"));
+        assert!(!city_from_uses_hub_smtp("hub@pixelatedcities.com"));
+        assert!(!city_from_uses_hub_smtp("tim@mentinkizm.com"));
     }
 }
 

@@ -400,6 +400,11 @@ pub struct AccountSettings {
     /// POP3 accounts only.
     #[serde(default)]
     pub keep_on_server: KeepOnServer,
+    /// When false, keep credentials and SMTP/JMAP submission but do not poll
+    /// the mailbox, download mail, or load folder trees. Used for Pixelated
+    /// Cities city hubs that are From identities only.
+    #[serde(default = "default_true", alias = "syncMail")]
+    pub sync_mail: bool,
 }
 
 impl AccountSettings {
@@ -413,6 +418,7 @@ impl AccountSettings {
             default_sender_email: None,
             sent_copy_policy: SentCopyPolicy::Auto,
             keep_on_server: KeepOnServer::Always,
+            sync_mail: true,
         }
     }
 }
@@ -427,6 +433,20 @@ mod account_settings_tests {
 
     const MINIMAL_SETTINGS: &str =
         r#"{"connection":{"incomingSecurity":"tls","smtpSecurity":"starttls"}}"#;
+
+    #[test]
+    fn sync_mail_defaults_true_and_round_trips_for_mirror() {
+        let mut settings: AccountSettings = serde_json::from_str(MINIMAL_SETTINGS).unwrap();
+        assert!(settings.sync_mail);
+        settings.sync_mail = false;
+        let json = serde_json::to_string(&settings).unwrap();
+        assert!(json.contains("syncMail") || json.contains("sync_mail"));
+        let restored: AccountSettings = serde_json::from_str(&json).unwrap();
+        assert!(!restored.sync_mail);
+        // Older mirrors without the field keep syncing.
+        let legacy: AccountSettings = serde_json::from_str(MINIMAL_SETTINGS).unwrap();
+        assert!(legacy.sync_mail);
+    }
 
     #[test]
     fn keep_on_server_defaults_to_always_and_survives_serialization() {

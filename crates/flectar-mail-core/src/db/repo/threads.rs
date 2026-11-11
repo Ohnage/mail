@@ -323,25 +323,23 @@ fn folder_id_set_clause(
     bind: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
 ) -> String {
     let list = id_list(ids, bind);
+    // message_folders is the multi-mailbox projection for Gmail and JMAP
+    // (city + status folder). One message id must match once per folder view.
     if messages {
         format!(
             "(m.folder_id IN ({list})
-              OR (a.provider = 'gmail' AND EXISTS (
+              OR EXISTS (
                     SELECT 1 FROM message_folders mf
                     WHERE mf.message_id = m.id AND mf.folder_id IN ({list})
-              )))"
+              ))"
         )
     } else {
         format!(
             "EXISTS (SELECT 1 FROM messages m
                      WHERE m.thread_id = t.id AND (
                        m.folder_id IN ({list})
-                       OR (
-                         EXISTS (SELECT 1 FROM accounts ma
-                                 WHERE ma.id = m.account_id AND ma.provider = 'gmail')
-                         AND EXISTS (SELECT 1 FROM message_folders mf
-                                     WHERE mf.message_id = m.id AND mf.folder_id IN ({list}))
-                       )
+                       OR EXISTS (SELECT 1 FROM message_folders mf
+                                  WHERE mf.message_id = m.id AND mf.folder_id IN ({list}))
                      ))"
         )
     }
@@ -381,11 +379,11 @@ fn build_filter(
         if messages {
             return format!(
                 "(EXISTS (SELECT 1 FROM folders f WHERE f.id = m.folder_id AND f.role = ?{0})
-                  OR (a.provider = 'gmail' AND EXISTS (
+                  OR EXISTS (
                         SELECT 1 FROM message_folders mf
                         JOIN folders f ON f.id = mf.folder_id
                         WHERE mf.message_id = m.id AND f.role = ?{0}
-                  )))",
+                  ))",
                 bind.len(),
             );
         }
@@ -394,7 +392,6 @@ fn build_filter(
                       WHERE m.thread_id = t.id AND f.role = ?{0})
               OR EXISTS (
                     SELECT 1 FROM messages m
-                    JOIN accounts ma ON ma.id = m.account_id AND ma.provider = 'gmail'
                     JOIN message_folders mf ON mf.message_id = m.id
                     JOIN folders f ON f.id = mf.folder_id
                     WHERE m.thread_id = t.id AND f.role = ?{0}
@@ -427,7 +424,6 @@ fn build_filter(
                           WHERE m.thread_id = t.id AND m.is_draft = 1 AND f.role = ?{0})
                   OR EXISTS (
                        SELECT 1 FROM messages m
-                       JOIN accounts ma ON ma.id = m.account_id AND ma.provider = 'gmail'
                        JOIN message_folders mf ON mf.message_id = m.id
                        JOIN folders f ON f.id = mf.folder_id
                        WHERE m.thread_id = t.id AND m.is_draft = 1 AND f.role = ?{0}
@@ -511,10 +507,10 @@ fn build_filter(
         bind.push(Box::new(folder_id));
         where_clauses.push(format!(
             "(m.folder_id = ?{0}
-              OR (a.provider = 'gmail' AND EXISTS (
+              OR EXISTS (
                     SELECT 1 FROM message_folders mf
                     WHERE mf.message_id = m.id AND mf.folder_id = ?{0}
-              )))",
+              ))",
             bind.len()
         ));
     } else if let Some(folder_id) = args.folder_id {
@@ -523,12 +519,8 @@ fn build_filter(
             "EXISTS (SELECT 1 FROM messages m
                      WHERE m.thread_id = t.id AND (
                        m.folder_id = ?{0}
-                       OR (
-                         EXISTS (SELECT 1 FROM accounts ma
-                                 WHERE ma.id = m.account_id AND ma.provider = 'gmail')
-                         AND EXISTS (SELECT 1 FROM message_folders mf
-                                     WHERE mf.message_id = m.id AND mf.folder_id = ?{0})
-                       )
+                       OR EXISTS (SELECT 1 FROM message_folders mf
+                                  WHERE mf.message_id = m.id AND mf.folder_id = ?{0})
                      ))",
             bind.len()
         ));
@@ -606,6 +598,24 @@ fn list_sql(
     args: &ListArgs,
     scope: &crate::recipient_match::MailScope,
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    // Gmail keeps every INBOX message duplicated in All Mail. Walking threads
+    // newest-first with an inbox EXISTS therefore scans the All Mail corpus
+    // before reaching live Inbox rows. Drive Inbox pages from inbox folder
+    // membership instead, so TM-scale mailboxes stay under the local budget.
+    if matches!(args.view, View::Inbox)
+        && args.folder_id.is_none()
+        && args.folder_ids.is_none()
+        && args.label_ids.is_none()
+        && args.tab.is_none()
+        && !scope.splits_shared_mailbox()
+        && scope.address_inboxes.is_empty()
+        && scope.address_groups.is_empty()
+        && !scope.match_any
+        && scope.recipient_patterns.is_empty()
+        && let Some(sql) = inbox_driven_list_sql(args)
+    {
+        return sql;
+    }
     let (where_sql, bind) = build_filter(args, MailGrouping::Conversations, true, scope);
     (
         format!(
@@ -615,6 +625,66 @@ fn list_sql(
         ),
         bind,
     )
+}
+
+fn inbox_driven_list_sql(
+    args: &ListArgs,
+) -> Option<(String, Vec<Box<dyn rusqlite::types::ToSql>>)> {
+    let mut bind: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut account_filter = String::new();
+    if let Some(acc) = args.account_id {
+        bind.push(Box::new(acc));
+        account_filter.push_str(&format!(" AND m.account_id = ?{}", bind.len()));
+    }
+    if let Some(account_ids) = &args.account_ids {
+        account_filter.push_str(" AND ");
+        account_filter.push_str(&super::search::account_set_clause(
+            "m.account_id",
+            account_ids,
+            &mut bind,
+        ));
+    }
+    let mut cursor = String::new();
+    if let Some(cur) = args.cursor {
+        bind.push(Box::new(cur.last_message_at));
+        let timestamp_parameter = bind.len();
+        bind.push(Box::new(cur.thread_id));
+        let id_parameter = bind.len();
+        // Apply the page cursor inside the inbox membership scan so a Gmail
+        // mailbox full of newer All Mail rows never walks those first.
+        cursor = format!(" AND (sort_at, thread_id) < (?{timestamp_parameter}, ?{id_parameter})");
+    }
+    bind.push(Box::new(roles::INBOX.to_string()));
+    let role_parameter = bind.len();
+    bind.push(Box::new(args.limit + 1));
+    let limit_parameter = bind.len();
+    let sql = format!(
+        "{SUMMARY_SELECT}
+         WHERE s.thread_id IS NULL
+           AND t.id IN (
+             SELECT thread_id FROM (
+               SELECT m.thread_id AS thread_id,
+                      MAX(COALESCE(m.internal_date, m.date)) AS sort_at
+               FROM messages m
+               JOIN folders f ON f.id = m.folder_id
+               WHERE f.role = ?{role_parameter} AND m.thread_id IS NOT NULL{account_filter}
+               GROUP BY m.thread_id
+               UNION
+               SELECT m.thread_id AS thread_id,
+                      MAX(COALESCE(m.internal_date, m.date)) AS sort_at
+               FROM message_folders mf
+               JOIN folders f ON f.id = mf.folder_id
+               JOIN messages m ON m.id = mf.message_id
+               WHERE f.role = ?{role_parameter} AND m.thread_id IS NOT NULL{account_filter}
+               GROUP BY m.thread_id
+             )
+             WHERE 1=1{cursor}
+             ORDER BY sort_at DESC, thread_id DESC
+             LIMIT ?{limit_parameter}
+           )
+         ORDER BY t.last_message_at DESC, t.id DESC LIMIT ?{limit_parameter}"
+    );
+    Some((sql, bind))
 }
 
 /// Query-plan details for the exact list shape, including its cursor/filter.
@@ -1241,6 +1311,54 @@ mod tests {
         assert_eq!(row.from.email, "sender@example.com");
         assert!(!row.is_read);
         assert!(!row.is_starred);
+    }
+
+    #[test]
+    fn jmap_multi_mailbox_membership_dedupes_by_message_id() {
+        let conn = crate::db::testutil::conn();
+        crate::db::testutil::seed_account(&conn);
+        conn.execute(
+            "UPDATE accounts SET mail_protocol = 'jmap', provider = 'generic' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path, role)
+             VALUES (10, 1, 'Cities/Jackson', NULL),
+                    (11, 1, 'Action Items', NULL)",
+            [],
+        )
+        .unwrap();
+        let (_, message_id) =
+            crate::db::testutil::seed_message(&conn, "lead@example.com", "City lead", false);
+        conn.execute(
+            "UPDATE messages SET folder_id = 10 WHERE id = ?1",
+            [message_id],
+        )
+        .unwrap();
+        crate::db::repo::gmail::set_message_folders(&conn, message_id, &[10, 11]).unwrap();
+
+        let city = ListArgs {
+            folder_id: Some(10),
+            ..scope(View::All)
+        };
+        let status = ListArgs {
+            folder_id: Some(11),
+            ..scope(View::All)
+        };
+        assert_eq!(message_ids(&conn, &city), [message_id]);
+        assert_eq!(message_ids(&conn, &status), [message_id]);
+        assert_eq!(
+            message_ids(
+                &conn,
+                &ListArgs {
+                    folder_ids: Some(vec![10, 11]),
+                    ..scope(View::All)
+                }
+            ),
+            [message_id],
+            "one message in two mailboxes must not double-list"
+        );
     }
 
     #[test]

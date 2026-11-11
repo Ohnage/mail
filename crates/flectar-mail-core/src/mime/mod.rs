@@ -1872,9 +1872,56 @@ pub fn is_one_click_post(raw: &str) -> bool {
 
 /// Receiver-provided delivery hints, retained separately from visible recipients.
 /// These fields help classify mail; they are not authentication evidence.
+fn push_delivery_address(
+    recipients: &mut Vec<Address>,
+    seen: &mut std::collections::HashSet<String>,
+    raw: &str,
+) -> bool {
+    let email = raw.trim().to_ascii_lowercase();
+    let valid = email.split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && !domain.is_empty() && !domain.contains('@')
+    }) && email.len() <= 320
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control());
+    if valid && seen.insert(email.clone()) {
+        recipients.push(Address { name: None, email });
+        return recipients.len() >= 64;
+    }
+    false
+}
+
 fn collect_delivery_recipients(msg: &mail_parser::Message) -> Vec<Address> {
     let mut seen = std::collections::HashSet::new();
     let mut recipients = Vec::new();
+    // Pixelated Cities hub routing: prefer the city identity stamped on the
+    // message before generic Delivered-To / X-Original-To headers.
+    for header in msg.header_as(
+        crate::pixelated_hub::hub_header(),
+        mail_parser::HeaderForm::Addresses,
+    ) {
+        for address in collect_addrs(header.as_address()) {
+            if push_delivery_address(&mut recipients, &mut seen, &address.email) {
+                return recipients;
+            }
+        }
+    }
+    if let Some(raw) = first_raw_header(msg, crate::pixelated_hub::hub_header()) {
+        let value = raw
+            .trim()
+            .trim_matches(|c| c == '<' || c == '>' || c == '"');
+        if let Some(email) = value
+            .rsplit_once('<')
+            .and_then(|(_, rest)| rest.strip_suffix('>'))
+            .map(str::trim)
+            .filter(|email| !email.is_empty())
+            .or_else(|| {
+                let trimmed = value.trim();
+                trimmed.contains('@').then_some(trimmed)
+            })
+            && push_delivery_address(&mut recipients, &mut seen, email)
+        {
+            return recipients;
+        }
+    }
     for name in [
         "Delivered-To",
         "X-Original-To",
@@ -1882,19 +1929,9 @@ fn collect_delivery_recipients(msg: &mail_parser::Message) -> Vec<Address> {
         "X-Envelope-To",
     ] {
         for header in msg.header_as(name, mail_parser::HeaderForm::Addresses) {
-            for mut address in collect_addrs(header.as_address()) {
-                let email = address.email.trim().to_ascii_lowercase();
-                let valid = email.split_once('@').is_some_and(|(local, domain)| {
-                    !local.is_empty() && !domain.is_empty() && !domain.contains('@')
-                }) && email.len() <= 320
-                    && !email.chars().any(|c| c.is_whitespace() || c.is_control());
-                if valid && seen.insert(email.clone()) {
-                    address.email = email;
-                    address.name = None;
-                    recipients.push(address);
-                    if recipients.len() == 64 {
-                        return recipients;
-                    }
+            for address in collect_addrs(header.as_address()) {
+                if push_delivery_address(&mut recipients, &mut seen, &address.email) {
+                    return recipients;
                 }
             }
         }
@@ -3151,5 +3188,21 @@ mod delivery_recipient_tests {
     fn missing_delivery_headers_do_not_invent_mailbox_or_alias_recipients() {
         let parsed = parse_header_block(b"From: sender@example.test\r\nTo: undisclosed-recipients:;\r\nReturn-Path: alias@example.test\r\n\r\n").unwrap();
         assert!(parsed.delivery_recipients.is_empty());
+    }
+
+    #[test]
+    fn pixelated_hub_header_is_preferred_over_delivered_to() {
+        let parsed = parse_header_block(
+            b"To: hub@pixelatedcities.com\r\nDelivered-To: hub@pixelatedcities.com\r\nX-Pixelated-Hub: hub@jacksonmichigan.org\r\n\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed
+                .delivery_recipients
+                .iter()
+                .map(|address| address.email.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hub@jacksonmichigan.org", "hub@pixelatedcities.com"]
+        );
     }
 }

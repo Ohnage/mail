@@ -101,7 +101,7 @@ fn database_file(conn: &Connection) -> Option<std::path::PathBuf> {
 
 /// Record a settings mirror when a mail transaction commits, and drop it
 /// when that transaction rolls back.
-pub(crate) fn install_mirror_hooks(conn: &Connection) -> Result<()> {
+pub(crate) fn install_mirror_hooks(conn: &mut Connection) -> Result<()> {
     conn.commit_hook(Some(|| {
         crate::settings_mirror::flush_pending();
         false

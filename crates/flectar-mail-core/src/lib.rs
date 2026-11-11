@@ -33,6 +33,7 @@ pub mod mime;
 pub mod models;
 pub mod net;
 pub mod oauth;
+pub mod pixelated_hub;
 pub mod pop3;
 pub mod queue;
 pub mod recipient_match;
@@ -852,6 +853,47 @@ impl Core {
             settings = core.db.read(|conn| repo::settings::get(conn)).await?;
         }
         apply_oauth_settings(&settings);
+
+        // Pixelated Cities: show/sync hub@ only; city hubs become send-only.
+        // Settings backup runs inside repo::settings::set. Mirror-safe: the
+        // catalog version and account syncMail flag round-trip in JSON.
+        {
+            let applied = core
+                .db
+                .write(|conn| {
+                    let mut settings = repo::settings::get(conn)?;
+                    let accounts = repo::accounts::list(conn)?;
+                    let pairs = accounts
+                        .iter()
+                        .map(|account| (account.id, account.email.clone()))
+                        .collect::<Vec<_>>();
+                    let settings_changed = crate::brand_registry::migrate_pixelated_cities_hub_only(
+                        &mut settings,
+                        &pairs,
+                    );
+                    if settings_changed {
+                        repo::settings::set(conn, &settings)?;
+                    }
+                    let send_only = crate::brand_registry::pixelated_cities_send_only_account_ids(
+                        &settings, &pairs,
+                    );
+                    for account_id in send_only {
+                        let Some(mut config) = repo::accounts::get_config(conn, account_id)? else {
+                            continue;
+                        };
+                        if !config.settings.sync_mail {
+                            continue;
+                        }
+                        config.settings.sync_mail = false;
+                        repo::accounts::set_settings(conn, account_id, &config.settings)?;
+                    }
+                    Ok(settings_changed)
+                })
+                .await?;
+            if applied {
+                tracing::info!("migrated Pixelated Cities tab to hub@ sync scope");
+            }
+        }
 
         // Recover any actions orphaned mid-flight by a previous crash/kill, so a
         // send that was executing when the app died retries instead of sticking
@@ -3947,6 +3989,26 @@ impl Core {
     pub async fn list_folders(&self, account_id: Option<i64>) -> Result<Vec<FolderInfo>> {
         self.db
             .read(move |conn| repo::folders::list_info(conn, account_id))
+            .await
+    }
+
+    /// Folders for the open company tab's accounts only. Avoids reading the
+    /// full folder catalog (Gmail + empty hub trees) on every tab switch.
+    pub async fn list_folders_for_accounts(
+        &self,
+        account_ids: Vec<i64>,
+    ) -> Result<Vec<FolderInfo>> {
+        self.db
+            .read(move |conn| repo::folders::list_info_for_accounts(conn, &account_ids))
+            .await
+    }
+
+    pub async fn folder_ids_with_mail(
+        &self,
+        account_ids: Vec<i64>,
+    ) -> Result<std::collections::HashSet<i64>> {
+        self.db
+            .read(move |conn| repo::folders::folder_ids_with_mail(conn, &account_ids))
             .await
     }
 
@@ -9249,7 +9311,8 @@ impl Core {
         let tab_id = tab_id
             .map(|id| id.trim().to_owned())
             .filter(|id| !id.is_empty());
-        self.db
+        let settings = self
+            .db
             .write(move |conn| {
                 let mut settings = repo::settings::get(conn)?;
                 if let Some(id) = &tab_id
@@ -9264,7 +9327,16 @@ impl Core {
                 repo::settings::set(conn, &settings)?;
                 Ok(settings)
             })
-            .await
+            .await?;
+        if let Some(ids) = settings
+            .active_business_tab
+            .as_ref()
+            .and_then(|id| settings.business_tabs.iter().find(|tab| &tab.id == id))
+            .and_then(|tab| tab.account_ids.as_deref())
+        {
+            crate::sync::engine::note_account_focus(ids);
+        }
+        Ok(settings)
     }
 
     /// Set an account's independent icon without changing its profile identity.

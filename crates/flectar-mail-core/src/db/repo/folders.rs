@@ -219,13 +219,54 @@ pub fn list(conn: &Connection, account_id: Option<i64>) -> Result<Vec<Folder>> {
 }
 
 pub fn list_info(conn: &Connection, account_id: Option<i64>) -> Result<Vec<FolderInfo>> {
+    folder_info_rows(conn, list(conn, account_id)?)
+}
+
+/// Folder rows for a company tab: only the open tab's accounts, never the
+/// whole 14k-folder store (Gmail + empty hub trees on every other account).
+pub fn list_info_for_accounts(conn: &Connection, account_ids: &[i64]) -> Result<Vec<FolderInfo>> {
+    if account_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if let [id] = account_ids {
+        return list_info(conn, Some(*id));
+    }
+    let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let clause = super::search::account_set_clause("f.account_id", account_ids, &mut binds);
+    let sql = format!(
+        "SELECT f.id AS id, f.account_id AS account_id, f.parent_id AS parent_id,
+                f.path AS path,
+                f.delimiter AS delimiter, f.role AS role, f.uidvalidity AS uidvalidity,
+                f.uidnext AS uidnext, f.highestmodseq AS highestmodseq,
+                f.last_seen_uid AS last_seen_uid, f.backfill_cursor AS backfill_cursor,
+                f.backfill_done AS backfill_done, f.jmap_id AS jmap_id,
+                f.selectable AS selectable,
+                f.can_create_children AS can_create_children,
+                f.can_rename AS can_rename, f.can_delete AS can_delete
+         FROM folders f
+         JOIN accounts a ON a.id = f.account_id
+         WHERE {clause} AND f.missing_on_server = 0
+           AND ((a.mail_protocol = 'jmap' AND f.jmap_id IS NOT NULL)
+             OR (a.mail_protocol <> 'jmap' AND f.jmap_id IS NULL))
+         ORDER BY f.id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        binds.iter().map(|value| value.as_ref()).collect();
+    let folders = stmt
+        .query_map(params.as_slice(), from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    folder_info_rows(conn, folders)
+}
+
+fn folder_info_rows(conn: &Connection, folders: Vec<Folder>) -> Result<Vec<FolderInfo>> {
     let protocols = conn
         .prepare("SELECT id, mail_protocol FROM accounts")?
         .query_map([], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, MailProtocol>(1)?))
         })?
         .collect::<rusqlite::Result<HashMap<_, _>>>()?;
-    Ok(list(conn, account_id)?
+    Ok(folders
         .into_iter()
         .map(|f| FolderInfo {
             id: f.id,
@@ -251,6 +292,39 @@ pub fn list_info(conn: &Connection, account_id: Option<i64>) -> Result<Vec<Folde
             can_delete: f.can_delete,
         })
         .collect())
+}
+
+/// Folder ids that hold at least one message for `account_ids`. Gmail All Mail
+/// is excluded so INBOX duplicates there do not inflate the company tree.
+pub fn folder_ids_with_mail(conn: &Connection, account_ids: &[i64]) -> Result<HashSet<i64>> {
+    if account_ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let accounts = super::search::account_set_clause("m.account_id", account_ids, &mut binds);
+    let sql = format!(
+        "SELECT DISTINCT folder_id FROM (
+             SELECT m.folder_id AS folder_id
+             FROM messages m
+             JOIN folders f ON f.id = m.folder_id
+             WHERE {accounts} AND m.folder_id IS NOT NULL
+               AND COALESCE(f.role, '') != 'all'
+             UNION
+             SELECT mf.folder_id
+             FROM message_folders mf
+             JOIN messages m ON m.id = mf.message_id
+             JOIN folders f ON f.id = mf.folder_id
+             WHERE {accounts}
+               AND COALESCE(f.role, '') != 'all'
+         )"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> =
+        binds.iter().map(|value| value.as_ref()).collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().collect())
 }
 
 fn subtree_pattern(prefix: &str, delimiter: &str) -> String {

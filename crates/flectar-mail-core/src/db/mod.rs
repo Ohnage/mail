@@ -66,7 +66,7 @@ enum StoreKind {
     Files,
 }
 
-fn prepare_connection(conn: &Connection, kind: StoreKind, query_only: bool) -> Result<()> {
+fn prepare_connection(conn: &mut Connection, kind: StoreKind, query_only: bool) -> Result<()> {
     if query_only {
         configure_query_connection(conn, kind)?;
     } else if matches!(kind, StoreKind::Mail) {
@@ -102,8 +102,8 @@ fn spawn_conn_thread(
     query_only: bool,
 ) -> Result<mpsc::Sender<Command>> {
     let (tx, mut rx) = mpsc::channel::<Command>(JOB_QUEUE_CAPACITY);
-    let conn = open_connection(&path, kind)?;
-    prepare_connection(&conn, kind, query_only)?;
+    let mut conn = open_connection(&path, kind)?;
+    prepare_connection(&mut conn, kind, query_only)?;
     std::thread::Builder::new()
         .name(format!("flectar-mail-db-{name}"))
         .spawn(move || {
@@ -122,8 +122,8 @@ fn spawn_conn_thread(
                     Command::Run(job) => {
                         let result = (|| {
                             if connection.is_none() {
-                                let conn = open_connection(&path, kind)?;
-                                prepare_connection(&conn, kind, query_only)?;
+                                let mut conn = open_connection(&path, kind)?;
+                                prepare_connection(&mut conn, kind, query_only)?;
                                 connection = Some(conn);
                             }
                             Ok(())

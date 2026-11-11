@@ -417,6 +417,19 @@ pub fn spawn_account(ctx: SyncCtx, config: AccountConfig) -> AccountHandle {
             None,
             None,
         ),
+        // Send-only IMAP/POP3: keep SMTP submission, never poll the mailbox.
+        MailProtocol::Imap if !config.settings.sync_mail => {
+            let (send_tx, send_rx) = mpsc::channel(1);
+            let joins = vec![
+                tokio::spawn(run_send_dispatcher(ctx, config, send_rx, tx.clone())),
+                tokio::spawn(drain_send_only_sync_commands(rx)),
+                tokio::spawn(async move {
+                    let mut body_rx = body_rx;
+                    while body_rx.recv().await.is_some() {}
+                }),
+            ];
+            (joins, Some(send_tx), None)
+        }
         MailProtocol::Imap => {
             let (send_tx, send_rx) = mpsc::channel(1);
             // These carry idempotent wakeups rather than work. A single
@@ -452,6 +465,18 @@ pub fn spawn_account(ctx: SyncCtx, config: AccountConfig) -> AccountHandle {
                     pool_tx,
                     settings_rx,
                 )),
+            ];
+            (joins, Some(send_tx), None)
+        }
+        MailProtocol::Pop3 if !config.settings.sync_mail => {
+            let (send_tx, send_rx) = mpsc::channel(1);
+            let joins = vec![
+                tokio::spawn(run_send_dispatcher(ctx, config, send_rx, tx.clone())),
+                tokio::spawn(drain_send_only_sync_commands(rx)),
+                tokio::spawn(async move {
+                    let mut body_rx = body_rx;
+                    while body_rx.recv().await.is_some() {}
+                }),
             ];
             (joins, Some(send_tx), None)
         }
@@ -497,6 +522,22 @@ pub fn spawn_account(ctx: SyncCtx, config: AccountConfig) -> AccountHandle {
             .iter()
             .map(tokio::task::JoinHandle::abort_handle)
             .collect(),
+    }
+}
+
+async fn drain_send_only_sync_commands(mut rx: mpsc::Receiver<SyncCmd>) {
+    while let Some(cmd) = rx.recv().await {
+        match cmd {
+            SyncCmd::Shutdown => return,
+            SyncCmd::SyncNow {
+                complete: Some(done),
+            } => {
+                let _ = done.send(Ok(()));
+            }
+            SyncCmd::SyncNow { complete: None }
+            | SyncCmd::RunActions
+            | SyncCmd::FetchBody { .. } => {}
+        }
     }
 }
 
@@ -600,6 +641,76 @@ pub(crate) async fn configured_sync_interval(db: &Db) -> std::time::Duration {
         _ => 5,
     };
     std::time::Duration::from_secs(minutes * 60)
+}
+
+/// Quiet accounts back off from the base poll interval so ~35 mailboxes do not
+/// all hit the network on the same cadence. Active accounts (mail within a day)
+/// keep the configured interval; silence stretches it exponentially up to 6h.
+/// Push/IDLE and Sync Now still wake immediately.
+pub fn tiered_sync_interval(
+    base: std::time::Duration,
+    quiet_for: std::time::Duration,
+) -> std::time::Duration {
+    const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    const MAX: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
+    let multiplier = if quiet_for < DAY {
+        1
+    } else if quiet_for < DAY * 3 {
+        4
+    } else if quiet_for < DAY * 7 {
+        12
+    } else {
+        48
+    };
+    base.saturating_mul(multiplier).min(MAX).max(base)
+}
+
+static ACCOUNT_FOCUS_MS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<i64, i64>>,
+> = std::sync::OnceLock::new();
+
+/// Reset quiet backoff when the user opens a company tab / account.
+pub fn note_account_focus(account_ids: &[i64]) {
+    if account_ids.is_empty() {
+        return;
+    }
+    let now = crate::models::now_ms();
+    let mut map = ACCOUNT_FOCUS_MS
+        .get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for id in account_ids {
+        map.insert(*id, now);
+    }
+}
+
+fn focused_quiet_ms(account_id: i64, now: i64) -> Option<i64> {
+    let map = ACCOUNT_FOCUS_MS.get()?.lock().ok()?;
+    let focused = *map.get(&account_id)?;
+    Some((now - focused).max(0))
+}
+
+/// Base poll interval, stretched when this account has seen no recent mail and
+/// the user has not opened it recently.
+pub(crate) async fn configured_sync_interval_for(db: &Db, account_id: i64) -> std::time::Duration {
+    let base = configured_sync_interval(db).await;
+    let quiet_ms = db
+        .read(move |conn| {
+            let now = crate::models::now_ms();
+            let newest: Option<i64> = conn
+                .query_row(
+                    "SELECT MAX(date) FROM messages WHERE account_id = ?1",
+                    [account_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let from_mail = newest.map(|date| (now - date).max(0)).unwrap_or(now);
+            let from_focus = focused_quiet_ms(account_id, now).unwrap_or(i64::MAX);
+            Ok(from_mail.min(from_focus))
+        })
+        .await
+        .unwrap_or(0);
+    tiered_sync_interval(base, std::time::Duration::from_millis(quiet_ms as u64))
 }
 
 /// Dedicated reader connection. Owns its own IMAP session and services only
@@ -1103,7 +1214,8 @@ async fn run_actor(
         );
         // Pacing for the next cycle; also applies after errors so a flaky
         // server isn't hammered.
-        cycle_due = tokio::time::Instant::now() + configured_sync_interval(&ctx.db).await;
+        cycle_due =
+            tokio::time::Instant::now() + configured_sync_interval_for(&ctx.db, account_id).await;
         let mut rerun_immediately = false;
         match cycle_result {
             Ok(work_remaining) => {
@@ -1860,20 +1972,22 @@ async fn sync_folder(
                 })
                 .await?;
         }
+        // New UIDs were already fetched above. Search every UID when the local
+        // count and the server's EXISTS disagree. Flag/expunge polling stays on
+        // the heavy cadence, but an EXISTS drop (mail filed out of Inbox on
+        // another client) must clear stale local rows without waiting ~5 cycles.
+        let folder_id = fresh_folder.id;
+        let local_uids = ctx
+            .db
+            .read(move |conn| repo::messages::live_uid_count(conn, folder_id))
+            .await?;
+        let needs_reconcile = mailbox_needs_full_reconcile(local_uids, selected.exists);
+        let exists_dropped = local_uids > i64::from(selected.exists);
         if heavy {
             reconcile_flags(ctx, session, &fresh_folder).await?;
-            // New UIDs were already fetched above. Search every UID only when
-            // the local count and the server's EXISTS disagree, which is how
-            // deletions and gaps show up. An unchanged mailbox must not dump
-            // its UID set on every pass.
-            let folder_id = fresh_folder.id;
-            let local_uids = ctx
-                .db
-                .read(move |conn| repo::messages::live_uid_count(conn, folder_id))
-                .await?;
-            if mailbox_needs_full_reconcile(local_uids, selected.exists) {
-                reconcile_mailbox(ctx, config, session, &fresh_folder).await?;
-            }
+        }
+        if heavy && needs_reconcile || exists_dropped {
+            reconcile_mailbox(ctx, config, session, &fresh_folder).await?;
         }
         // Historical backfill (extending the window downward) also runs on the
         // history connection; just make sure it's awake.

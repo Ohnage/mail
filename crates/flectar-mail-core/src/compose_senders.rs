@@ -201,6 +201,18 @@ pub fn compose_groups(
 
 /// The account that may submit `email`, when a group offers it.
 pub fn transport_account(groups: &[ComposeGroup], email: &str) -> Option<i64> {
+    // City From identities submit through hub@'s SMTP (Addendum 5), never
+    // through a separate city mailbox account.
+    if crate::pixelated_hub::is_city_from_address(email)
+        && let Some(hub) = groups.iter().find_map(|group| {
+            group
+                .senders
+                .iter()
+                .find(|sender| crate::company_view::is_pixelated_cities_hub(&sender.email))
+        })
+    {
+        return Some(hub.account_id);
+    }
     groups.iter().find_map(|group| {
         group
             .senders
@@ -415,11 +427,7 @@ impl<'a> HostedAddressIndex<'a> {
         addresses.into_iter().collect()
     }
 
-    fn for_mailboxes(
-        &self,
-        account_ids: &[i64],
-        account_emails: &[(i64, String)],
-    ) -> Vec<String> {
+    fn for_mailboxes(&self, account_ids: &[i64], account_emails: &[(i64, String)]) -> Vec<String> {
         let mut addresses = BTreeSet::new();
         for id in account_ids {
             let email = account_emails
@@ -835,6 +843,66 @@ mod tests {
             "a wildcard does not offer an address the catalog has never seen"
         );
         assert!(transport_account(&groups, "*@mentinkmemorial.org").is_none());
+    }
+
+    #[test]
+    fn pixelated_cities_hub_tab_lists_city_from_identities() {
+        let mut tabs = vec![tab(
+            "pixelated-cities",
+            "Pixelated Cities",
+            &["pixelated-cities"],
+            &[],
+        )];
+        tabs[0].account_ids = Some(vec![10]);
+        let views = vec![
+            view("hub@pixelatedcities.com", "pixelated-cities"),
+            view("hub@jacksonmichigan.org", "pixelated-cities"),
+            view("hub@annarbormichigan.org", "pixelated-cities"),
+        ];
+        let rules = vec![AddressRule {
+            profile_id: "pixelated-cities".into(),
+            addresses: Vec::new(),
+            domains: vec![
+                "pixelatedcities.com".into(),
+                "jacksonmichigan.org".into(),
+                "annarbormichigan.org".into(),
+            ],
+        }];
+        let accounts = vec![ComposeAccount {
+            id: 10,
+            email: "hub@pixelatedcities.com".into(),
+            profile_id: Some("pixelated-cities".into()),
+            identities: vec![
+                identity(10, "hub@pixelatedcities.com", "accepted"),
+                identity(10, "hub@jacksonmichigan.org", "accepted"),
+                identity(10, "hub@annarbormichigan.org", "accepted"),
+            ],
+        }];
+        let profiles = vec![MailProfile {
+            id: "pixelated-cities".into(),
+            name: "Pixelated Cities".into(),
+            color: "#8b5cf6".into(),
+            account_ids: vec![10],
+            logo: None,
+        }];
+        let groups = compose_groups(&tabs, &views, &rules, &accounts, &profiles, &[]);
+        let pc = group(&groups, "pixelated-cities");
+        assert_eq!(
+            emails(pc),
+            vec![
+                "hub@annarbormichigan.org",
+                "hub@jacksonmichigan.org",
+                "hub@pixelatedcities.com",
+            ]
+        );
+        assert_eq!(
+            transport_account(&groups, "hub@jacksonmichigan.org"),
+            Some(10),
+            "city From authenticates as hub@"
+        );
+        assert!(crate::pixelated_hub::is_city_from_address(
+            "hub@jacksonmichigan.org"
+        ));
     }
 
     #[test]

@@ -53,7 +53,7 @@ webpki-roots = "1"
 futures = "0.3"
 
 # storage
-rusqlite = { version = "0.40", features = ["backup", "bundled", "functions", "hooks"] }
+rusqlite = { version = "0.41", features = ["backup", "bundled", "functions", "hooks"] }
 
 # Local embeddings use Candle's CPU backend only: no MKL, CUDA, Metal, or
 # Accelerate runtime. Match Candle's tokenizer version so the opt-in feature

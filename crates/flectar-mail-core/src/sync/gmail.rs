@@ -7,7 +7,7 @@
 //! pending-action queue remain provider-neutral and fully offline-first.
 
 use super::engine::{
-    PriorityFetchCmd, SyncCmd, SyncCtx, configured_sync_interval, emit_sync_status, set_state,
+    PriorityFetchCmd, SyncCmd, SyncCtx, configured_sync_interval_for, emit_sync_status, set_state,
     set_state_error,
 };
 use crate::db::repo::{self, messages::NewMessage};
@@ -3958,17 +3958,25 @@ async fn run_actor(
 
         let _sync_slot = super::engine::reserve_account_sync().await;
         set_state(&ctx, account_id, "syncing").await;
-        let mail_history = settings_rx.borrow_and_update().mail_history;
+        let settings = settings_rx.borrow_and_update().clone();
+        let mail_history = settings.mail_history;
+        let sync_mail = settings.sync_mail;
         let result = async {
             // Provider definitions must exist before replaying actions. This is
             // important on a new account where the user can compose before the
             // first metadata page creates Sent, Drafts and All Mail locally.
             if refresh_labels {
                 sync_sender_identities(&ctx, &config, &api).await?;
-                sync_labels(&ctx, &config, &api).await?;
+                if sync_mail {
+                    sync_labels(&ctx, &config, &api).await?;
+                }
             }
             let actions_remaining = execute_actions(&ctx, &config, &api).await?;
-            let backfill_done = sync_once(&ctx, &config, &api, false, mail_history).await?;
+            let backfill_done = if sync_mail {
+                sync_once(&ctx, &config, &api, false, mail_history).await?
+            } else {
+                true
+            };
             Ok::<_, CoreError>((actions_remaining, backfill_done))
         }
         .await;
@@ -4006,7 +4014,7 @@ async fn run_actor(
                     let _ = waiter.send(Ok(()));
                 }
                 let delay = if backfill_done {
-                    configured_sync_interval(&ctx.db).await
+                    configured_sync_interval_for(&ctx.db, account_id).await
                 } else {
                     BACKFILL_INTERVAL
                 };

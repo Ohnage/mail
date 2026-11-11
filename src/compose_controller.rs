@@ -79,11 +79,21 @@ pub(super) fn prepare_message_compose(
         // Like a reply, forward from the address the message reached.
         let sender_email = reply_sender(
             &source.sender_identities,
-            source.to.iter().chain(source.cc.iter()),
+            source
+                .delivery_recipients
+                .iter()
+                .chain(source.to.iter())
+                .chain(source.cc.iter()),
         )
         .unwrap_or_else(|| source.default_sender_email.clone());
+        let account_id = source
+            .sender_identities
+            .iter()
+            .find(|identity| identity.email.eq_ignore_ascii_case(&sender_email))
+            .map(|identity| identity.account_id)
+            .unwrap_or(source.account_id);
         return Ok(PreparedMessageCompose {
-            account_id: source.account_id,
+            account_id,
             sender_email,
             to: String::new(),
             cc: String::new(),
@@ -98,15 +108,24 @@ pub(super) fn prepare_message_compose(
     }
 
     let is_own = |email: &str| is_own_address(&source.sender_identities, email);
+    // Delivery headers first so hub-routed city mail defaults From to the
+    // city address, not hub@, when both appear on the message.
     let sender_email = reply_sender(
         &source.sender_identities,
         source
-            .to
+            .delivery_recipients
             .iter()
+            .chain(source.to.iter())
             .chain(source.cc.iter())
             .chain(std::iter::once(&source.from)),
     )
     .unwrap_or_else(|| source.default_sender_email.clone());
+    let account_id = source
+        .sender_identities
+        .iter()
+        .find(|identity| identity.email.eq_ignore_ascii_case(&sender_email))
+        .map(|identity| identity.account_id)
+        .unwrap_or(source.account_id);
     let candidates = std::iter::once(&source.from)
         .filter(|address| !is_own(&address.email))
         .chain(source.to.iter())
@@ -143,7 +162,7 @@ pub(super) fn prepare_message_compose(
     }
 
     Ok(PreparedMessageCompose {
-        account_id: source.account_id,
+        account_id,
         sender_email,
         to: format_address(primary),
         cc,
@@ -641,6 +660,7 @@ mod tests {
                 address("Jon Duplicate", "JON@example.com"),
                 address("Lena", "lena@example.com"),
             ],
+            delivery_recipients: Vec::new(),
             subject: "Launch plan".to_owned(),
             date: 1_777_000_000_000,
             text_body: "First line\nSecond line".to_owned(),
@@ -663,6 +683,49 @@ mod tests {
             normalize_compose_paragraphs("a\n\n\n\nb\n\nc"),
             "a\n\nb\n\nc"
         );
+    }
+
+    #[test]
+    fn reply_from_defaults_to_x_pixelated_hub_city_identity() {
+        let mut source = source();
+        source.account_id = 10;
+        source.account_email = "hub@pixelatedcities.com".into();
+        source.default_sender_email = "hub@pixelatedcities.com".into();
+        source.sender_identities = vec![
+            SenderIdentity {
+                account_id: 10,
+                email: "hub@pixelatedcities.com".into(),
+                display_name: None,
+                reply_to_email: None,
+                is_primary: true,
+                is_provider_default: true,
+                verification_status: "accepted".into(),
+                last_synced_at: 1,
+                source: SenderIdentitySource::Provider,
+                delivery_status: SenderDeliveryStatus::Unknown,
+                delivery_error: None,
+            },
+            SenderIdentity {
+                account_id: 10,
+                email: "hub@jacksonmichigan.org".into(),
+                display_name: Some("Jackson, MI".into()),
+                reply_to_email: None,
+                is_primary: false,
+                is_provider_default: false,
+                verification_status: "accepted".into(),
+                last_synced_at: 1,
+                source: SenderIdentitySource::Provider,
+                delivery_status: SenderDeliveryStatus::Unknown,
+                delivery_error: None,
+            },
+        ];
+        source.to = vec![address("", "hub@pixelatedcities.com")];
+        // X-Pixelated-Hub lands first in delivery_recipients.
+        source.delivery_recipients = vec![address("", "hub@jacksonmichigan.org")];
+        source.from = address("Lead", "lead@example.com");
+        let prepared = prepare_message_compose(&source, "reply", "", english).unwrap();
+        assert_eq!(prepared.sender_email, "hub@jacksonmichigan.org");
+        assert_eq!(prepared.account_id, 10);
     }
 
     #[test]

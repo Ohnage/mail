@@ -356,6 +356,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
             collapsed_folders,
             &company_ids,
             &state.folder_unreads,
+            &state.folders_with_mail,
             state.inbox_count,
             &tab_heading,
             folder_color,
@@ -371,6 +372,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 )
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
+            filtering,
         );
         state.company_mailboxes = company_mailboxes;
         if filtering {
@@ -877,13 +879,15 @@ fn make_company_sidebar_rows(
     collapsed_folders: &HashSet<i64>,
     company_ids: &[i64],
     folder_unreads: &HashMap<i64, i64>,
+    folders_with_mail: &HashSet<i64>,
     inbox_count: usize,
     heading_label: &str,
     folder_color: Option<slint::Color>,
     pinned_tags: &[String],
+    show_empty_folders: bool,
 ) -> (Vec<SidebarRow>, Vec<MailboxEntry>) {
     use SidebarRowKind as Kind;
-    use flectar_mail_core::company_view::{FolderLeaf, merge_folders, merge_tags};
+    use flectar_mail_core::company_view::{FolderLeaf, merge_folders, merge_tags, prune_empty_folders};
 
     let company = company_ids.iter().copied().collect::<HashSet<_>>();
     let mut heading = row(Kind::UnifiedHeading, "company-heading");
@@ -911,6 +915,12 @@ fn make_company_sidebar_rows(
     let tag_copies = company_tag_copies(source_labels, &company);
     let merged_tags = merge_tags(&tag_copies);
     rows.extend(pinned_tag_rows(&merged_tags, pinned_tags));
+    rows.push(section(Kind::AccountsHeading, "company-folders", collapsed));
+    let folders_open = !collapsed.contains("company-folders");
+    // Collapsed company folders skip merge over thousands of empty hub paths.
+    let mut company_mailboxes = Vec::new();
+    let mut hidden_depth = None;
+    if folders_open {
     let leaves = mailboxes
         .iter()
         .filter(|mailbox| {
@@ -919,22 +929,24 @@ fn make_company_sidebar_rows(
                 && company.contains(&i64::from(mailbox.account_id))
                 && !mailbox.detail.is_empty()
         })
-        .map(|mailbox| FolderLeaf {
-            account_id: i64::from(mailbox.account_id),
-            folder_id: i64::from(mailbox.folder_id),
-            path: mailbox.detail.to_string(),
-            unread: folder_unreads
-                .get(&i64::from(mailbox.folder_id))
-                .copied()
-                .unwrap_or(0),
+        .map(|mailbox| {
+            let folder_id = i64::from(mailbox.folder_id);
+            FolderLeaf {
+                account_id: i64::from(mailbox.account_id),
+                folder_id,
+                path: mailbox.detail.to_string(),
+                unread: folder_unreads.get(&folder_id).copied().unwrap_or(0),
+                has_mail: folders_with_mail.contains(&folder_id),
+            }
         })
         .collect::<Vec<_>>();
     let merged = merge_folders(&leaves);
-    let mut company_mailboxes = Vec::with_capacity(merged.len());
-    rows.push(section(Kind::AccountsHeading, "company-folders", collapsed));
-    let folders_open = !collapsed.contains("company-folders");
-    let mut hidden_depth = None;
-    if folders_open {
+    let merged = if show_empty_folders {
+        merged
+    } else {
+        prune_empty_folders(merged)
+    };
+    company_mailboxes.reserve(merged.len());
     for node in &merged {
         if let Some(depth) = hidden_depth {
             if node.depth > depth {
@@ -1605,10 +1617,12 @@ mod tests {
             &HashSet::new(),
             &[1],
             &HashMap::new(),
+            &HashSet::new(),
             0,
             "Company",
             None,
             &[],
+            true,
         );
         assert!(
             rows.iter()
@@ -1640,10 +1654,12 @@ mod tests {
             &HashSet::new(),
             &[1],
             &HashMap::new(),
+            &HashSet::new(),
             0,
             "Company",
             None,
             &[],
+            true,
         );
         assert!(
             collapsed_rows
@@ -1710,10 +1726,12 @@ mod tests {
             &HashSet::new(),
             &[1],
             &HashMap::new(),
+            &HashSet::new(),
             0,
             "TM",
             Some(tint),
             &[],
+            true,
         );
         assert_eq!(
             rows.iter()
@@ -2157,10 +2175,12 @@ mod tests {
             &HashSet::new(),
             &[1],
             &HashMap::new(),
+            &HashSet::new(),
             0,
             "Company",
             None,
             &["needs-action".into()],
+            true,
         );
         let keys = rows
             .iter()

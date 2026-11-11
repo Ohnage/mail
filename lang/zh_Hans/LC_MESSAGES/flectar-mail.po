@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-11 18:05+0000\n"
+"POT-Creation-Date: 2026-11-11 19:04+0000\n"
 "PO-Revision-Date: 2026-10-15 02:03+0000\n"
 "Last-Translator: Taivas Jumala <taivas_jumala@yafoss.org>\n"
 "Language-Team: Chinese (Simplified Han script) <https://"
@@ -13,33 +13,6 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 "X-Generator: Weblate 2026.9.1\n"
-
-#: ui/app-icon.slint:18
-msgid "Orange"
-msgstr ""
-
-#: ui/app-icon.slint:19
-msgid "Graphite"
-msgstr ""
-
-#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
-#: ui/dialogs/settings-dialog.slint:1086
-msgid "Light"
-msgstr "浅色"
-
-#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
-msgid "Blue"
-msgstr "蓝色"
-
-#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
-#: ui/views/mail-reading-pane.slint:2173
-msgid "Green"
-msgstr "绿色"
-
-#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
-#: ui/views/mail-reading-pane.slint:2169
-msgid "Purple"
-msgstr "紫色"
 
 #: ui/app.slint:98
 msgctxt "abbreviated month in a date"
@@ -1917,6 +1890,33 @@ msgstr "重试"
 msgid "Copy diagnostics"
 msgstr "复制诊断信息"
 
+#: ui/app-icon.slint:18
+msgid "Orange"
+msgstr ""
+
+#: ui/app-icon.slint:19
+msgid "Graphite"
+msgstr ""
+
+#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
+#: ui/dialogs/settings-dialog.slint:1086
+msgid "Light"
+msgstr "浅色"
+
+#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
+msgid "Blue"
+msgstr "蓝色"
+
+#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
+#: ui/views/mail-reading-pane.slint:2173
+msgid "Green"
+msgstr "绿色"
+
+#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
+#: ui/views/mail-reading-pane.slint:2169
+msgid "Purple"
+msgstr "紫色"
+
 #: ui/components/account-calendars.slint:24
 msgid "Reconnect calendar"
 msgstr ""
@@ -2574,76 +2574,13 @@ msgstr ""
 msgid "Add account"
 msgstr "添加账户"
 
-#: ui/components/calendar-agenda.slint:39
-msgid "Filter calendars · {} hidden"
-msgstr "筛选日历 · 已隐藏 {} 个"
-
-#: ui/components/calendar-agenda.slint:39
-msgid "Filter calendars"
-msgstr "筛选日历"
-
-#: ui/components/calendar-agenda.slint:67 ui/components/calendar.slint:562
-msgid "Show calendars"
-msgstr "显示日历"
-
-#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
-#: ui/dialogs/settings-dialog.slint:1770
-msgid "Reset"
-msgstr "重置"
-
-#: ui/components/calendar-agenda.slint:70
-msgid "Filters only affect this agenda."
-msgstr "筛选仅影响此日程视图。"
-
-#: ui/components/calendar-agenda.slint:212 ui/components/calendar.slint:582
-#: ui/views/mail-list-pane.slint:647
-msgid "Today"
-msgstr "今天"
-
-#: ui/components/calendar-agenda.slint:214 ui/components/calendar.slint:596
-msgid "{n} event"
-msgid_plural "{n} events"
-msgstr[0] "{n} 个活动"
-
-#: ui/components/calendar-agenda.slint:237
-msgid "Cancelled"
-msgstr "已取消"
-
-#: ui/components/calendar-agenda.slint:257 ui/components/calendar.slint:65
-#: ui/components/calendar.slint:725
+#: ui/components/calendar.slint:65 ui/components/calendar.slint:273
+#: ui/components/calendar.slint:867
 msgid "View details for {}"
 msgstr "查看 {} 的详情"
 
-#: ui/components/calendar-agenda.slint:268
-msgid "Now · {}"
-msgstr "现在 · {}"
-
-#: ui/components/calendar-agenda.slint:271
-msgid "Nothing else is scheduled this month."
-msgstr "本月没有其他已安排的活动。"
-
-#: ui/components/calendar-agenda.slint:285
-msgid "No events match your filters"
-msgstr "没有符合筛选条件的活动"
-
-#: ui/components/calendar-agenda.slint:285
-msgid "No events this month"
-msgstr "本月没有活动"
-
-#: ui/components/calendar-agenda.slint:286
-msgid "Show more calendars to see their events."
-msgstr "显示更多日历以查看其中的活动。"
-
-#: ui/components/calendar-agenda.slint:286
-msgid "Create an event to start planning your month."
-msgstr "创建活动，开始规划本月日程。"
-
-#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
-msgid "Reset filters"
-msgstr "重置筛选条件"
-
-#: ui/components/calendar-agenda.slint:290 ui/components/calendar.slint:114
-#: ui/components/calendar.slint:757
+#: ui/components/calendar.slint:114 ui/components/calendar.slint:573
+#: ui/components/calendar-agenda.slint:290
 msgid "New event"
 msgstr "新建日程"
 
@@ -2753,6 +2690,10 @@ msgstr "本地"
 msgid "ALL DAY"
 msgstr "全天"
 
+#: ui/components/calendar.slint:562 ui/components/calendar-agenda.slint:67
+msgid "Show calendars"
+msgstr "显示日历"
+
 #: ui/components/calendar.slint:562
 msgid "Hide calendars"
 msgstr "隐藏日历"
@@ -2777,9 +2718,19 @@ msgstr "月"
 msgid "Agenda"
 msgstr "日程"
 
+#: ui/components/calendar.slint:582 ui/components/calendar.slint:772
+#: ui/views/mail-list-pane.slint:647
+msgid "Today"
+msgstr "今天"
+
 #: ui/components/calendar.slint:595 ui/components/calendar.slint:782
 msgid "Local time · {}"
 msgstr "本地时间 · {}"
+
+#: ui/components/calendar.slint:596 ui/components/calendar-agenda.slint:214
+msgid "{n} event"
+msgid_plural "{n} events"
+msgstr[0] "{n} 个活动"
 
 #: ui/components/calendar.slint:841
 msgid "Agenda · {}"
@@ -2804,6 +2755,55 @@ msgstr "删除日程"
 #: ui/components/calendar.slint:949
 msgid "Keep event"
 msgstr "保留日程"
+
+#: ui/components/calendar-agenda.slint:39
+msgid "Filter calendars · {} hidden"
+msgstr "筛选日历 · 已隐藏 {} 个"
+
+#: ui/components/calendar-agenda.slint:39
+msgid "Filter calendars"
+msgstr "筛选日历"
+
+#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
+#: ui/dialogs/settings-dialog.slint:1770
+msgid "Reset"
+msgstr "重置"
+
+#: ui/components/calendar-agenda.slint:70
+msgid "Filters only affect this agenda."
+msgstr "筛选仅影响此日程视图。"
+
+#: ui/components/calendar-agenda.slint:237
+msgid "Cancelled"
+msgstr "已取消"
+
+#: ui/components/calendar-agenda.slint:268
+msgid "Now · {}"
+msgstr "现在 · {}"
+
+#: ui/components/calendar-agenda.slint:271
+msgid "Nothing else is scheduled this month."
+msgstr "本月没有其他已安排的活动。"
+
+#: ui/components/calendar-agenda.slint:285
+msgid "No events match your filters"
+msgstr "没有符合筛选条件的活动"
+
+#: ui/components/calendar-agenda.slint:285
+msgid "No events this month"
+msgstr "本月没有活动"
+
+#: ui/components/calendar-agenda.slint:286
+msgid "Show more calendars to see their events."
+msgstr "显示更多日历以查看其中的活动。"
+
+#: ui/components/calendar-agenda.slint:286
+msgid "Create an event to start planning your month."
+msgstr "创建活动，开始规划本月日程。"
+
+#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
+msgid "Reset filters"
+msgstr "重置筛选条件"
 
 #: ui/components/composer-actions.slint:51
 msgid "Bold · Ctrl+B"
@@ -3366,74 +3366,6 @@ msgstr ""
 msgid "{}, {}"
 msgstr "{}，{}"
 
-#: ui/components/sidebar-controls.slint:197
-msgid "Collapse label"
-msgstr "折叠标签"
-
-#: ui/components/sidebar-controls.slint:197
-msgid "Expand label"
-msgstr "展开标签"
-
-#: ui/components/sidebar-controls.slint:198
-msgid "Collapse folder"
-msgstr "折叠文件夹"
-
-#: ui/components/sidebar-controls.slint:198
-msgid "Expand folder"
-msgstr "展开文件夹"
-
-#: ui/components/sidebar-controls.slint:213
-msgid "New subfolder"
-msgstr "新建子文件夹"
-
-#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
-msgid "Rename folder"
-msgstr "重命名文件夹"
-
-#: ui/components/sidebar-controls.slint:225
-msgid "Move to top level"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:231
-msgid "Move into folder…"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:237
-msgid "Delete folder"
-msgstr "删除文件夹"
-
-#: ui/components/sidebar-controls.slint:250
-msgid "Empty Trash…"
-msgstr "清空回收站…"
-
-#: ui/components/sidebar-controls.slint:262
-msgid "New nested label"
-msgstr "新建嵌套标签"
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Remove from folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Add to folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:276
-msgid "Rename global label"
-msgstr "重命名全局标签"
-
-#: ui/components/sidebar-controls.slint:276
-msgid "Rename label in {}"
-msgstr "重命名 {} 中的标签"
-
-#: ui/components/sidebar-controls.slint:281
-msgid "Delete global label"
-msgstr "删除全局标签"
-
-#: ui/components/sidebar-controls.slint:281
-msgid "Delete label from {}"
-msgstr "删除 {} 中的标签"
-
 #: ui/components/sidebar.slint:121 ui/views/mail-list-pane.slint:1514
 msgid "New email"
 msgstr "新建邮件"
@@ -3520,6 +3452,74 @@ msgstr "新建标签"
 #: ui/components/sidebar.slint:796
 msgid "No folders found"
 msgstr "未找到文件夹"
+
+#: ui/components/sidebar-controls.slint:197
+msgid "Collapse label"
+msgstr "折叠标签"
+
+#: ui/components/sidebar-controls.slint:197
+msgid "Expand label"
+msgstr "展开标签"
+
+#: ui/components/sidebar-controls.slint:198
+msgid "Collapse folder"
+msgstr "折叠文件夹"
+
+#: ui/components/sidebar-controls.slint:198
+msgid "Expand folder"
+msgstr "展开文件夹"
+
+#: ui/components/sidebar-controls.slint:213
+msgid "New subfolder"
+msgstr "新建子文件夹"
+
+#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
+msgid "Rename folder"
+msgstr "重命名文件夹"
+
+#: ui/components/sidebar-controls.slint:225
+msgid "Move to top level"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:231
+msgid "Move into folder…"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:237
+msgid "Delete folder"
+msgstr "删除文件夹"
+
+#: ui/components/sidebar-controls.slint:250
+msgid "Empty Trash…"
+msgstr "清空回收站…"
+
+#: ui/components/sidebar-controls.slint:262
+msgid "New nested label"
+msgstr "新建嵌套标签"
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Remove from folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Add to folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:276
+msgid "Rename global label"
+msgstr "重命名全局标签"
+
+#: ui/components/sidebar-controls.slint:276
+msgid "Rename label in {}"
+msgstr "重命名 {} 中的标签"
+
+#: ui/components/sidebar-controls.slint:281
+msgid "Delete global label"
+msgstr "删除全局标签"
+
+#: ui/components/sidebar-controls.slint:281
+msgid "Delete label from {}"
+msgstr "删除 {} 中的标签"
 
 #: ui/components/tab-overview.slint:18
 msgid "Show tabs"

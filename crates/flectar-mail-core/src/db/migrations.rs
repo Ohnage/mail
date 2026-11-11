@@ -43,6 +43,7 @@ const MIGRATIONS: &[Migration] = &[
     Migration::Plain(include_str!("migrations/024_delivery_recipients.sql")),
     Migration::Plain(include_str!("migrations/025_message_list_indexes.sql")),
     Migration::Plain(include_str!("migrations/026_uncached_body_index.sql")),
+    Migration::Plain(include_str!("migrations/027_inbox_badge_indexes.sql")),
 ];
 pub const LATEST_VERSION: i64 = MIGRATIONS.len() as i64;
 
@@ -407,6 +408,11 @@ mod tests {
             index_columns("idx_threads_unread"),
             ["account_id", "starred_count"]
         );
+        assert_eq!(
+            index_columns("idx_messages_folder_unread"),
+            ["folder_id", "account_id", "thread_id"]
+        );
+        assert_eq!(index_columns("idx_folders_role"), ["role"]);
 
         for forbidden in [
             "calendar_events",

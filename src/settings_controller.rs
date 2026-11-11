@@ -23,7 +23,7 @@ fn apply_account_presentation_settings(
         state.load_saved_sidebar_collapse(settings);
     }
     app.set_show_message_preview(settings.show_message_preview);
-    refresh_connected_accounts(app, state);
+    refresh_connected_accounts_with(app, state, true, true);
     refresh_rows_only(app, state, runtime);
     // A profile change can change which accounts the mail view shows.
     app.invoke_mail_profile_changed();
@@ -1273,15 +1273,30 @@ pub(super) fn register_settings_preference_callbacks(
         }
         // The open tab is already in memory. Paint it and read the local page
         // for that company without rewriting the receiving catalog on this thread.
+        let switch_started = std::time::Instant::now();
         {
             let mut state = state_for_tab.borrow_mut();
             state.account_presentation.active_business_tab = requested.clone();
             if requested.is_some() {
                 state.account_presentation.active_profile = None;
             }
+            state.account_presentation.invalidate_scope_cache();
         }
-        refresh_connected_accounts(&app, &state_for_tab);
+        // Never rebuild accounts / 28k aliases / preferences on a tab click.
+        // Only the five tab chips need an active-flag paint before the mail
+        // profile handler swaps scope and loads local rows.
+        {
+            let state = state_for_tab.borrow();
+            crate::account_controller::paint_business_tabs(&app, &state.account_presentation);
+        }
         app.invoke_mail_profile_changed();
+        let ui_ms = switch_started.elapsed().as_millis();
+        crate::ui_perf::log_tab_switch(
+            requested.as_deref().unwrap_or(""),
+            ui_ms,
+            None,
+            None,
+        );
         runtime_for_tab.spawn(async move {
             if let Err(error) = core.set_active_business_tab(requested).await {
                 tracing::warn!(%error, "could not save the open business tab");
@@ -1820,7 +1835,11 @@ mod branding_draft_tests {
     }
 }
 
-fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
+fn publish_tab_members(
+    app: &AppWindow,
+    draft: &BusinessTabDraft,
+    presentation: &AccountPresentationSettings,
+) {
     if draft.inbox_account.is_none() {
         let editor = app.global::<BusinessTabEditorUi>();
         let query = editor.get_query().to_lowercase();
@@ -1861,6 +1880,10 @@ fn publish_tab_members(app: &AppWindow, draft: &BusinessTabDraft) {
             color: Default::default(),
         })
         .collect::<Vec<_>>();
+    if app.get_address_inboxes().row_count() == 0 && !presentation.address_views.is_empty() {
+        // Lazy path: only materialize the 28k-row model when a surface needs it.
+        crate::account_controller::rebuild_address_inbox_model(app, presentation);
+    }
     choices.extend(app.get_address_inboxes().iter().map(|mut view| {
         view.checked = match parse_inbox_choice_key(view.key.as_str()) {
             Some(InboxChoiceKey::Alias(id)) => draft.address_views.contains(&id),
@@ -1977,7 +2000,11 @@ fn register_branding_callbacks(
                 form.set_error(Default::default());
                 form.set_created(true);
                 if let Some(draft) = catalog_draft.borrow().as_ref() {
-                    publish_tab_members(&app, draft);
+                    publish_tab_members(
+                        &app,
+                        draft,
+                        &catalog_state.borrow().account_presentation,
+                    );
                 }
                 true
             }
@@ -2078,7 +2105,7 @@ fn register_branding_callbacks(
                 )
             });
         show_editor_color(&editor, color);
-        publish_tab_members(&app, &initial);
+        publish_tab_members(&app, &initial, presentation);
         *open_draft.borrow_mut() = Some(initial);
         editor.set_visible(true);
     });
@@ -2153,7 +2180,7 @@ fn register_branding_callbacks(
                 })
             });
             show_editor_color(&editor, color);
-            publish_tab_members(&app, &initial);
+            publish_tab_members(&app, &initial, p);
             *account_draft.borrow_mut() = Some(initial);
             editor.set_visible(true);
         });
@@ -2190,21 +2217,31 @@ fn register_branding_callbacks(
         });
     let weak = app.as_weak();
     let search_draft = Rc::clone(&draft);
+    let search_state = Rc::clone(state);
     app.global::<BusinessTabEditorUi>().on_search(move |query| {
         let Some(app) = weak.upgrade() else { return };
         app.global::<BusinessTabEditorUi>().set_query(query);
         if let Some(draft) = search_draft.borrow().as_ref() {
-            publish_tab_members(&app, draft);
+            publish_tab_members(
+                &app,
+                draft,
+                &search_state.borrow().account_presentation,
+            );
         }
     });
     let weak = app.as_weak();
     let member_draft = Rc::clone(&draft);
+    let member_state = Rc::clone(state);
     app.global::<BusinessTabEditorUi>()
         .on_toggle_member(move |id, checked| {
             let Some(app) = weak.upgrade() else { return };
             if let Some(draft) = member_draft.borrow_mut().as_mut() {
                 draft.set_choice(id.as_str(), checked);
-                publish_tab_members(&app, draft);
+                publish_tab_members(
+                    &app,
+                    draft,
+                    &member_state.borrow().account_presentation,
+                );
             }
         });
     let weak = app.as_weak();

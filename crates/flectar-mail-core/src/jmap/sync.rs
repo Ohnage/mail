@@ -876,8 +876,52 @@ async fn sync_emails(ctx: &SyncCtx, config: &AccountConfig, c: &ConnectedClient)
     // checkpointed once every page is stored.
     let mut remote_ids = skipped.into_iter().collect::<HashSet<_>>();
     remote_ids.reserve(ids.len());
+
+    // Addendum B: existing local ids only need mailboxIds+keywords. Never
+    // re-download headers/bodies just to learn folder placement.
+    let (placement_ids, header_ids) = if full {
+        (Vec::new(), ids)
+    } else {
+        let account_id = config.id;
+        let known = ctx
+            .db
+            .read({
+                let ids = ids.clone();
+                move |conn| {
+                    let mut known = HashSet::new();
+                    for id in &ids {
+                        if repo::messages::by_jmap_id(conn, account_id, id)?.is_some() {
+                            known.insert(id.clone());
+                        }
+                    }
+                    Ok(known)
+                }
+            })
+            .await?;
+        let mut placement = Vec::new();
+        let mut headers = Vec::new();
+        for id in ids {
+            if known.contains(&id) {
+                placement.push(id);
+            } else {
+                headers.push(id);
+            }
+        }
+        (placement, headers)
+    };
+    for chunk in placement_ids.chunks(max_objects_in_get(c)) {
+        let (emails, not_found) = fetch_placement(c, chunk).await.map_err(client::map_error)?;
+        destroyed.extend(not_found);
+        remote_ids.extend(
+            emails
+                .iter()
+                .filter_map(|email| email.id().map(str::to_owned)),
+        );
+        persist_placement(ctx, config, emails).await?;
+    }
+
     let mut pages = HeaderPages {
-        ids: &ids,
+        ids: &header_ids,
         position: 0,
         size: max_objects_in_get(c),
         account_id,
@@ -960,6 +1004,105 @@ async fn fetch_headers(
         .properties(header_properties());
     let mut response: EmailGetResponse = c.send_single(request).await?;
     Ok((response.take_list(), response.take_not_found()))
+}
+
+fn placement_properties() -> Vec<EmailProperty> {
+    vec![
+        EmailProperty::Id,
+        EmailProperty::MailboxIds,
+        EmailProperty::Keywords,
+    ]
+}
+
+async fn fetch_placement(
+    c: &ConnectedClient,
+    ids: &[String],
+) -> jmap_client::Result<(Vec<Email>, Vec<String>)> {
+    let mut request = c.request();
+    request
+        .get_email()
+        .account_id(&c.account_id)
+        .ids(ids.iter().cloned())
+        .properties(placement_properties());
+    let mut response: EmailGetResponse = c.send_single(request).await?;
+    Ok((response.take_list(), response.take_not_found()))
+}
+
+/// Apply mailbox/keyword changes for ids that already have local rows. Never
+/// touches body blobs or raw MIME.
+async fn persist_placement(
+    ctx: &SyncCtx,
+    config: &AccountConfig,
+    emails: Vec<Email>,
+) -> Result<()> {
+    if emails.is_empty() {
+        return Ok(());
+    }
+    let account_id = config.id;
+    let thread_ids = ctx
+        .db
+        .write(move |conn| {
+            let tx = conn.transaction()?;
+            let mut changed = HashSet::new();
+            for email in emails {
+                let Some(remote_id) = email.id().map(str::to_owned) else {
+                    continue;
+                };
+                let Some(existing) = repo::messages::by_jmap_id(&tx, account_id, &remote_id)?
+                else {
+                    continue;
+                };
+                let (pending_keywords, pending_mailboxes) =
+                    repo::actions::jmap_reconciliation_guards(&tx, existing.id)?;
+                let mut folders = Vec::new();
+                for mailbox_id in email.mailbox_ids() {
+                    if let Some(folder) = repo::folders::by_jmap_id(&tx, account_id, mailbox_id)? {
+                        folders.push(folder);
+                    }
+                }
+                if folders.is_empty() {
+                    continue;
+                }
+                let primary_folder = primary(&folders).cloned();
+                let folder_ids = folders.iter().map(|folder| folder.id).collect::<Vec<_>>();
+                let keywords = email
+                    .keywords()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                let is_read = keywords.iter().any(|value| value == "$seen");
+                let is_starred = keywords.iter().any(|value| value == "$flagged");
+                let is_draft = keywords.iter().any(|value| value == "$draft")
+                    || primary_folder
+                        .as_ref()
+                        .and_then(|folder| folder.role.as_deref())
+                        == Some(roles::DRAFTS);
+                if !pending_mailboxes {
+                    if let Some(folder) = &primary_folder {
+                        tx.execute(
+                            "UPDATE messages SET folder_id = ?2, is_draft = ?3 WHERE id = ?1",
+                            params![existing.id, folder.id, is_draft as i64],
+                        )?;
+                    }
+                    repo::gmail::set_message_folders(&tx, existing.id, &folder_ids)?;
+                }
+                if !pending_keywords {
+                    repo::messages::set_flags(&tx, existing.id, is_read, is_starred)?;
+                    repo::labels::reconcile_keywords(&tx, existing.id, &keywords)?;
+                }
+                if let Some(thread_id) = existing.thread_id {
+                    repo::threads::recompute(&tx, thread_id)?;
+                    changed.insert(thread_id);
+                }
+            }
+            tx.commit()?;
+            Ok(changed.into_iter().collect::<Vec<_>>())
+        })
+        .await?;
+    if !thread_ids.is_empty() {
+        ctx.bus.emit(CoreEvent::MailUpdated { thread_ids });
+    }
+    Ok(())
 }
 
 fn addresses(values: Option<&[jmap_client::email::EmailAddress]>) -> Vec<Address> {

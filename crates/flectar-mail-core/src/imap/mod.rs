@@ -1585,4 +1585,14 @@ mod tests {
             assert!(!MIME_PLAN_QUERY.contains(excluded));
         }
     }
+
+    #[test]
+    fn flag_reconcile_query_never_fetches_bodies() {
+        // Addendum B: IMAP placement/flag reconcile is FLAGS-only.
+        const FLAGS_QUERY: &str = "(UID FLAGS)";
+        assert!(!FLAGS_QUERY.contains("BODY"));
+        assert!(!FLAGS_QUERY.contains("RFC822"));
+        assert!(!FLAGS_QUERY.contains("HEADER"));
+        assert!(FLAGS_QUERY.contains("FLAGS"));
+    }
 }

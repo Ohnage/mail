@@ -2701,6 +2701,10 @@ async fn store_headers(
 }
 
 /// Reconcile read/star flags for the most recent window of UIDs.
+///
+/// Addendum B: FLAGS-only fetch — never BODY. Folder placement for IMAP still
+/// comes from per-folder UID sets (a move is a vanish here + appear there),
+/// matched to the existing local row by Message-ID when the new folder lists it.
 async fn reconcile_flags(ctx: &SyncCtx, session: &mut Session, folder: &Folder) -> Result<()> {
     let folder_id = folder.id;
     let max_uid = ctx

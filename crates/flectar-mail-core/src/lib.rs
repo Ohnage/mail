@@ -9320,6 +9320,13 @@ impl Core {
                 {
                     return Err(CoreError::NotFound(format!("business tab {id}")));
                 }
+                // Tab clicks must not rewrite the 7 MB settings blob when the
+                // open tab is already stored. The UI already holds the value.
+                if settings.active_business_tab == tab_id
+                    && (tab_id.is_none() || settings.active_mail_profile.is_none())
+                {
+                    return Ok(settings);
+                }
                 settings.active_business_tab = tab_id;
                 if settings.active_business_tab.is_some() {
                     settings.active_mail_profile = None;

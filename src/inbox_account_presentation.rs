@@ -12,18 +12,27 @@ impl AccountPresentationSettings {
         if let Some(ids) = self.business_tab_accounts.get(&tab.id) {
             return ids.clone();
         }
+        let profile_ids = tab.profile_ids.iter().cloned().collect::<HashSet<_>>();
+        let account_ids = tab
+            .account_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect::<HashSet<_>>());
+        let address_view_ids = tab
+            .address_view_ids
+            .as_ref()
+            .map(|ids| ids.iter().copied().collect::<HashSet<_>>());
         self.inbox_accounts
             .iter()
             .filter(|account| {
                 account
                     .profile_id
                     .as_ref()
-                    .is_some_and(|id| tab.profile_ids.contains(id))
-                    || tab.account_ids.as_ref().is_some_and(|ids| {
+                    .is_some_and(|id| profile_ids.contains(id))
+                    || account_ids.as_ref().is_some_and(|ids| {
                         !account.account_ids.is_empty()
                             && account.account_ids.iter().all(|id| ids.contains(id))
                     })
-                    || tab.address_view_ids.as_ref().is_some_and(|ids| {
+                    || address_view_ids.as_ref().is_some_and(|ids| {
                         !account.address_view_ids.is_empty()
                             && account.address_view_ids.iter().all(|id| ids.contains(id))
                     })
@@ -70,8 +79,10 @@ impl AccountPresentationSettings {
         const ALIAS_INBOX_CEILING: usize = 512;
         let mailbox_ids =
             flectar_mail_core::inbox_accounts::mailbox_ids(account, &self.profiles);
-        let member_ids = self.inbox_members(account);
-        let prefer_group = member_ids.len() > ALIAS_INBOX_CEILING
+        // Prefer the saved count — cloning tens of thousands of address_view_ids
+        // just to decide prefer_group was burning tens of ms per tab click.
+        let member_count = self.inbox_member_count(account);
+        let prefer_group = member_count > ALIAS_INBOX_CEILING
             && !self.address_rules.is_empty()
             && account
                 .automatic_profile
@@ -81,6 +92,7 @@ impl AccountPresentationSettings {
         let address_inboxes = if prefer_group {
             Vec::new()
         } else {
+            let member_ids = self.inbox_members(account);
             let ids = member_ids.into_iter().collect::<HashSet<_>>();
             self.address_views
                 .iter()
@@ -334,6 +346,10 @@ mod tests {
         );
     }
 
+    /// Kept from 8fb1508. It only times `view_scope` and caps address_inboxes,
+    /// so it missed the UI-thread rebuild of every AddressView into
+    /// `address_inboxes` plus sync-state floods calling that rebuild. See
+    /// `tabhang_bench` for the regression that covers that path.
     #[test]
     fn company_tab_switch_stays_cheap_with_tens_of_thousands_of_address_views() {
         let mut p = presentation();
@@ -365,6 +381,7 @@ mod tests {
             .collect();
         p.connected_account_emails
             .insert("hub@pixelated.cities".into(), 8);
+        p.rebuild_view_indexes();
         p.active_business_tab = Some("pixelated-cities".into());
         let started = std::time::Instant::now();
         let (sidebar, _, scope) = p.view_scope();

@@ -197,6 +197,7 @@ pub(super) fn reconcile_removed_account(state: &mut InboxState, account_id: i64)
     clippy::too_many_arguments,
     reason = "Projects the independently loaded account, connection, avatar, and presentation data into one UI model."
 )]
+#[allow(dead_code)] // Convenience for full rebuilds; callers use `_with` flags.
 pub(super) fn apply_connected_accounts(
     app: &AppWindow,
     accounts: &[Account],
@@ -207,6 +208,35 @@ pub(super) fn apply_connected_accounts(
     avatars: &HashMap<i64, ProfileAvatarImages>,
     presentation: &AccountPresentationSettings,
     has_local_mail: bool,
+) {
+    apply_connected_accounts_with(
+        app,
+        accounts,
+        configs,
+        calendar_connections,
+        carddav_connections,
+        calendar_errors,
+        avatars,
+        presentation,
+        has_local_mail,
+        true,
+    );
+}
+
+/// `rebuild_address_aliases` builds the 28k-row address_inboxes model. Tab
+/// clicks and sync-state ticks must pass false; nothing in the main UI reads it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_connected_accounts_with(
+    app: &AppWindow,
+    accounts: &[Account],
+    configs: &[AccountConfig],
+    calendar_connections: &[CalendarConnection],
+    carddav_connections: &[CardDavConnection],
+    calendar_errors: &HashMap<i64, String>,
+    avatars: &HashMap<i64, ProfileAvatarImages>,
+    presentation: &AccountPresentationSettings,
+    has_local_mail: bool,
+    rebuild_address_aliases: bool,
 ) {
     let configs: HashMap<i64, &AccountConfig> =
         configs.iter().map(|config| (config.id, config)).collect();
@@ -328,30 +358,9 @@ pub(super) fn apply_connected_accounts(
                 .map(|account| presentation.inbox_choice(account))
                 .collect::<Vec<_>>(),
         )));
-    app.set_address_inboxes(ModelRc::new(VecModel::from(
-        presentation
-            .address_views
-            .iter()
-            .map(|view| {
-                let icon = view
-                    .profile_id
-                    .as_ref()
-                    .and_then(|id| presentation.profile_logos.get(id));
-
-                InboxViewChoiceRow {
-                    key: format!("alias:{}", view.id).into(),
-                    kind: InboxViewKind::Alias,
-                    name: view.address.clone().into(),
-                    detail: presentation.address_detail(view).into(),
-                    initials: avatar_initials(&view.address).into(),
-                    avatar: icon.cloned().unwrap_or_default(),
-                    has_avatar: icon.is_some(),
-                    checked: false,
-                    color: Default::default(),
-                }
-            })
-            .collect::<Vec<_>>(),
-    )));
+    if rebuild_address_aliases {
+        rebuild_address_inbox_model(app, presentation);
+    }
     app.set_has_device_mail(
         has_local_mail
             || accounts
@@ -397,6 +406,12 @@ pub(super) fn apply_connected_accounts(
     );
     app.set_show_account_markers(presentation.show_markers);
     app.set_show_message_preview(presentation.show_message_preview);
+    paint_business_tabs(app, presentation);
+}
+
+/// Tab clicks only need the active flag on the five tab chips. Rebuilding the
+/// 304-row account model here was the other half of the hang.
+pub(super) fn paint_business_tabs(app: &AppWindow, presentation: &AccountPresentationSettings) {
     let business_tabs = presentation
         .business_tabs
         .iter()
@@ -422,9 +437,61 @@ pub(super) fn apply_connected_accounts(
     app.set_business_tabs(ModelRc::new(VecModel::from(business_tabs)));
 }
 
+pub(super) fn rebuild_address_inbox_model(
+    app: &AppWindow,
+    presentation: &AccountPresentationSettings,
+) {
+    app.set_address_inboxes(ModelRc::new(VecModel::from(
+        presentation
+            .address_views
+            .iter()
+            .map(|view| {
+                let icon = view
+                    .profile_id
+                    .as_ref()
+                    .and_then(|id| presentation.profile_logos.get(id));
+
+                InboxViewChoiceRow {
+                    key: format!("alias:{}", view.id).into(),
+                    kind: InboxViewKind::Alias,
+                    name: view.address.clone().into(),
+                    detail: presentation.address_detail(view).into(),
+                    initials: avatar_initials(&view.address).into(),
+                    avatar: icon.cloned().unwrap_or_default(),
+                    has_avatar: icon.is_some(),
+                    checked: false,
+                    color: Default::default(),
+                }
+            })
+            .collect::<Vec<_>>(),
+    )));
+}
+
+/// Ensure the alias chooser model exists. Built lazily because tab clicks never
+/// need the full address_views projection.
+#[allow(dead_code)]
+pub(super) fn ensure_address_inbox_model(app: &AppWindow, state: &InboxState) {
+    if app.get_address_inboxes().row_count() > 0 || state.account_presentation.address_views.is_empty()
+    {
+        return;
+    }
+    rebuild_address_inbox_model(app, &state.account_presentation);
+}
+
 pub(super) fn refresh_connected_accounts(app: &AppWindow, state: &Rc<RefCell<InboxState>>) {
+    refresh_connected_accounts_with(app, state, false, false);
+}
+
+/// Tab switches and sync ticks pass `rebuild_address_aliases=false` and
+/// `notify_contexts=false` so they stay under a frame.
+pub(super) fn refresh_connected_accounts_with(
+    app: &AppWindow,
+    state: &Rc<RefCell<InboxState>>,
+    rebuild_address_aliases: bool,
+    notify_contexts: bool,
+) {
     let state = state.borrow();
-    apply_connected_accounts(
+    apply_connected_accounts_with(
         app,
         &state.connected_accounts,
         &state.account_configs,
@@ -434,6 +501,7 @@ pub(super) fn refresh_connected_accounts(app: &AppWindow, state: &Rc<RefCell<Inb
         &state.profile_avatar_images,
         &state.account_presentation,
         state.local_mail.is_some(),
+        rebuild_address_aliases,
     );
     let ui = app.global::<LocalMailUi>();
     ui.set_can_send(!state.connected_accounts.is_empty());
@@ -457,9 +525,11 @@ pub(super) fn refresh_connected_accounts(app: &AppWindow, state: &Rc<RefCell<Inb
     );
     prefer_shown_compose_account(app, &state);
     drop(state);
-    app.global::<AccountMailPreferences>()
-        .invoke_context_changed();
-    app.global::<FilesUi>().invoke_context_changed();
+    if notify_contexts {
+        app.global::<AccountMailPreferences>()
+            .invoke_context_changed();
+        app.global::<FilesUi>().invoke_context_changed();
+    }
 }
 
 /// Show the mail kept on this device, or that there is none.
@@ -648,23 +718,87 @@ pub(super) fn apply_account_states(
     inbox_state: &Rc<RefCell<InboxState>>,
     states: &HashMap<i64, (String, Option<String>)>,
 ) {
-    let mut state_guard = inbox_state.borrow_mut();
-    let mut changed = false;
-    for account in &mut state_guard.connected_accounts {
-        if let Some((sync_state, sync_error)) = states.get(&account.id) {
-            if account.sync_state != *sync_state {
-                account.sync_state.clone_from(sync_state);
-                changed = true;
+    let mut changed_ids = Vec::new();
+    {
+        let mut state_guard = inbox_state.borrow_mut();
+        let now = std::time::Instant::now();
+        // Coalesce sync-state floods (~304 accounts) to about 4 UI paints/s.
+        if let Some(last) = state_guard.last_account_state_paint
+            && now.duration_since(last) < std::time::Duration::from_millis(250)
+            && !states.is_empty()
+        {
+            for account in &mut state_guard.connected_accounts {
+                if let Some((sync_state, sync_error)) = states.get(&account.id) {
+                    account.sync_state.clone_from(sync_state);
+                    account.sync_error.clone_from(sync_error);
+                }
             }
-            if account.sync_error != *sync_error {
-                account.sync_error.clone_from(sync_error);
-                changed = true;
+            state_guard.pending_account_state_paint = true;
+            return;
+        }
+        state_guard.last_account_state_paint = Some(now);
+        state_guard.pending_account_state_paint = false;
+        for account in &mut state_guard.connected_accounts {
+            if let Some((sync_state, sync_error)) = states.get(&account.id) {
+                let mut changed = false;
+                if account.sync_state != *sync_state {
+                    account.sync_state.clone_from(sync_state);
+                    changed = true;
+                }
+                if account.sync_error != *sync_error {
+                    account.sync_error.clone_from(sync_error);
+                    changed = true;
+                }
+                if changed {
+                    changed_ids.push(account.id);
+                }
             }
         }
     }
-    drop(state_guard);
-    if changed {
-        refresh_connected_accounts(app, inbox_state);
+    if changed_ids.is_empty() {
+        return;
+    }
+    patch_connected_account_status_rows(app, inbox_state, &changed_ids);
+}
+
+fn patch_connected_account_status_rows(
+    app: &AppWindow,
+    inbox_state: &Rc<RefCell<InboxState>>,
+    changed_ids: &[i64],
+) {
+    let state = inbox_state.borrow();
+    let by_id = state
+        .connected_accounts
+        .iter()
+        .map(|account| (account.id, account))
+        .collect::<HashMap<_, _>>();
+    let model = app.get_connected_accounts();
+    let Some(rows) = model
+        .as_any()
+        .downcast_ref::<VecModel<AccountRow>>()
+    else {
+        drop(state);
+        refresh_connected_accounts_with(app, inbox_state, false, false);
+        return;
+    };
+    for index in 0..rows.row_count() {
+        let Some(mut row) = rows.row_data(index) else {
+            continue;
+        };
+        let account_id = i64::from(row.id);
+        if !changed_ids.contains(&account_id) {
+            continue;
+        }
+        let Some(account) = by_id.get(&account_id) else {
+            continue;
+        };
+        row.status = account.sync_state.clone().into();
+        row.sync_error = account
+            .sync_error
+            .clone()
+            .unwrap_or_default()
+            .into();
+        rows.set_row_data(index, row);
     }
 }
 

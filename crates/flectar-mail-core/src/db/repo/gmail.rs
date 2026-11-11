@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::models::now_ms;
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncState {
@@ -118,6 +119,228 @@ pub fn set_message_folders(conn: &Connection, message_id: i64, folder_ids: &[i64
     Ok(())
 }
 
+/// Apply a Gmail History `labelsAdded` / `labelsRemoved` delta without
+/// re-fetching the thread. Returns the local thread id when a message was
+/// updated, or `None` when the message is not cached yet (caller should fetch).
+pub fn apply_label_delta(
+    conn: &Connection,
+    account_id: i64,
+    gm_msgid: &str,
+    add_labels: &[String],
+    remove_labels: &[String],
+) -> Result<Option<i64>> {
+    use crate::models::roles;
+    use std::collections::{HashMap, HashSet};
+
+    let Some(message) = crate::db::repo::messages::by_gm_msgid(conn, account_id, gm_msgid)? else {
+        return Ok(None);
+    };
+    let Some(thread_id) = message.thread_id else {
+        return Ok(None);
+    };
+
+    let mut mappings = HashMap::<String, (Option<i64>, Option<i64>, Option<String>)>::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT gl.provider_id, gl.folder_id, gl.local_label_id, f.role
+             FROM gmail_labels gl
+             LEFT JOIN folders f ON f.id = gl.folder_id
+             WHERE gl.account_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![account_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ),
+            ))
+        })?;
+        for row in rows {
+            let (id, mapping) = row?;
+            mappings.insert(id, mapping);
+        }
+    }
+
+    let mut label_set = HashSet::<String>::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT gl.provider_id
+             FROM message_folders mf
+             JOIN gmail_labels gl
+               ON gl.folder_id = mf.folder_id AND gl.account_id = ?1
+             JOIN folders f ON f.id = mf.folder_id
+             WHERE mf.message_id = ?2
+               AND COALESCE(f.role, '') NOT IN ('archive', 'all')",
+        )?;
+        for row in stmt.query_map(params![account_id, message.id], |row| {
+            row.get::<_, String>(0)
+        })? {
+            label_set.insert(row?);
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT gl.provider_id
+             FROM message_labels ml
+             JOIN gmail_labels gl
+               ON gl.local_label_id = ml.label_id AND gl.account_id = ?1
+             WHERE ml.message_id = ?2",
+        )?;
+        for row in stmt.query_map(params![account_id, message.id], |row| {
+            row.get::<_, String>(0)
+        })? {
+            label_set.insert(row?);
+        }
+    }
+    if !message.is_read {
+        label_set.insert("UNREAD".into());
+    }
+    if message.is_starred {
+        label_set.insert("STARRED".into());
+    }
+    let is_draft: bool = conn.query_row(
+        "SELECT is_draft FROM messages WHERE id = ?1",
+        params![message.id],
+        |row| Ok(row.get::<_, i64>(0)? != 0),
+    )?;
+    if is_draft {
+        label_set.insert("DRAFT".into());
+    }
+
+    for label in remove_labels {
+        label_set.remove(label);
+    }
+    for label in add_labels {
+        label_set.insert(label.clone());
+    }
+
+    let archive_id = crate::db::repo::folders::by_role(conn, account_id, roles::ARCHIVE)?
+        .map(|folder| folder.id)
+        .ok_or_else(|| crate::error::CoreError::NotFound("Gmail archive folder".into()))?;
+    let all_id = crate::db::repo::folders::by_role(conn, account_id, roles::ALL)?
+        .map(|folder| folder.id)
+        .ok_or_else(|| crate::error::CoreError::NotFound("Gmail all-mail folder".into()))?;
+
+    let mut folder_ids = Vec::<i64>::new();
+    let mut role_folders = HashMap::<String, i64>::new();
+    let mut present_local_labels = Vec::<i64>::new();
+    for label in &label_set {
+        if let Some((folder_id, local_label_id, role)) = mappings.get(label) {
+            if let Some(folder_id) = *folder_id {
+                folder_ids.push(folder_id);
+                if let Some(role) = role {
+                    role_folders.insert(role.clone(), folder_id);
+                }
+            }
+            if let Some(local_id) = *local_label_id {
+                present_local_labels.push(local_id);
+            }
+        }
+    }
+    let archived = !label_set.contains("INBOX")
+        && !label_set.contains("SENT")
+        && !label_set.contains("DRAFT")
+        && !label_set.contains("TRASH")
+        && !label_set.contains("SPAM");
+    if archived {
+        folder_ids.push(archive_id);
+        role_folders.insert(roles::ARCHIVE.into(), archive_id);
+    }
+    folder_ids.push(all_id);
+    role_folders.insert(roles::ALL.into(), all_id);
+    folder_ids.sort_unstable();
+    folder_ids.dedup();
+
+    let canonical_folder = [
+        roles::TRASH,
+        roles::SPAM,
+        roles::DRAFTS,
+        roles::INBOX,
+        roles::SENT,
+        roles::ARCHIVE,
+        roles::ALL,
+    ]
+    .into_iter()
+    .find_map(|role| role_folders.get(role).copied())
+    .unwrap_or(all_id);
+
+    let is_read = !label_set.contains("UNREAD");
+    let is_starred = label_set.contains("STARRED");
+    let is_draft = label_set.contains("DRAFT");
+    conn.execute(
+        "UPDATE messages SET folder_id = ?2, is_read = ?3, is_starred = ?4, is_draft = ?5
+         WHERE id = ?1",
+        params![
+            message.id,
+            canonical_folder,
+            is_read as i64,
+            is_starred as i64,
+            is_draft as i64
+        ],
+    )?;
+    set_message_folders(conn, message.id, &folder_ids)?;
+
+    let provider_local_labels = mappings
+        .values()
+        .filter_map(|(_, local_label_id, _)| *local_label_id)
+        .collect::<HashSet<_>>();
+    for local_id in &provider_local_labels {
+        if !present_local_labels.contains(local_id) {
+            crate::db::repo::labels::remove_from_message(conn, message.id, *local_id)?;
+        }
+    }
+    for local_id in present_local_labels {
+        crate::db::repo::labels::add_to_message(conn, message.id, local_id)?;
+    }
+    crate::db::repo::threads::recompute(conn, thread_id)?;
+    Ok(Some(thread_id))
+}
+
+/// Drop stale local INBOX membership for messages whose Gmail ids are not in
+/// `inbox_gm_msgids`. Messages are never deleted; they move to Archive/All Mail.
+pub fn reconcile_inbox_membership(
+    conn: &Connection,
+    account_id: i64,
+    inbox_gm_msgids: &HashSet<String>,
+) -> Result<Vec<i64>> {
+    use crate::models::roles;
+
+    let Some(inbox) = crate::db::repo::folders::by_role(conn, account_id, roles::INBOX)? else {
+        return Ok(Vec::new());
+    };
+    let rows = {
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.gm_msgid
+             FROM message_folders mf
+             JOIN messages m ON m.id = mf.message_id
+             WHERE mf.folder_id = ?1 AND m.account_id = ?2 AND m.gm_msgid IS NOT NULL",
+        )?;
+        stmt.query_map(params![inbox.id, account_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut touched = Vec::new();
+    for chunk in rows.chunks(500) {
+        for (message_id, gm_msgid) in chunk {
+            if inbox_gm_msgids.contains(gm_msgid) {
+                continue;
+            }
+            if let Some(thread_id) =
+                apply_label_delta(conn, account_id, gm_msgid, &[], &["INBOX".into()])?
+            {
+                let _ = message_id;
+                if !touched.contains(&thread_id) {
+                    touched.push(thread_id);
+                }
+            }
+        }
+    }
+    Ok(touched)
+}
+
 pub fn provider_label_for_local(
     conn: &Connection,
     account_id: i64,
@@ -228,5 +451,122 @@ mod tests {
             .collect::<rusqlite::Result<_>>()
             .unwrap();
         assert_eq!(memberships, vec![2]);
+    }
+
+    fn seed_gmail_system_labels(conn: &Connection) {
+        testutil::seed_account(conn);
+        conn.execute(
+            "INSERT INTO folders (id, account_id, path, role) VALUES
+             (2, 1, 'Archive', 'archive'),
+             (3, 1, 'All Mail', 'all')",
+            [],
+        )
+        .unwrap();
+        for (provider_id, folder_id, kind) in [
+            ("INBOX", Some(1i64), "system"),
+            ("CATEGORY_PERSONAL", None, "system"),
+        ] {
+            conn.execute(
+                "INSERT INTO gmail_labels (account_id, provider_id, name, kind, folder_id)
+                 VALUES (1, ?1, ?1, ?2, ?3)",
+                params![provider_id, kind, folder_id],
+            )
+            .unwrap();
+        }
+        // Archive and All Mail are local-only folders; they have no provider id.
+    }
+
+    #[test]
+    fn label_delta_moves_inbox_to_archive_without_deleting() {
+        let conn = testutil::conn();
+        seed_gmail_system_labels(&conn);
+        let (thread_id, message_id) = testutil::seed_message(&conn, "a@test.dev", "one", false);
+        conn.execute(
+            "UPDATE messages SET gm_msgid = 'gm-1' WHERE id = ?1",
+            params![message_id],
+        )
+        .unwrap();
+        set_message_folders(&conn, message_id, &[1, 3]).unwrap();
+
+        let touched = apply_label_delta(&conn, 1, "gm-1", &[], &["INBOX".into()]).unwrap();
+        assert_eq!(touched, Some(thread_id));
+
+        let memberships: Vec<i64> = conn
+            .prepare(
+                "SELECT folder_id FROM message_folders WHERE message_id = ?1 ORDER BY folder_id",
+            )
+            .unwrap()
+            .query_map(params![message_id], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(memberships, vec![2, 3]); // Archive + All Mail
+        let folder_id: i64 = conn
+            .query_row(
+                "SELECT folder_id FROM messages WHERE id = ?1",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(folder_id, 2);
+        let still_there: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE id = ?1",
+                params![message_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(still_there, 1);
+        assert!(
+            apply_label_delta(&conn, 1, "missing", &[], &["INBOX".into()])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reconcile_drops_stale_inbox_membership_without_deleting_rows() {
+        let conn = testutil::conn();
+        seed_gmail_system_labels(&conn);
+        let (_, keep_id) = testutil::seed_message(&conn, "a@test.dev", "keep", false);
+        let (_, stale_id) = testutil::seed_message(&conn, "b@test.dev", "stale", false);
+        conn.execute(
+            "UPDATE messages SET gm_msgid = 'keep' WHERE id = ?1",
+            params![keep_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE messages SET gm_msgid = 'stale' WHERE id = ?1",
+            params![stale_id],
+        )
+        .unwrap();
+        set_message_folders(&conn, keep_id, &[1, 3]).unwrap();
+        set_message_folders(&conn, stale_id, &[1, 3]).unwrap();
+
+        let mut server_inbox = HashSet::new();
+        server_inbox.insert("keep".into());
+        let touched = reconcile_inbox_membership(&conn, 1, &server_inbox).unwrap();
+        assert!(!touched.is_empty());
+
+        let keep_inbox: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message_folders WHERE message_id = ?1 AND folder_id = 1",
+                params![keep_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stale_inbox: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM message_folders WHERE message_id = ?1 AND folder_id = 1",
+                params![stale_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(keep_inbox, 1);
+        assert_eq!(stale_inbox, 0);
+        let messages_left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(messages_left, 2);
     }
 }

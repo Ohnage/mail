@@ -44,6 +44,10 @@ const HISTORY_PAGE_SIZE: usize = 500;
 // reads. Batching reduces HTTP overhead; it does not reduce quota-unit cost.
 // https://developers.google.com/workspace/gmail/api/reference/quota
 const BACKFILL_INTERVAL: Duration = Duration::from_secs(22);
+/// Pace between history pages while draining a backlog. Long enough for
+/// `gmail_pace` to keep us under quota, far shorter than the idle sync interval.
+const HISTORY_DRAIN_INTERVAL: Duration = Duration::from_secs(2);
+const RECONCILE_AFTER_HISTORY_PAGES: u32 = 3;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(45);
 const MAX_GMAIL_JSON_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_GMAIL_BATCH_BODY_BYTES: usize = 16 * 1024 * 1024;
@@ -100,8 +104,32 @@ struct GmailLabel {
     text_color: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GmailPass {
+    /// No more immediate work; wait the configured sync interval.
+    Idle,
+    /// History has another page; drain it after a short paced pause.
+    MoreHistory,
+    /// Full-sync backfill still has pages.
+    Backfill,
+}
+
+#[derive(Debug, Clone)]
+struct LabelDelta {
+    message_id: String,
+    thread_id: String,
+    added: Vec<String>,
+    removed: Vec<String>,
+}
+
 #[derive(Debug)]
 struct HistoryPage {
+    /// Threads that need a full `threads.get` (messagesAdded / missing locals).
+    fetch_threads: BTreeSet<String>,
+    /// Label-only deltas applied without `threads.get`.
+    label_deltas: Vec<LabelDelta>,
+    deleted_message_ids: Vec<String>,
+    /// Legacy union used by older tests and checkpoint diagnostics.
     affected_threads: BTreeSet<String>,
     next_page_token: Option<String>,
     completed_history_id: Option<String>,
@@ -450,7 +478,9 @@ impl GmailApi {
 
     async fn history(&self, history_id: &str, page_token: Option<&str>) -> Result<HistoryPage> {
         let mut url = format!(
-            "{GMAIL_API}/history?startHistoryId={}&maxResults={HISTORY_PAGE_SIZE}",
+            "{GMAIL_API}/history?startHistoryId={}&maxResults={HISTORY_PAGE_SIZE}\
+             &historyTypes=messageAdded&historyTypes=messageDeleted\
+             &historyTypes=labelAdded&historyTypes=labelRemoved",
             urlencode(history_id)
         );
         if let Some(token) = page_token {
@@ -459,6 +489,26 @@ impl GmailApi {
         }
         let value = self.get_json(&url).await?;
         parse_history_page(&value, history_id)
+    }
+
+    async fn list_inbox_message_ids(
+        &self,
+        page_token: Option<&str>,
+    ) -> Result<(Vec<String>, Option<String>)> {
+        let mut url = format!("{GMAIL_API}/messages?labelIds=INBOX&maxResults=500");
+        if let Some(token) = page_token {
+            url.push_str("&pageToken=");
+            url.push_str(&urlencode(token));
+        }
+        let value = self.get_json(&url).await?;
+        let ids = value
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|message| message.get("id").and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>();
+        Ok((ids, gmail_page_token(&value)?))
     }
 
     async fn modify_message(
@@ -1009,19 +1059,55 @@ fn split_header_block(value: &str) -> Option<(&str, &str)> {
 
 fn parse_history_page(value: &Value, base_history_id: &str) -> Result<HistoryPage> {
     let mut affected_threads = BTreeSet::new();
+    let mut fetch_threads = BTreeSet::new();
+    let mut label_deltas = Vec::new();
+    let mut deleted_message_ids = Vec::new();
+    let mut note_thread = |thread_id: &str, fetch: bool| -> Result<()> {
+        if affected_threads.len() >= MAX_HISTORY_THREADS_PER_PAGE
+            && !affected_threads.contains(thread_id)
+        {
+            return Err(CoreError::Network(format!(
+                "Gmail history returned more than {MAX_HISTORY_THREADS_PER_PAGE} threads"
+            )));
+        }
+        affected_threads.insert(thread_id.to_owned());
+        if fetch {
+            fetch_threads.insert(thread_id.to_owned());
+        }
+        Ok(())
+    };
     for history in value
         .get("history")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
     {
-        for key in [
-            "messages",
-            "messagesAdded",
-            "messagesDeleted",
-            "labelsAdded",
-            "labelsRemoved",
-        ] {
+        for item in history
+            .get("messagesAdded")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let message = item.get("message").unwrap_or(item);
+            if let Some(thread_id) = message.get("threadId").and_then(Value::as_str) {
+                note_thread(thread_id, true)?;
+            }
+        }
+        for item in history
+            .get("messagesDeleted")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let message = item.get("message").unwrap_or(item);
+            if let Some(thread_id) = message.get("threadId").and_then(Value::as_str) {
+                note_thread(thread_id, false)?;
+            }
+            if let Some(id) = message.get("id").and_then(Value::as_str) {
+                deleted_message_ids.push(id.to_owned());
+            }
+        }
+        for (key, added) in [("labelsAdded", true), ("labelsRemoved", false)] {
             for item in history
                 .get(key)
                 .and_then(Value::as_array)
@@ -1029,16 +1115,50 @@ fn parse_history_page(value: &Value, base_history_id: &str) -> Result<HistoryPag
                 .flatten()
             {
                 let message = item.get("message").unwrap_or(item);
-                if let Some(thread_id) = message.get("threadId").and_then(Value::as_str) {
-                    if affected_threads.len() >= MAX_HISTORY_THREADS_PER_PAGE
-                        && !affected_threads.contains(thread_id)
-                    {
-                        return Err(CoreError::Network(format!(
-                            "Gmail history returned more than {MAX_HISTORY_THREADS_PER_PAGE} threads"
-                        )));
-                    }
-                    affected_threads.insert(thread_id.to_owned());
+                let Some(thread_id) = message.get("threadId").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(message_id) = message.get("id").and_then(Value::as_str) else {
+                    // Label change without a message id still needs a fetch.
+                    note_thread(thread_id, true)?;
+                    continue;
+                };
+                let labels = item
+                    .get("labelIds")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|label| label.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                if labels.is_empty() {
+                    note_thread(thread_id, true)?;
+                    continue;
                 }
+                note_thread(thread_id, false)?;
+                let mut delta = LabelDelta {
+                    message_id: message_id.to_owned(),
+                    thread_id: thread_id.to_owned(),
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                };
+                if added {
+                    delta.added = labels;
+                } else {
+                    delta.removed = labels;
+                }
+                label_deltas.push(delta);
+            }
+        }
+        // Older history records may only expose a generic messages list.
+        for item in history
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let message = item.get("message").unwrap_or(item);
+            if let Some(thread_id) = message.get("threadId").and_then(Value::as_str) {
+                note_thread(thread_id, true)?;
             }
         }
     }
@@ -1058,6 +1178,9 @@ fn parse_history_page(value: &Value, base_history_id: &str) -> Result<HistoryPag
         None
     };
     Ok(HistoryPage {
+        fetch_threads,
+        label_deltas,
+        deleted_message_ids,
         affected_threads,
         next_page_token,
         completed_history_id,
@@ -2624,7 +2747,7 @@ async fn sync_once(
     api: &GmailApi,
     refresh_labels: bool,
     mail_history: MailHistory,
-) -> Result<bool> {
+) -> Result<GmailPass> {
     let account_id = config.id;
     let mut state = ctx
         .db
@@ -2710,17 +2833,17 @@ async fn sync_once(
         if next_cursor.is_none() {
             sync_draft_map(ctx, config, api).await?;
             emit_sync_status(ctx, account_id).await;
-            return Ok(true);
+            return Ok(GmailPass::Idle);
         }
         emit_sync_status(ctx, account_id).await;
-        return Ok(false);
+        return Ok(GmailPass::Backfill);
     }
 
     let Some(history_id) = state.history_id.as_deref() else {
         ctx.db
             .write(move |conn| repo::gmail::expire_history(conn, account_id))
             .await?;
-        return Ok(false);
+        return Ok(GmailPass::Backfill);
     };
     let page = match api
         .history(history_id, state.history_page_token.as_deref())
@@ -2735,7 +2858,7 @@ async fn sync_once(
             ctx.db
                 .write(move |conn| repo::gmail::expire_history(conn, account_id))
                 .await?;
-            return Ok(false);
+            return Ok(GmailPass::Backfill);
         }
         Err(error) => return Err(error),
     };
@@ -2745,11 +2868,71 @@ async fn sync_once(
         ));
     }
 
-    let affected_ids = page.affected_threads.iter().cloned().collect::<Vec<_>>();
+    // Merge label deltas per message so one write covers add+remove on a page.
+    let mut merged_deltas = BTreeMap::<String, LabelDelta>::new();
+    let mut missing_for_fetch = BTreeSet::<String>::new();
+    for delta in &page.label_deltas {
+        let entry = merged_deltas
+            .entry(delta.message_id.clone())
+            .or_insert_with(|| LabelDelta {
+                message_id: delta.message_id.clone(),
+                thread_id: delta.thread_id.clone(),
+                added: Vec::new(),
+                removed: Vec::new(),
+            });
+        entry.added.extend(delta.added.iter().cloned());
+        entry.removed.extend(delta.removed.iter().cloned());
+    }
     let mut touched = Vec::new();
+    let delta_list = merged_deltas.into_values().collect::<Vec<_>>();
+    for chunk in delta_list.chunks(500) {
+        let chunk = chunk.to_vec();
+        let result = ctx
+            .db
+            .write({
+                let chunk = chunk.clone();
+                move |conn| {
+                    let mut local_touched = Vec::new();
+                    let mut missing = Vec::new();
+                    for delta in &chunk {
+                        let mut added = delta.added.clone();
+                        let mut removed = delta.removed.clone();
+                        added.sort_unstable();
+                        added.dedup();
+                        removed.sort_unstable();
+                        removed.dedup();
+                        match repo::gmail::apply_label_delta(
+                            conn,
+                            account_id,
+                            &delta.message_id,
+                            &added,
+                            &removed,
+                        )? {
+                            Some(thread_id) => local_touched.push(thread_id),
+                            None => missing.push(delta.thread_id.clone()),
+                        }
+                    }
+                    Ok((local_touched, missing))
+                }
+            })
+            .await?;
+        touched.extend(result.0);
+        missing_for_fetch.extend(result.1);
+    }
+
+    let mut fetch_threads = page.fetch_threads.clone();
+    fetch_threads.extend(missing_for_fetch);
+    // Label-only threads that already applied stay out of threads.get.
+    for delta in &page.label_deltas {
+        if !fetch_threads.contains(&delta.thread_id) {
+            // already handled via delta; keep fetch set as-is
+        }
+    }
+
+    let fetch_ids = fetch_threads.into_iter().collect::<Vec<_>>();
     let mut fresh_threads = Vec::new();
     let mut removed = Vec::new();
-    for batch in affected_ids.chunks(HISTORY_THREAD_BATCH) {
+    for batch in fetch_ids.chunks(HISTORY_THREAD_BATCH) {
         let api_for_fetch = api.clone();
         let results = stream::iter(batch.iter().cloned().map(|thread_id| {
             let api = api_for_fetch.clone();
@@ -2792,6 +2975,26 @@ async fn sync_once(
     for thread_id in removed {
         touched.extend(remove_provider_thread(ctx, account_id, thread_id).await?);
     }
+    for gm_msgid in &page.deleted_message_ids {
+        let gm = gm_msgid.clone();
+        if let Some(thread_id) = ctx
+            .db
+            .write(move |conn| {
+                let Some(message) = repo::messages::by_gm_msgid(conn, account_id, &gm)? else {
+                    return Ok(None);
+                };
+                let thread_id = message.thread_id;
+                repo::messages::delete(conn, message.id)?;
+                if let Some(thread_id) = thread_id {
+                    repo::threads::recompute(conn, thread_id)?;
+                }
+                Ok(thread_id)
+            })
+            .await?
+        {
+            touched.push(thread_id);
+        }
+    }
     touched.sort_unstable();
     touched.dedup();
     if !touched.is_empty() {
@@ -2807,6 +3010,7 @@ async fn sync_once(
             thread_ids: fresh_threads,
         });
     }
+    let more_history = page.next_page_token.is_some();
     ctx.db
         .write({
             let next = page.next_page_token.clone();
@@ -2821,10 +3025,70 @@ async fn sync_once(
             }
         })
         .await?;
-    if page.next_page_token.is_none() && !page.affected_threads.is_empty() {
+    if !more_history && !page.affected_threads.is_empty() {
         sync_draft_map(ctx, config, api).await?;
     }
-    Ok(true)
+    if more_history {
+        Ok(GmailPass::MoreHistory)
+    } else {
+        Ok(GmailPass::Idle)
+    }
+}
+
+async fn reconcile_inbox_membership(
+    ctx: &SyncCtx,
+    config: &AccountConfig,
+    api: &GmailApi,
+) -> Result<()> {
+    let account_id = config.id;
+    let mut page_token = None::<String>;
+    let mut inbox_ids = HashSet::<String>::new();
+    let mut missing = Vec::<String>::new();
+    loop {
+        let (ids, next) = api.list_inbox_message_ids(page_token.as_deref()).await?;
+        for id in ids {
+            inbox_ids.insert(id);
+        }
+        if next.is_none() || next == page_token {
+            break;
+        }
+        page_token = next;
+    }
+    for gm in &inbox_ids {
+        let lookup = gm.clone();
+        let present = ctx
+            .db
+            .read(move |conn| Ok(repo::messages::by_gm_msgid(conn, account_id, &lookup)?.is_some()))
+            .await?;
+        if !present {
+            missing.push(gm.clone());
+        }
+    }
+    let inbox_ids_for_write = inbox_ids.clone();
+    let touched = ctx
+        .db
+        .write(move |conn| {
+            repo::gmail::reconcile_inbox_membership(conn, account_id, &inbox_ids_for_write)
+        })
+        .await?;
+    if !touched.is_empty() {
+        ctx.bus.emit(CoreEvent::MailUpdated {
+            thread_ids: touched,
+        });
+    }
+    // Missing inbox messages: fetch via messages.get batches when present.
+    if !missing.is_empty() {
+        for chunk in missing.chunks(BATCH_SIZE) {
+            let resources = api.batch_metadata(chunk).await?;
+            let outcome = store_resources(ctx, config, &resources, None, false, true, None).await?;
+            if !outcome.touched_threads.is_empty() {
+                ctx.bus.emit(CoreEvent::MailUpdated {
+                    thread_ids: outcome.touched_threads,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 struct PreparedDraft {
@@ -3941,6 +4205,8 @@ async fn run_actor(
     let mut waiters = Vec::<oneshot::Sender<std::result::Result<(), String>>>::new();
     let mut refresh_labels = true;
     let mut backoff = 1u64;
+    let mut history_pages_pending = 0u32;
+    let mut inbox_reconcile_needed = true;
 
     loop {
         while let Ok(command) = rx.try_recv() {
@@ -3972,12 +4238,22 @@ async fn run_actor(
                 }
             }
             let actions_remaining = execute_actions(&ctx, &config, &api).await?;
-            let backfill_done = if sync_mail {
-                sync_once(&ctx, &config, &api, false, mail_history).await?
+            let pass = if sync_mail {
+                let pass = sync_once(&ctx, &config, &api, false, mail_history).await?;
+                let should_reconcile = inbox_reconcile_needed
+                    || history_pages_pending >= RECONCILE_AFTER_HISTORY_PAGES;
+                // Reconcile only when the account already has a durable history
+                // cursor. Backfill / cursor-expiry passes restart the scan first.
+                if should_reconcile && matches!(pass, GmailPass::Idle | GmailPass::MoreHistory) {
+                    reconcile_inbox_membership(&ctx, &config, &api).await?;
+                    inbox_reconcile_needed = false;
+                    history_pages_pending = 0;
+                }
+                pass
             } else {
-                true
+                GmailPass::Idle
             };
-            Ok::<_, CoreError>((actions_remaining, backfill_done))
+            Ok::<_, CoreError>((actions_remaining, pass))
         }
         .await;
         // Labels and sender identities refresh on the first pass and on each
@@ -3988,7 +4264,7 @@ async fn run_actor(
         }
 
         let (delay, rerun) = match result {
-            Ok((actions_remaining, backfill_done)) => {
+            Ok((actions_remaining, pass)) => {
                 backoff = 1;
                 set_state(&ctx, account_id, "idle").await;
                 ctx.bus.emit(CoreEvent::NetworkState { online: true });
@@ -4013,10 +4289,21 @@ async fn run_actor(
                 for waiter in waiters.drain(..) {
                     let _ = waiter.send(Ok(()));
                 }
-                let delay = if backfill_done {
-                    configured_sync_interval_for(&ctx.db, account_id).await
-                } else {
-                    BACKFILL_INTERVAL
+                let delay = match pass {
+                    GmailPass::Idle => {
+                        history_pages_pending = 0;
+                        configured_sync_interval_for(&ctx.db, account_id).await
+                    }
+                    GmailPass::MoreHistory => {
+                        history_pages_pending = history_pages_pending.saturating_add(1);
+                        // API calls already reserve through gmail_pace; this is
+                        // only the actor's inter-page sleep so we never hot-loop.
+                        HISTORY_DRAIN_INTERVAL
+                    }
+                    GmailPass::Backfill => {
+                        inbox_reconcile_needed = true;
+                        BACKFILL_INTERVAL
+                    }
                 };
                 (delay, actions_remaining)
             }
@@ -4225,11 +4512,56 @@ mod tests {
             page.affected_threads.into_iter().collect::<Vec<_>>(),
             vec!["a", "b"]
         );
+        assert!(page.fetch_threads.contains("a"));
         assert_eq!(page.next_page_token.as_deref(), Some("next"));
         assert!(page.completed_history_id.is_none());
 
         let final_page = parse_history_page(&json!({ "historyId": "200" }), "100").unwrap();
         assert_eq!(final_page.completed_history_id.as_deref(), Some("200"));
+    }
+
+    #[test]
+    fn label_only_history_does_not_request_thread_fetch() {
+        let page = parse_history_page(
+            &json!({
+                "historyId": "201",
+                "history": [{
+                    "labelsRemoved": [{
+                        "message": { "id": "m1", "threadId": "t1" },
+                        "labelIds": ["INBOX"]
+                    }],
+                    "labelsAdded": [{
+                        "message": { "id": "m1", "threadId": "t1" },
+                        "labelIds": ["STARRED"]
+                    }]
+                }]
+            }),
+            "100",
+        )
+        .unwrap();
+        assert!(page.fetch_threads.is_empty());
+        assert_eq!(page.label_deltas.len(), 2);
+        assert!(
+            page.label_deltas
+                .iter()
+                .any(|delta| delta.message_id == "m1" && delta.removed == ["INBOX"])
+        );
+        assert!(
+            page.label_deltas
+                .iter()
+                .any(|delta| delta.message_id == "m1" && delta.added == ["STARRED"])
+        );
+        assert!(page.completed_history_id.as_deref() == Some("201"));
+    }
+
+    #[test]
+    fn more_history_pass_drains_faster_than_idle_interval() {
+        // Regression for the one-page-per-5-minutes bug: MoreHistory must use
+        // the short drain interval, not the configured idle sync interval.
+        assert!(HISTORY_DRAIN_INTERVAL < Duration::from_secs(60));
+        assert!(HISTORY_DRAIN_INTERVAL < BACKFILL_INTERVAL);
+        assert_ne!(GmailPass::MoreHistory, GmailPass::Idle);
+        assert_ne!(GmailPass::MoreHistory, GmailPass::Backfill);
     }
 
     #[test]

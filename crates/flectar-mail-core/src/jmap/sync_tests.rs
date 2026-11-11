@@ -1739,3 +1739,90 @@ async fn body_prefetch_uses_one_email_get_per_batch() {
     assert!(log.contains("messages_per_second="));
     mock.task.abort();
 }
+
+#[tokio::test]
+async fn existing_id_relabel_fetches_placement_only_not_bodies() {
+    let (_dir, ctx, config) = fixture().await;
+    ctx.db
+        .write(|conn| {
+            conn.execute(
+                "INSERT INTO folders (account_id, path, role, jmap_id)
+                 VALUES (1, 'Archive', 'archive', 'archive-remote')",
+                [],
+            )?;
+            let (thread, message) = crate::db::testutil::seed_message(
+                conn,
+                "sender@mail.example",
+                "Conversation",
+                false,
+            );
+            conn.execute(
+                "UPDATE threads SET jmap_id='thread-a' WHERE id=?1",
+                [thread],
+            )?;
+            repo::messages::set_jmap_remote(conn, message, "email-a", Some("blob-a"))?;
+            repo::gmail::set_message_folders(conn, message, &[1])?;
+            conn.execute(
+                "INSERT INTO jmap_sync_state(account_id,email_state) VALUES(1,'state-0')",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let mut archived = email("email-a", "thread-a");
+    archived["mailboxIds"] = json!({"archive-remote": true});
+    archived["keywords"] = json!({ "$seen": true });
+    let mock = MockJmap {
+        mailboxes: vec![
+            mailbox("inbox-remote", "Inbox", Some("inbox")),
+            mailbox("archive-remote", "Archive", Some("archive")),
+        ],
+        emails: vec![archived],
+        changes: Some(json!({
+            "created": [],
+            "updated": ["email-a"],
+            "destroyed": []
+        })),
+        max_objects_in_get: 10,
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+
+    run_sync(&ctx, &config, &mock.connected).await.unwrap();
+
+    let gets = mock.calls("Email/get");
+    assert_eq!(gets.len(), 1, "{gets:?}");
+    assert_eq!(
+        gets[0]["properties"],
+        json!(["id", "mailboxIds", "keywords"])
+    );
+    assert!(mock.calls("Blob/download").is_empty());
+
+    ctx.db
+        .read(|conn| {
+            let message = repo::messages::by_jmap_id(conn, 1, "email-a")?.unwrap();
+            assert!(message.is_read);
+            let folders: Vec<i64> = conn
+                .prepare(
+                    "SELECT folder_id FROM message_folders WHERE message_id=?1 ORDER BY folder_id",
+                )?
+                .query_map([message.id], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let archive_id: i64 = conn.query_row(
+                "SELECT id FROM folders WHERE role='archive' AND account_id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(folders, vec![archive_id]);
+            assert_eq!(message.folder_id, Some(archive_id));
+            // Body was never touched — raw_path stays unset.
+            assert!(message.raw_path.is_none());
+            Ok(())
+        })
+        .await
+        .unwrap();
+    mock.task.abort();
+}

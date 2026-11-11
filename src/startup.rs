@@ -861,7 +861,7 @@ pub(crate) fn publish_saved_preferences(
     if keep_painted {
         app.set_show_tabs(true);
     }
-    crate::account_controller::refresh_connected_accounts(app, state);
+    crate::account_controller::refresh_connected_accounts_with(app, state, true, true);
 }
 
 pub(crate) fn apply_settings(app: &AppWindow, settings: &Settings) {

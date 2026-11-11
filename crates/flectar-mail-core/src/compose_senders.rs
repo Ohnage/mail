@@ -268,6 +268,31 @@ pub fn shared_tab_scope(
     let tim = existing_tim_tab(tabs, tim_mailbox_ids)?;
     let active = tab_mailboxes.iter().find(|tab| tab.id == active_tab_id)?;
     let tim_set = tab_mailboxes.iter().find(|tab| tab.id == tim.id)?;
+    // Empty active mailbox list cannot share storage with Tim. Skip the
+    // O(address_views) index build that freezes tab switches on large catalogs.
+    if active.id != tim.id && active.mailbox_ids.is_empty() {
+        return None;
+    }
+    // When the open tab IS the Tim tab, self∩tim is always the whole set —
+    // only other tabs' shared mailboxes justify the O(views) index build.
+    let mailbox_overlap = if active.id == tim.id {
+        active
+            .mailbox_ids
+            .iter()
+            .any(|id| other_tab_has(tab_mailboxes, &tim.id, *id))
+    } else {
+        active
+            .mailbox_ids
+            .iter()
+            .any(|id| tim_set.mailbox_ids.contains(id))
+    };
+    // ponytail: hosted-Tim-on-company-mailbox (Tim addr on a company hub the
+    // Tim tab does not list) still needs the full address index. Defer that
+    // scan until mailbox sets overlap — otherwise every tab click rebuilds
+    // 28k hosted addresses on the UI thread.
+    if !mailbox_overlap {
+        return None;
+    }
     let mut catalog = tim_set.mailbox_ids.clone();
     for tab in tab_mailboxes {
         catalog.extend(tab.mailbox_ids.iter().copied());

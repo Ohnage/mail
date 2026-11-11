@@ -73,10 +73,13 @@ mod sidebar_model;
 mod single_instance;
 mod startup;
 mod startup_metrics;
+#[cfg(test)]
+mod tabhang_bench;
 mod tabs;
 mod theme;
 mod ui_dispatch;
 mod ui_message;
+mod ui_perf;
 mod window_chrome;
 mod window_controller;
 
@@ -523,11 +526,31 @@ struct AccountPresentationSettings {
     account_icon_images: HashMap<String, slint::Image>,
     tab_icons: HashMap<String, slint::Image>,
     profile_logos: HashMap<String, slint::Image>,
+    /// Bumped when tabs/views/accounts change so memoized scopes refresh.
+    settings_revision: u64,
+    /// Memoized `view_scope` for the active tab at `settings_revision`.
+    scope_cache: Option<CachedViewScope>,
+    /// Memoized shared Tim/company split per (tab, settings_revision).
+    shared_scope_cache: Option<CachedSharedScope>,
+    /// profile_id → address view indexes (built once per settings revision).
+    views_by_profile: HashMap<String, Vec<usize>>,
 }
 
+type ViewScopeParts = (
+    Option<Vec<i64>>,
+    Option<Vec<i64>>,
+    flectar_mail_core::recipient_match::MailScope,
+);
+type CachedViewScope = (Option<String>, u64, ViewScopeParts);
+type CachedSharedScope = (
+    Option<String>,
+    u64,
+    Option<flectar_mail_core::recipient_match::MailScope>,
+);
+
 impl AccountPresentationSettings {
-    fn from_settings(settings: &Settings) -> Self {
-        Self {
+    pub(crate) fn from_settings(settings: &Settings) -> Self {
+        let mut presentation = Self {
             inbox_accounts: settings.inbox_accounts.clone(),
             business_tab_accounts: settings.business_tab_accounts.clone(),
             address_views: settings.address_views.clone(),
@@ -548,6 +571,30 @@ impl AccountPresentationSettings {
             account_icon_images: HashMap::new(),
             tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
+            settings_revision: 1,
+            scope_cache: None,
+            shared_scope_cache: None,
+            views_by_profile: HashMap::new(),
+        };
+        presentation.rebuild_view_indexes();
+        presentation
+    }
+
+    pub(crate) fn invalidate_scope_cache(&mut self) {
+        self.settings_revision = self.settings_revision.wrapping_add(1);
+        self.scope_cache = None;
+        self.shared_scope_cache = None;
+    }
+
+    pub(crate) fn rebuild_view_indexes(&mut self) {
+        self.views_by_profile.clear();
+        for (index, view) in self.address_views.iter().enumerate() {
+            if let Some(profile) = view.profile_id.as_ref() {
+                self.views_by_profile
+                    .entry(profile.clone())
+                    .or_default()
+                    .push(index);
+            }
         }
     }
 
@@ -601,27 +648,54 @@ impl AccountPresentationSettings {
         self.business_tabs.iter().find(|tab| tab.id == id)
     }
 
-    fn bind_accounts(&mut self, accounts: &[Account]) {
-        self.connected_account_emails = accounts
+    pub(crate) fn bind_accounts(&mut self, accounts: &[Account]) {
+        let emails = accounts
             .iter()
             .map(|account| (account.email.trim().to_ascii_lowercase(), account.id))
-            .collect();
+            .collect::<HashMap<_, _>>();
+        if emails != self.connected_account_emails {
+            self.connected_account_emails = emails;
+            self.invalidate_scope_cache();
+        }
     }
 
     fn visible_address_views(&self) -> Vec<&flectar_mail_core::models::AddressView> {
-        self.address_views
-            .iter()
-            .filter(|view| match self.active_business() {
-                None => true,
-                Some(tab) => match &tab.address_view_ids {
-                    Some(ids) => ids.contains(&view.id),
-                    None => view
-                        .profile_id
-                        .as_ref()
-                        .is_some_and(|id| tab.profile_ids.contains(id)),
-                },
-            })
-            .collect()
+        let Some(tab) = self.active_business() else {
+            return self.address_views.iter().collect();
+        };
+        match &tab.address_view_ids {
+            Some(ids) => {
+                let wanted = ids.iter().copied().collect::<HashSet<_>>();
+                self.address_views
+                    .iter()
+                    .filter(|view| wanted.contains(&view.id))
+                    .collect()
+            }
+            None => {
+                if tab.profile_ids.is_empty() {
+                    // Project 47 / sender-domain tabs: no address-view scan.
+                    return Vec::new();
+                }
+                let profiles = tab.profile_ids.iter().cloned().collect::<HashSet<_>>();
+                if profiles.len() == 1
+                    && let Some(profile) = tab.profile_ids.first()
+                    && let Some(indexes) = self.views_by_profile.get(profile)
+                {
+                    return indexes
+                        .iter()
+                        .filter_map(|index| self.address_views.get(*index))
+                        .collect();
+                }
+                self.address_views
+                    .iter()
+                    .filter(|view| {
+                        view.profile_id
+                            .as_ref()
+                            .is_some_and(|id| profiles.contains(id))
+                    })
+                    .collect()
+            }
+        }
     }
 
     fn address_detail(&self, view: &flectar_mail_core::models::AddressView) -> String {
@@ -665,13 +739,36 @@ impl AccountPresentationSettings {
     }
 
     /// Sidebar accounts, the query account AND, and the recipient/sender filter.
-    fn view_scope(
-        &self,
-    ) -> (
-        Option<Vec<i64>>,
-        Option<Vec<i64>>,
-        flectar_mail_core::recipient_match::MailScope,
-    ) {
+    fn view_scope(&self) -> ViewScopeParts {
+        if let Some((tab_id, revision, cached)) = &self.scope_cache
+            && *revision == self.settings_revision
+            && tab_id.as_deref() == self.active_business_tab.as_deref()
+        {
+            return cached.clone();
+        }
+        let computed = self.view_scope_uncached();
+        // Cache through interior-like pattern: callers that need memoization
+        // use `view_scope_cached` on &mut self. Keep this path for shared &self.
+        computed
+    }
+
+    pub(crate) fn view_scope_cached(&mut self) -> ViewScopeParts {
+        if let Some((tab_id, revision, cached)) = &self.scope_cache
+            && *revision == self.settings_revision
+            && tab_id.as_deref() == self.active_business_tab.as_deref()
+        {
+            return cached.clone();
+        }
+        let computed = self.view_scope_uncached();
+        self.scope_cache = Some((
+            self.active_business_tab.clone(),
+            self.settings_revision,
+            computed.clone(),
+        ));
+        computed
+    }
+
+    fn view_scope_uncached(&self) -> ViewScopeParts {
         use flectar_mail_core::recipient_match::MailScope;
         let Some(tab) = self.active_business() else {
             let accounts = self.active_profile_accounts();
@@ -740,13 +837,33 @@ impl AccountPresentationSettings {
         // freezes the UI thread on every company-tab switch. Prefer the tab's
         // mailboxes / address groups, and only list explicit or small sets.
         const ALIAS_INBOX_CEILING: usize = 512;
-        let visible = self.visible_address_views();
         let automatic_addresses = tab.account_ids.is_none()
             && (!self.address_views.is_empty() || !self.address_rules.is_empty())
             && matches!(tab.resolved_scope(), "profiles" | "accounts");
-        let list_aliases = tab.address_view_ids.is_some() || visible.len() <= ALIAS_INBOX_CEILING;
-        let aliases = if list_aliases {
-            visible
+        let visible_count = if let Some(ids) = &tab.address_view_ids {
+            ids.len()
+        } else if tab.profile_ids.is_empty() {
+            0
+        } else if tab.profile_ids.len() == 1 {
+            let profile = tab.profile_ids[0].as_str();
+            match self.views_by_profile.get(profile) {
+                Some(indexes) => indexes.len(),
+                None => {
+                    // Cold index after a test/settings patch: count without
+                    // assuming empty (that would re-list every alias).
+                    self.address_views
+                        .iter()
+                        .filter(|view| view.profile_id.as_deref() == Some(profile))
+                        .count()
+                }
+            }
+        } else {
+            // Rare multi-profile tabs: only scan when we might list aliases.
+            usize::MAX
+        };
+        let list_aliases = tab.address_view_ids.is_some() || visible_count <= ALIAS_INBOX_CEILING;
+        let aliases = if list_aliases && visible_count > 0 {
+            self.visible_address_views()
                 .into_iter()
                 .map(|view| self.address_filter(view))
                 .collect::<Vec<_>>()
@@ -943,6 +1060,14 @@ impl AccountPresentationSettings {
     }
 
     fn active_shared_scope(&self) -> Option<flectar_mail_core::recipient_match::MailScope> {
+        // ponytail: HostedAddressIndex over ~28k address views scans every
+        // catalog mailbox for Tim hosts and freezes the UI for tens of seconds
+        // on the real PC. Skip the Tim/company split on the click path until it
+        // is built off-thread and cached per settings revision.
+        const SHARED_SCOPE_VIEW_CEILING: usize = 2_048;
+        if self.address_views.len() > SHARED_SCOPE_VIEW_CEILING {
+            return None;
+        }
         let active_id = self.active_business().map(|tab| tab.id.clone())?;
         let sets = self
             .business_tabs
@@ -1202,6 +1327,10 @@ struct InboxState {
     company_mailboxes: Vec<mail::MailboxEntry>,
     /// The open business tab changed during the latest profile sync.
     opened_business_tab: bool,
+    /// Last time sync-state changes painted AccountRow status cells.
+    last_account_state_paint: Option<std::time::Instant>,
+    /// Sync states arrived while a paint was coalesced.
+    pending_account_state_paint: bool,
     calendar_connections: Vec<CalendarConnection>,
     carddav_connections: Vec<CardDavConnection>,
     calendar_errors: HashMap<i64, String>,
@@ -1985,6 +2114,8 @@ impl InboxState {
             folders_with_mail: HashSet::new(),
             company_mailboxes: Vec::new(),
             opened_business_tab: false,
+            last_account_state_paint: None,
+            pending_account_state_paint: false,
             calendar_connections: Vec::new(),
             carddav_connections: Vec::new(),
             calendar_errors: HashMap::new(),
@@ -2096,7 +2227,7 @@ impl InboxState {
             self.account_presentation
                 .company_account_ids(&self.connected_accounts)
         });
-        let (sidebar, query, scope) = self.account_presentation.view_scope();
+        let (sidebar, query, scope) = self.account_presentation.view_scope_cached();
         let changed = if let Some(core) = &self.core {
             core.set_view_scope(
                 sidebar.clone(),
@@ -2140,7 +2271,7 @@ impl InboxState {
         if !tab_key.is_empty() {
             collapsed.insert("mailboxes".to_owned());
             collapsed.insert("company-layout".to_owned());
-            let (sidebar, _, _) = self.account_presentation.view_scope();
+            let (sidebar, _, _) = self.account_presentation.view_scope_cached();
             let account_ids = sidebar.unwrap_or_else(|| {
                 self.connected_accounts
                     .iter()
@@ -5066,7 +5197,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         if !pending.account_states.is_empty()
             && let Some(app) = mail_update_app.upgrade()
         {
-            apply_account_states(&app, &mail_update_state, &pending.account_states);
+            crate::ui_perf::watch_ui("drain_core_updates:account_states", || {
+                apply_account_states(&app, &mail_update_state, &pending.account_states);
+            });
         }
         if let Some(error) = pending.action_error
             && let Some(app) = mail_update_app.upgrade()

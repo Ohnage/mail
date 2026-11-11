@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-11 19:04+0000\n"
+"POT-Creation-Date: 2026-11-11 19:22+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -11,6 +11,33 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=n != 1;\n"
+
+#: ui/app-icon.slint:18
+msgid "Orange"
+msgstr ""
+
+#: ui/app-icon.slint:19
+msgid "Graphite"
+msgstr ""
+
+#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
+#: ui/dialogs/settings-dialog.slint:1086
+msgid "Light"
+msgstr ""
+
+#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
+msgid "Blue"
+msgstr ""
+
+#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
+#: ui/views/mail-reading-pane.slint:2173
+msgid "Green"
+msgstr ""
+
+#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
+#: ui/views/mail-reading-pane.slint:2169
+msgid "Purple"
+msgstr ""
 
 #: ui/app.slint:98
 msgctxt "abbreviated month in a date"
@@ -1886,33 +1913,6 @@ msgstr ""
 msgid "Copy diagnostics"
 msgstr ""
 
-#: ui/app-icon.slint:18
-msgid "Orange"
-msgstr ""
-
-#: ui/app-icon.slint:19
-msgid "Graphite"
-msgstr ""
-
-#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
-#: ui/dialogs/settings-dialog.slint:1086
-msgid "Light"
-msgstr ""
-
-#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
-msgid "Blue"
-msgstr ""
-
-#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
-#: ui/views/mail-reading-pane.slint:2173
-msgid "Green"
-msgstr ""
-
-#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
-#: ui/views/mail-reading-pane.slint:2169
-msgid "Purple"
-msgstr ""
-
 #: ui/components/account-calendars.slint:24
 msgid "Reconnect calendar"
 msgstr ""
@@ -2552,13 +2552,77 @@ msgstr ""
 msgid "Add account"
 msgstr ""
 
-#: ui/components/calendar.slint:65 ui/components/calendar.slint:273
-#: ui/components/calendar.slint:867
+#: ui/components/calendar-agenda.slint:39
+msgid "Filter calendars · {} hidden"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:39
+msgid "Filter calendars"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:67 ui/components/calendar.slint:562
+msgid "Show calendars"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
+#: ui/dialogs/settings-dialog.slint:1770
+msgid "Reset"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:70
+msgid "Filters only affect this agenda."
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:212 ui/components/calendar.slint:582
+#: ui/views/mail-list-pane.slint:647
+msgid "Today"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:214 ui/components/calendar.slint:596
+msgid "{n} event"
+msgid_plural "{n} events"
+msgstr[0] ""
+msgstr[1] ""
+
+#: ui/components/calendar-agenda.slint:237
+msgid "Cancelled"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:257 ui/components/calendar.slint:65
+#: ui/components/calendar.slint:725
 msgid "View details for {}"
 msgstr ""
 
-#: ui/components/calendar.slint:114 ui/components/calendar.slint:573
-#: ui/components/calendar-agenda.slint:290
+#: ui/components/calendar-agenda.slint:268
+msgid "Now · {}"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:271
+msgid "Nothing else is scheduled this month."
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:285
+msgid "No events match your filters"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:285
+msgid "No events this month"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:286
+msgid "Show more calendars to see their events."
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:286
+msgid "Create an event to start planning your month."
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
+msgid "Reset filters"
+msgstr ""
+
+#: ui/components/calendar-agenda.slint:290 ui/components/calendar.slint:114
+#: ui/components/calendar.slint:757
 msgid "New event"
 msgstr ""
 
@@ -2668,10 +2732,6 @@ msgstr ""
 msgid "ALL DAY"
 msgstr ""
 
-#: ui/components/calendar.slint:562 ui/components/calendar-agenda.slint:67
-msgid "Show calendars"
-msgstr ""
-
 #: ui/components/calendar.slint:562
 msgid "Hide calendars"
 msgstr ""
@@ -2696,20 +2756,9 @@ msgstr ""
 msgid "Agenda"
 msgstr ""
 
-#: ui/components/calendar.slint:582 ui/components/calendar.slint:772
-#: ui/views/mail-list-pane.slint:647
-msgid "Today"
-msgstr ""
-
 #: ui/components/calendar.slint:595 ui/components/calendar.slint:782
 msgid "Local time · {}"
 msgstr ""
-
-#: ui/components/calendar.slint:596 ui/components/calendar-agenda.slint:214
-msgid "{n} event"
-msgid_plural "{n} events"
-msgstr[0] ""
-msgstr[1] ""
 
 #: ui/components/calendar.slint:841
 msgid "Agenda · {}"
@@ -2733,55 +2782,6 @@ msgstr ""
 
 #: ui/components/calendar.slint:949
 msgid "Keep event"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:39
-msgid "Filter calendars · {} hidden"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:39
-msgid "Filter calendars"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
-#: ui/dialogs/settings-dialog.slint:1770
-msgid "Reset"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:70
-msgid "Filters only affect this agenda."
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:237
-msgid "Cancelled"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:268
-msgid "Now · {}"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:271
-msgid "Nothing else is scheduled this month."
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:285
-msgid "No events match your filters"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:285
-msgid "No events this month"
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:286
-msgid "Show more calendars to see their events."
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:286
-msgid "Create an event to start planning your month."
-msgstr ""
-
-#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
-msgid "Reset filters"
 msgstr ""
 
 #: ui/components/composer-actions.slint:51
@@ -3340,6 +3340,74 @@ msgstr ""
 msgid "{}, {}"
 msgstr ""
 
+#: ui/components/sidebar-controls.slint:197
+msgid "Collapse label"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:197
+msgid "Expand label"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:198
+msgid "Collapse folder"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:198
+msgid "Expand folder"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:213
+msgid "New subfolder"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
+msgid "Rename folder"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:225
+msgid "Move to top level"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:231
+msgid "Move into folder…"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:237
+msgid "Delete folder"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:250
+msgid "Empty Trash…"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:262
+msgid "New nested label"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Remove from folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Add to folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:276
+msgid "Rename global label"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:276
+msgid "Rename label in {}"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:281
+msgid "Delete global label"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:281
+msgid "Delete label from {}"
+msgstr ""
+
 #: ui/components/sidebar.slint:121 ui/views/mail-list-pane.slint:1514
 msgid "New email"
 msgstr ""
@@ -3425,74 +3493,6 @@ msgstr ""
 
 #: ui/components/sidebar.slint:796
 msgid "No folders found"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:197
-msgid "Collapse label"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:197
-msgid "Expand label"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:198
-msgid "Collapse folder"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:198
-msgid "Expand folder"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:213
-msgid "New subfolder"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
-msgid "Rename folder"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:225
-msgid "Move to top level"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:231
-msgid "Move into folder…"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:237
-msgid "Delete folder"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:250
-msgid "Empty Trash…"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:262
-msgid "New nested label"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Remove from folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Add to folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:276
-msgid "Rename global label"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:276
-msgid "Rename label in {}"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:281
-msgid "Delete global label"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:281
-msgid "Delete label from {}"
 msgstr ""
 
 #: ui/components/tab-overview.slint:18

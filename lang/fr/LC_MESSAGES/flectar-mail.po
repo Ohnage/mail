@@ -2,7 +2,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: flectar-mail 0.1.0\n"
-"POT-Creation-Date: 2026-11-11 19:04+0000\n"
+"POT-Creation-Date: 2026-11-11 19:22+0000\n"
 "PO-Revision-Date: 2026-10-14 08:37+0000\n"
 "Last-Translator: Cyril Hansen <cyril.hansen@gmail.com>\n"
 "Language-Team: French <https://translate.flectar.com/projects/flectar-mail/"
@@ -13,6 +13,37 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=n > 1;\n"
 "X-Generator: Weblate 2026.9.1\n"
+
+#: ui/app-icon.slint:18
+msgid "Orange"
+msgstr ""
+
+#: ui/app-icon.slint:19
+msgid "Graphite"
+msgstr ""
+
+#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
+#: ui/dialogs/settings-dialog.slint:1086
+#, fuzzy
+msgid "Light"
+msgstr "Clair"
+
+#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
+#, fuzzy
+msgid "Blue"
+msgstr "Bleu"
+
+#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
+#: ui/views/mail-reading-pane.slint:2173
+#, fuzzy
+msgid "Green"
+msgstr "Vert"
+
+#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
+#: ui/views/mail-reading-pane.slint:2169
+#, fuzzy
+msgid "Purple"
+msgstr "Violet"
 
 #: ui/app.slint:98
 msgctxt "abbreviated month in a date"
@@ -2193,37 +2224,6 @@ msgstr "Réessayer"
 msgid "Copy diagnostics"
 msgstr "Copier le diagnostic"
 
-#: ui/app-icon.slint:18
-msgid "Orange"
-msgstr ""
-
-#: ui/app-icon.slint:19
-msgid "Graphite"
-msgstr ""
-
-#: ui/app-icon.slint:20 ui/components/theme-editor.slint:612
-#: ui/dialogs/settings-dialog.slint:1086
-#, fuzzy
-msgid "Light"
-msgstr "Clair"
-
-#: ui/app-icon.slint:21 ui/views/mail-reading-pane.slint:2168
-#, fuzzy
-msgid "Blue"
-msgstr "Bleu"
-
-#: ui/app-icon.slint:22 ui/components/theme-editor.slint:623
-#: ui/views/mail-reading-pane.slint:2173
-#, fuzzy
-msgid "Green"
-msgstr "Vert"
-
-#: ui/app-icon.slint:23 ui/components/theme-editor.slint:624
-#: ui/views/mail-reading-pane.slint:2169
-#, fuzzy
-msgid "Purple"
-msgstr "Violet"
-
 #: ui/components/account-calendars.slint:24
 msgid "Reconnect calendar"
 msgstr ""
@@ -2991,14 +2991,93 @@ msgstr ""
 msgid "Add account"
 msgstr "Ajouter un compte"
 
-#: ui/components/calendar.slint:65 ui/components/calendar.slint:273
-#: ui/components/calendar.slint:867
+#: ui/components/calendar-agenda.slint:39
+#, fuzzy
+msgid "Filter calendars · {} hidden"
+msgstr "Filtrer les calendriers · {} masqués"
+
+#: ui/components/calendar-agenda.slint:39
+#, fuzzy
+msgid "Filter calendars"
+msgstr "Filtrer les calendriers"
+
+#: ui/components/calendar-agenda.slint:67 ui/components/calendar.slint:562
+#, fuzzy
+msgid "Show calendars"
+msgstr "Afficher les calendriers"
+
+#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
+#: ui/dialogs/settings-dialog.slint:1770
+#, fuzzy
+msgid "Reset"
+msgstr "Réinitialiser"
+
+#: ui/components/calendar-agenda.slint:70
+#, fuzzy
+msgid "Filters only affect this agenda."
+msgstr "Les filtres ne s’appliquent qu’à cet agenda."
+
+#: ui/components/calendar-agenda.slint:212 ui/components/calendar.slint:582
+#: ui/views/mail-list-pane.slint:647
+#, fuzzy
+msgid "Today"
+msgstr "Aujourd’hui"
+
+#: ui/components/calendar-agenda.slint:214 ui/components/calendar.slint:596
+#, fuzzy
+msgid "{n} event"
+msgid_plural "{n} events"
+msgstr[0] "{n} événement"
+msgstr[1] "{n} événements"
+
+#: ui/components/calendar-agenda.slint:237
+#, fuzzy
+msgid "Cancelled"
+msgstr "Annulé"
+
+#: ui/components/calendar-agenda.slint:257 ui/components/calendar.slint:65
+#: ui/components/calendar.slint:725
 #, fuzzy
 msgid "View details for {}"
 msgstr "Afficher les détails de {}"
 
-#: ui/components/calendar.slint:114 ui/components/calendar.slint:573
-#: ui/components/calendar-agenda.slint:290
+#: ui/components/calendar-agenda.slint:268
+#, fuzzy
+msgid "Now · {}"
+msgstr "Maintenant · {}"
+
+#: ui/components/calendar-agenda.slint:271
+#, fuzzy
+msgid "Nothing else is scheduled this month."
+msgstr "Plus rien de prévu ce mois-ci."
+
+#: ui/components/calendar-agenda.slint:285
+#, fuzzy
+msgid "No events match your filters"
+msgstr "Aucun événement ne correspond à vos filtres"
+
+#: ui/components/calendar-agenda.slint:285
+#, fuzzy
+msgid "No events this month"
+msgstr "Aucun événement ce mois-ci"
+
+#: ui/components/calendar-agenda.slint:286
+#, fuzzy
+msgid "Show more calendars to see their events."
+msgstr "Affichez davantage de calendriers pour voir leurs événements."
+
+#: ui/components/calendar-agenda.slint:286
+#, fuzzy
+msgid "Create an event to start planning your month."
+msgstr "Créez un événement pour commencer à organiser votre mois."
+
+#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
+#, fuzzy
+msgid "Reset filters"
+msgstr "Réinitialiser les filtres"
+
+#: ui/components/calendar-agenda.slint:290 ui/components/calendar.slint:114
+#: ui/components/calendar.slint:757
 #, fuzzy
 msgid "New event"
 msgstr "Nouvel événement"
@@ -3132,11 +3211,6 @@ msgstr "LOCAL"
 msgid "ALL DAY"
 msgstr "TOUTE LA JOURNÉE"
 
-#: ui/components/calendar.slint:562 ui/components/calendar-agenda.slint:67
-#, fuzzy
-msgid "Show calendars"
-msgstr "Afficher les calendriers"
-
 #: ui/components/calendar.slint:562
 #, fuzzy
 msgid "Hide calendars"
@@ -3167,23 +3241,10 @@ msgstr "Mois"
 msgid "Agenda"
 msgstr "Agenda"
 
-#: ui/components/calendar.slint:582 ui/components/calendar.slint:772
-#: ui/views/mail-list-pane.slint:647
-#, fuzzy
-msgid "Today"
-msgstr "Aujourd’hui"
-
 #: ui/components/calendar.slint:595 ui/components/calendar.slint:782
 #, fuzzy
 msgid "Local time · {}"
 msgstr "Heure locale · {}"
-
-#: ui/components/calendar.slint:596 ui/components/calendar-agenda.slint:214
-#, fuzzy
-msgid "{n} event"
-msgid_plural "{n} events"
-msgstr[0] "{n} événement"
-msgstr[1] "{n} événements"
 
 #: ui/components/calendar.slint:841
 #, fuzzy
@@ -3214,67 +3275,6 @@ msgstr "Supprimer l’événement"
 #, fuzzy
 msgid "Keep event"
 msgstr "Conserver l’événement"
-
-#: ui/components/calendar-agenda.slint:39
-#, fuzzy
-msgid "Filter calendars · {} hidden"
-msgstr "Filtrer les calendriers · {} masqués"
-
-#: ui/components/calendar-agenda.slint:39
-#, fuzzy
-msgid "Filter calendars"
-msgstr "Filtrer les calendriers"
-
-#: ui/components/calendar-agenda.slint:68 ui/components/theme-editor.slint:782
-#: ui/dialogs/settings-dialog.slint:1770
-#, fuzzy
-msgid "Reset"
-msgstr "Réinitialiser"
-
-#: ui/components/calendar-agenda.slint:70
-#, fuzzy
-msgid "Filters only affect this agenda."
-msgstr "Les filtres ne s’appliquent qu’à cet agenda."
-
-#: ui/components/calendar-agenda.slint:237
-#, fuzzy
-msgid "Cancelled"
-msgstr "Annulé"
-
-#: ui/components/calendar-agenda.slint:268
-#, fuzzy
-msgid "Now · {}"
-msgstr "Maintenant · {}"
-
-#: ui/components/calendar-agenda.slint:271
-#, fuzzy
-msgid "Nothing else is scheduled this month."
-msgstr "Plus rien de prévu ce mois-ci."
-
-#: ui/components/calendar-agenda.slint:285
-#, fuzzy
-msgid "No events match your filters"
-msgstr "Aucun événement ne correspond à vos filtres"
-
-#: ui/components/calendar-agenda.slint:285
-#, fuzzy
-msgid "No events this month"
-msgstr "Aucun événement ce mois-ci"
-
-#: ui/components/calendar-agenda.slint:286
-#, fuzzy
-msgid "Show more calendars to see their events."
-msgstr "Affichez davantage de calendriers pour voir leurs événements."
-
-#: ui/components/calendar-agenda.slint:286
-#, fuzzy
-msgid "Create an event to start planning your month."
-msgstr "Créez un événement pour commencer à organiser votre mois."
-
-#: ui/components/calendar-agenda.slint:290 ui/views/files-view.slint:586
-#, fuzzy
-msgid "Reset filters"
-msgstr "Réinitialiser les filtres"
 
 #: ui/components/composer-actions.slint:51
 #, fuzzy
@@ -3945,6 +3945,87 @@ msgstr ""
 msgid "{}, {}"
 msgstr "{}, {}"
 
+#: ui/components/sidebar-controls.slint:197
+#, fuzzy
+msgid "Collapse label"
+msgstr "Réduire l’étiquette"
+
+#: ui/components/sidebar-controls.slint:197
+#, fuzzy
+msgid "Expand label"
+msgstr "Développer l’étiquette"
+
+#: ui/components/sidebar-controls.slint:198
+#, fuzzy
+msgid "Collapse folder"
+msgstr "Réduire le dossier"
+
+#: ui/components/sidebar-controls.slint:198
+#, fuzzy
+msgid "Expand folder"
+msgstr "Développer le dossier"
+
+#: ui/components/sidebar-controls.slint:213
+#, fuzzy
+msgid "New subfolder"
+msgstr "Nouveau sous-dossier"
+
+#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
+#, fuzzy
+msgid "Rename folder"
+msgstr "Renommer le dossier"
+
+#: ui/components/sidebar-controls.slint:225
+msgid "Move to top level"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:231
+msgid "Move into folder…"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:237
+#, fuzzy
+msgid "Delete folder"
+msgstr "Supprimer le dossier"
+
+#: ui/components/sidebar-controls.slint:250
+#, fuzzy
+msgid "Empty Trash…"
+msgstr "Vider la corbeille…"
+
+#: ui/components/sidebar-controls.slint:262
+#, fuzzy
+msgid "New nested label"
+msgstr "Nouvelle étiquette imbriquée"
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Remove from folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:268
+msgid "Add to folders list"
+msgstr ""
+
+#: ui/components/sidebar-controls.slint:276
+#, fuzzy
+msgid "Rename global label"
+msgstr "Renommer l’étiquette globale"
+
+#: ui/components/sidebar-controls.slint:276
+#, fuzzy
+msgid "Rename label in {}"
+msgstr "Renommer l’étiquette dans {}"
+
+#: ui/components/sidebar-controls.slint:281
+#, fuzzy
+msgid "Delete global label"
+msgstr "Supprimer l’étiquette globale"
+
+#: ui/components/sidebar-controls.slint:281
+#, fuzzy
+msgid "Delete label from {}"
+msgstr "Supprimer l’étiquette de {}"
+
 #: ui/components/sidebar.slint:121 ui/views/mail-list-pane.slint:1514
 #, fuzzy
 msgid "New email"
@@ -4047,87 +4128,6 @@ msgstr "Nouvelle étiquette"
 #, fuzzy
 msgid "No folders found"
 msgstr "Aucun dossier trouvé"
-
-#: ui/components/sidebar-controls.slint:197
-#, fuzzy
-msgid "Collapse label"
-msgstr "Réduire l’étiquette"
-
-#: ui/components/sidebar-controls.slint:197
-#, fuzzy
-msgid "Expand label"
-msgstr "Développer l’étiquette"
-
-#: ui/components/sidebar-controls.slint:198
-#, fuzzy
-msgid "Collapse folder"
-msgstr "Réduire le dossier"
-
-#: ui/components/sidebar-controls.slint:198
-#, fuzzy
-msgid "Expand folder"
-msgstr "Développer le dossier"
-
-#: ui/components/sidebar-controls.slint:213
-#, fuzzy
-msgid "New subfolder"
-msgstr "Nouveau sous-dossier"
-
-#: ui/components/sidebar-controls.slint:219 ui/dialogs/folder-dialog.slint:31
-#, fuzzy
-msgid "Rename folder"
-msgstr "Renommer le dossier"
-
-#: ui/components/sidebar-controls.slint:225
-msgid "Move to top level"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:231
-msgid "Move into folder…"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:237
-#, fuzzy
-msgid "Delete folder"
-msgstr "Supprimer le dossier"
-
-#: ui/components/sidebar-controls.slint:250
-#, fuzzy
-msgid "Empty Trash…"
-msgstr "Vider la corbeille…"
-
-#: ui/components/sidebar-controls.slint:262
-#, fuzzy
-msgid "New nested label"
-msgstr "Nouvelle étiquette imbriquée"
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Remove from folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:268
-msgid "Add to folders list"
-msgstr ""
-
-#: ui/components/sidebar-controls.slint:276
-#, fuzzy
-msgid "Rename global label"
-msgstr "Renommer l’étiquette globale"
-
-#: ui/components/sidebar-controls.slint:276
-#, fuzzy
-msgid "Rename label in {}"
-msgstr "Renommer l’étiquette dans {}"
-
-#: ui/components/sidebar-controls.slint:281
-#, fuzzy
-msgid "Delete global label"
-msgstr "Supprimer l’étiquette globale"
-
-#: ui/components/sidebar-controls.slint:281
-#, fuzzy
-msgid "Delete label from {}"
-msgstr "Supprimer l’étiquette de {}"
 
 #: ui/components/tab-overview.slint:18
 msgid "Show tabs"
@@ -8752,7 +8752,3 @@ msgstr "Restaurer"
 #, fuzzy
 msgid "Maximize"
 msgstr "Agrandir"
-
-#, fuzzy
-#~ msgid "Delete “{}” and its contents from the mail server?"
-#~ msgstr "Supprimer « {} » et son contenu du serveur de messagerie ?"

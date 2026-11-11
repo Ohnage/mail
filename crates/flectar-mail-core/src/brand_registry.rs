@@ -2342,8 +2342,10 @@ mod tests {
 
     #[test]
     fn pixelated_cities_hub_migration_scopes_tab_and_marks_cities_send_only() {
-        let mut settings = Settings::default();
-        settings.address_catalog_version = 1;
+        let mut settings = Settings {
+            address_catalog_version: 1,
+            ..Default::default()
+        };
         settings.business_tabs = vec![
             BusinessTab {
                 id: "tim".into(),

@@ -618,7 +618,7 @@ mod tests {
         assert!(paths.contains(&crate::pixelated_hub::cities_parent()));
         assert!(paths.iter().any(|path| path.ends_with("/Jackson")));
         assert!(paths.contains(&"Action Items"));
-        assert!(!paths.iter().any(|path| *path == "Archive"));
+        assert!(!paths.contains(&"Archive"));
         assert_eq!(crate::pixelated_hub::city_count(), 273);
     }
 

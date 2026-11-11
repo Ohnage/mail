@@ -2875,6 +2875,57 @@ mod tests {
     }
 
     #[test]
+    fn from_display_name_override_uses_rfc5322_quoting_and_rfc2047() {
+        let cases = [
+            (
+                "Tim Mentink (Mentinkizm)",
+                "tim@example.com",
+                // Parentheses are special → quoted-string.
+                "\"Tim Mentink (Mentinkizm)\" <tim@example.com>",
+            ),
+            (
+                "O'Brien, Tim",
+                "tim@example.com",
+                "\"O'Brien, Tim\" <tim@example.com>",
+            ),
+            (
+                "Says \"hi\"",
+                "tim@example.com",
+                "\"Says \\\"hi\\\"\" <tim@example.com>",
+            ),
+        ];
+        for (name, email, expected_fragment) in cases {
+            let mut message = outgoing("body", None);
+            message.from = Address {
+                name: Some(name.into()),
+                email: email.into(),
+            };
+            let (_, raw) = build_message(&message).unwrap();
+            let s = String::from_utf8_lossy(&raw);
+            assert!(
+                s.contains(expected_fragment),
+                "name={name:?} missing {expected_fragment:?} in:\n{s}"
+            );
+            assert!(s.contains(&format!("<{email}>")), "raw:\n{s}");
+        }
+
+        let mut message = outgoing("body", None);
+        message.from = Address {
+            name: Some("José Mentink".into()),
+            email: "tim@example.com".into(),
+        };
+        let (_, raw) = build_message(&message).unwrap();
+        let s = String::from_utf8_lossy(&raw);
+        // Non-ASCII must be RFC 2047 encoded-words, not raw UTF-8 in From.
+        assert!(
+            s.contains("=?") && s.to_ascii_lowercase().contains("utf-8"),
+            "expected RFC 2047 encoded From for José, got:\n{s}"
+        );
+        assert!(s.contains("<tim@example.com>"), "raw:\n{s}");
+        assert!(!s.contains("José Mentink <tim@example.com>"), "raw:\n{s}");
+    }
+
+    #[test]
     fn caller_supplied_message_id_is_stable_and_header_safe() {
         let mut message = outgoing("plain", None);
         message.message_id = Some("<stable.retry@example.com>");

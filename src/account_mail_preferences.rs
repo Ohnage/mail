@@ -11,7 +11,11 @@ use flectar_mail_core::{
     sender_identities::{ManualIdentityPolicy, manual_identity_policy},
 };
 use slint::SharedString;
-use std::{cell::Cell, future::Future};
+use std::{
+    cell::Cell,
+    collections::HashMap,
+    future::Future,
+};
 
 /// Async work is owned by a profile/account generation. A removed account or
 /// replaced core must never receive a late settings or decrypted-content result.
@@ -131,6 +135,8 @@ fn project(app: &AppWindow, settings: &Settings, account_id: i64) {
 struct IdentityChoices {
     all: RefCell<Vec<SenderIdentityChoice>>,
     matched_emails: RefCell<Vec<String>>,
+    /// Last typed From display name per sender email (lowercase).
+    last_display_names: RefCell<HashMap<String, String>>,
 }
 
 fn sender_query_matches(email: &str, label: &str, query: &str) -> bool {
@@ -212,15 +218,7 @@ fn publish_group_senders(
     let choices = group
         .senders
         .iter()
-        .map(|sender| SenderIdentityChoice {
-            email: sender.email.clone().into(),
-            label: match sender.display_name.as_deref().map(str::trim) {
-                Some(name) if !name.is_empty() && !name.eq_ignore_ascii_case(&sender.email) => {
-                    format!("{name}  <{}>", sender.email).into()
-                }
-                _ => sender.email.clone().into(),
-            },
-        })
+        .map(|sender| sender_choice(&sender.email, sender.display_name.as_deref()))
         .collect::<Vec<_>>();
     ui.set_composer_sender_names(ModelRc::new(VecModel::from(
         choices
@@ -246,6 +244,7 @@ fn publish_group_senders(
         ui.set_composer_sender_index(0);
         ui.set_composer_sender_email("".into());
         ui.set_composer_sender_label("".into());
+        ui.set_composer_sender_display_name("".into());
         ui.set_composer_preferences_ready(true);
         return;
     };
@@ -259,6 +258,13 @@ fn publish_group_senders(
             .map(|choice| choice.label.clone())
             .unwrap_or_else(|| sender.email.clone().into()),
     );
+    let default_name = picker
+        .all
+        .borrow()
+        .get(index)
+        .map(|choice| choice.display_name.to_string())
+        .unwrap_or_default();
+    apply_composer_display_name(&ui, picker, &sender.email, &default_name);
     let Ok(account_id) = i32::try_from(sender.account_id) else {
         ui.set_composer_preferences_ready(true);
         return;
@@ -291,18 +297,46 @@ fn apply_transport_account(app: &AppWindow, groups: &[ComposeGroup], email: &str
     }
 }
 
-fn identity_label(identity: &SenderIdentity) -> String {
-    match identity
-        .display_name
-        .as_deref()
+fn sender_choice(email: &str, display_name: Option<&str>) -> SenderIdentityChoice {
+    let name = display_name
         .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        Some(name) if !name.eq_ignore_ascii_case(&identity.email) => {
-            format!("{name}  <{}>", identity.email)
-        }
-        _ => identity.email.clone(),
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(email));
+    SenderIdentityChoice {
+        email: email.into(),
+        display_name: name.unwrap_or("").into(),
+        label: match name {
+            Some(name) => format!("{name}  <{email}>").into(),
+            None => email.into(),
+        },
     }
+}
+
+fn remember_composer_display_name(ui: &AccountMailPreferences, picker: &IdentityChoices) {
+    let email = ui.get_composer_sender_email().to_string();
+    if email.trim().is_empty() {
+        return;
+    }
+    let name = ui.get_composer_sender_display_name().to_string();
+    picker
+        .last_display_names
+        .borrow_mut()
+        .insert(email.to_ascii_lowercase(), name);
+}
+
+fn apply_composer_display_name(
+    ui: &AccountMailPreferences,
+    picker: &IdentityChoices,
+    email: &str,
+    default_name: &str,
+) {
+    let key = email.to_ascii_lowercase();
+    let name = picker
+        .last_display_names
+        .borrow()
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| default_name.to_owned());
+    ui.set_composer_sender_display_name(name.into());
 }
 
 /// Concrete addresses that may be offered as From. Wildcard identities are
@@ -363,10 +397,7 @@ fn project_identities(
     let verified = verified_identities(identities);
     let choices = verified
         .iter()
-        .map(|identity| SenderIdentityChoice {
-            email: identity.email.clone().into(),
-            label: identity_label(identity).into(),
-        })
+        .map(|identity| sender_choice(&identity.email, identity.display_name.as_deref()))
         .collect::<Vec<_>>();
     ui.set_sender_identity_names(ModelRc::new(VecModel::from(
         choices
@@ -488,6 +519,7 @@ pub(super) fn register(
     let default_picker = Rc::new(IdentityChoices {
         all: RefCell::new(Vec::new()),
         matched_emails: RefCell::new(Vec::new()),
+        last_display_names: RefCell::new(HashMap::new()),
     });
     let context_state = state.clone();
     let context_generation = tasks.generation.clone();
@@ -1280,6 +1312,7 @@ fn register_composer(
     let composer_picker = Rc::new(IdentityChoices {
         all: RefCell::new(Vec::new()),
         matched_emails: RefCell::new(Vec::new()),
+        last_display_names: RefCell::new(HashMap::new()),
     });
     let ui = app.global::<AccountMailPreferences>();
     let reset = inserted.clone();
@@ -1459,9 +1492,8 @@ fn register_composer(
                         };
                         let sender_choices = identities
                             .iter()
-                            .map(|identity| SenderIdentityChoice {
-                                email: identity.email.clone().into(),
-                                label: identity_label(identity).into(),
+                            .map(|identity| {
+                                sender_choice(&identity.email, identity.display_name.as_deref())
                             })
                             .collect::<Vec<_>>();
                         ui.set_composer_sender_names(ModelRc::new(VecModel::from(
@@ -1563,6 +1595,7 @@ fn register_composer(
     });
     let weak = app.as_weak();
     let compose_groups_for_sender = compose_groups.clone();
+    let picker_for_sender = composer_picker.clone();
     let groups_for_change = compose_groups.clone();
     let picker_for_change = composer_picker.clone();
     ui.on_composer_group_changed(move |index| {
@@ -1600,9 +1633,16 @@ fn register_composer(
         else {
             return;
         };
+        remember_composer_display_name(&ui, &picker_for_sender);
         ui.set_composer_sender_index(index);
         ui.set_composer_sender_email(identity.email.clone());
-        ui.set_composer_sender_label(identity.label);
+        ui.set_composer_sender_label(identity.label.clone());
+        apply_composer_display_name(
+            &ui,
+            &picker_for_sender,
+            identity.email.as_str(),
+            identity.display_name.as_str(),
+        );
         apply_transport_account(&app, &compose_groups_for_sender.borrow(), identity.email.as_str());
     });
     let weak = app.as_weak();
@@ -1632,13 +1672,18 @@ fn register_composer(
         else {
             return;
         };
+        remember_composer_display_name(&ui, &picker);
+        let email = choices[position].email.clone();
+        let label = choices[position].label.clone();
+        let default_name = choices[position].display_name.to_string();
         ui.set_composer_sender_index(i32::try_from(position).unwrap_or(0));
-        ui.set_composer_sender_email(choices[position].email.clone());
-        ui.set_composer_sender_label(choices[position].label.clone());
+        ui.set_composer_sender_email(email.clone());
+        ui.set_composer_sender_label(label);
+        apply_composer_display_name(&ui, &picker, email.as_str(), &default_name);
         apply_transport_account(
             &app,
             &compose_groups_for_pick.borrow(),
-            choices[position].email.as_str(),
+            email.as_str(),
         );
     });
     let weak = app.as_weak();

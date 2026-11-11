@@ -136,6 +136,7 @@ fn account_preferences_paint_hundreds_of_sender_identities() {
             .map(|email| SenderIdentityChoice {
                 email: email.into(),
                 label: email.into(),
+                display_name: "".into(),
             })
             .collect::<Vec<_>>(),
     )));

@@ -1,5 +1,5 @@
 import { AccountMailPreferences } from "account-mail-preferences.slint";
-import { SettingsSelectRow } from "settings-components.slint";
+import { FormField, SettingsSelectRow } from "settings-components.slint";
 import { ScrollView, VerticalBox } from "std-widgets.slint";
 import { AccountRow, ComposeAttachment, ComposeContact, ComposeEditorTile, EmailTemplateRow } from "../models.slint";
 import { ComposerFromRow, ComposerHeader, ComposerRecipients, ComposerSubject } from "composer-fields.slint";
@@ -277,6 +277,13 @@ export component EmailComposer inherits Rectangle {
                     AccountMailPreferences.pick-composer-sender(index);
                 }
             }
+        }
+
+        FormField {
+            label: @tr("Display name");
+            value <=> AccountMailPreferences.composer-sender-display-name;
+            placeholder: @tr("Shown next to the From address");
+            label-color: root.muted-color;
         }
 
         SettingsSelectRow {

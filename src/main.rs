@@ -8267,10 +8267,14 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             return;
         }
         if send {
+            let sender_display_name = app
+                .global::<AccountMailPreferences>()
+                .get_composer_sender_display_name();
             match runtime_for_compose.block_on(core.send_new_message(ComposeMessage {
                 draft_id: intent.draft_id,
                 account_id: i64::from(account_id),
                 sender_email: Some(sender_email.as_str()),
+                sender_display_name: Some(sender_display_name.as_str()),
                 to: to.as_str(),
                 cc: cc.as_str(),
                 bcc: bcc.as_str(),
@@ -8312,11 +8316,15 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             return;
         }
 
+        let sender_display_name = app
+            .global::<AccountMailPreferences>()
+            .get_composer_sender_display_name();
         let result = runtime_for_compose
             .block_on(core.save_new_draft(ComposeMessage {
                 draft_id: intent.draft_id,
                 account_id: i64::from(account_id),
                 sender_email: Some(sender_email.as_str()),
+                sender_display_name: Some(sender_display_name.as_str()),
                 to: to.as_str(),
                 cc: cc.as_str(),
                 bcc: bcc.as_str(),

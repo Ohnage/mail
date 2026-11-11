@@ -161,6 +161,9 @@ pub struct ComposeMessage<'a> {
     pub draft_id: Option<i64>,
     pub account_id: i64,
     pub sender_email: Option<&'a str>,
+    /// Per-message From display-name override. Changes only the name in the
+    /// outgoing header; the address stays `sender_email`.
+    pub sender_display_name: Option<&'a str>,
     pub to: &'a str,
     pub cc: &'a str,
     pub bcc: &'a str,
@@ -2818,10 +2821,9 @@ fn compose_args(
     Ok(SaveDraftArgs {
         draft_id: message.draft_id,
         account_id: message.account_id,
-        from: message.sender_email.map(|email| Address {
-            name: None,
-            email: email.to_owned(),
-        }),
+        from: message
+            .sender_email
+            .map(|email| draft_from_address(email, message.sender_display_name)),
         to: recipients,
         cc: parse_recipients(message.cc)?,
         bcc: parse_recipients(message.bcc)?,
@@ -2832,6 +2834,22 @@ fn compose_args(
         in_reply_to_message_id: message.in_reply_to_message_id,
         attachments: message.attachments.to_vec(),
     })
+}
+
+/// Build the outgoing From address. Display name is sanitized for header use
+/// and never alters the email.
+pub(crate) fn draft_from_address(email: &str, display_name: Option<&str>) -> Address {
+    Address {
+        name: display_name
+            .map(|name| {
+                name.chars()
+                    .filter(|character| *character != '\r' && *character != '\n')
+                    .collect::<String>()
+            })
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty()),
+        email: email.to_owned(),
+    }
 }
 
 fn parse_recipients(value: &str) -> Result<Vec<Address>, String> {
@@ -3951,8 +3969,8 @@ pub fn fixtures() -> Vec<EmailFixture> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComposeMessage, MailTarget, compose_args, display_thread_subject, mailbox_entries,
-        markdown_to_html, markdown_to_plain_text, message_summary_to_message,
+        ComposeMessage, MailTarget, compose_args, display_thread_subject, draft_from_address,
+        mailbox_entries, markdown_to_html, markdown_to_plain_text, message_summary_to_message,
         readable_message_html, resolve_scope, retain_profile_accounts, snapshot_legacy_tab_icons,
         summary_to_message, validated_startup_scope, with_local_mail,
     };
@@ -4411,6 +4429,7 @@ mod tests {
             draft_id: None,
             account_id: 7,
             sender_email: None,
+            sender_display_name: None,
             to: "",
             cc: "",
             bcc: "",
@@ -4436,6 +4455,7 @@ mod tests {
                 draft_id: Some(17),
                 account_id: 42,
                 sender_email: Some("work@example.com"),
+                sender_display_name: Some("Tim Mentink"),
                 to: "maya@example.com",
                 cc: "",
                 bcc: "",
@@ -4458,6 +4478,35 @@ mod tests {
         assert_eq!(
             draft.body_html.as_deref(),
             Some("<div>Hello <strong>Maya</strong></div>")
+        );
+        assert_eq!(
+            draft.from,
+            Some(Address {
+                name: Some("Tim Mentink".into()),
+                email: "work@example.com".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn draft_from_address_keeps_email_and_sanitizes_display_name() {
+        assert_eq!(
+            draft_from_address("hub@example.com", Some("Tim Mentink (Mentinkizm)")),
+            Address {
+                name: Some("Tim Mentink (Mentinkizm)".into()),
+                email: "hub@example.com".into(),
+            }
+        );
+        assert_eq!(
+            draft_from_address("hub@example.com", Some("  Tim\r\n Mentink  ")),
+            Address {
+                name: Some("Tim Mentink".into()),
+                email: "hub@example.com".into(),
+            }
+        );
+        assert_eq!(
+            draft_from_address("hub@example.com", Some("   ")).name,
+            None
         );
     }
 

@@ -8,7 +8,7 @@ import { OnScreenSurface } from "on-screen-surface.slint";
 import { SettingsSelectRow, SettingsSwitchRow } from "settings-components.slint";
 
 export struct SignatureChoice { id: string, name: string, text: string }
-export struct SenderIdentityChoice { email: string, label: string }
+export struct SenderIdentityChoice { email: string, label: string, display-name: string }
 export struct SenderIdentityRow {
     email: string,
     name: string,
@@ -89,6 +89,9 @@ export global AccountMailPreferences {
     in-out property <string> composer-sender-query;
     in-out property <int> composer-sender-index: 0;
     in-out property <string> composer-sender-email;
+    // Per-message From display name. Prefills from the identity (or last used
+    // for that address); editing changes only the outgoing name, never email.
+    in-out property <string> composer-sender-display-name;
     callback composer-sender(int);
     callback filter-composer-senders(string);
     callback pick-composer-sender(int);

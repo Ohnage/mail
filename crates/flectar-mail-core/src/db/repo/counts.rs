@@ -482,7 +482,31 @@ pub fn tag_message_counts_for(
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().collect())
+    let mut counts = rows.into_iter().collect::<HashMap<_, _>>();
+    // Gmail labels are also local folders. The company sidebar files a Gmail
+    // label into the same-named company folder, so it needs the folder id.
+    let mut stmt = conn.prepare(&format!(
+        "SELECT local_label_id, folder_id
+         FROM gmail_labels
+         WHERE account_id IN ({placeholders})
+           AND local_label_id IS NOT NULL
+           AND folder_id IS NOT NULL"
+    ))?;
+    let folders = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (label_id, folder_id) in folders {
+        counts.insert(
+            format!(
+                "{}{label_id}",
+                crate::company_view::GMAIL_LABEL_FOLDER_PREFIX
+            ),
+            folder_id,
+        );
+    }
+    Ok(counts)
 }
 
 #[cfg(test)]
@@ -933,6 +957,37 @@ mod tests {
         .unwrap();
         let counts = tag_message_counts_for(&conn, &[1]).unwrap();
         assert_eq!(counts.get("$label:lead").copied(), Some(1));
+        assert!(tag_message_counts_for(&conn, &[99]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_message_counts_carry_each_gmail_labels_backing_folder() {
+        let conn = test_db();
+        seed_thread(&conn, 1, 0, false);
+        let folder_id: i64 = conn
+            .query_row("SELECT id FROM folders WHERE account_id = 1 LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO labels (
+               id, name, color, keyword, position, is_auto, scope, owner_account_id, origin
+             ) VALUES (7, 'Notifications', '#000000', 'Notifications', 1, 0, 'account', 1, 'provider')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO gmail_labels (account_id, provider_id, name, kind, folder_id, local_label_id)
+             VALUES (1, 'Label_34', 'Notifications', 'user', ?1, 7)",
+            [folder_id],
+        )
+        .unwrap();
+        let counts = tag_message_counts_for(&conn, &[1]).unwrap();
+        assert_eq!(
+            crate::company_view::gmail_label_folders(&counts),
+            HashMap::from([(7, folder_id)])
+        );
+        assert_eq!(crate::company_view::tag_count(&counts, "Notifications"), 0);
         assert!(tag_message_counts_for(&conn, &[99]).unwrap().is_empty());
     }
 }

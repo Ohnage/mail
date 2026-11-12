@@ -588,6 +588,12 @@ export component MailListPane inherits FocusScope {
             }
         }
     }
+    private property <int> reset-request: TabsUi.list-reset-request;
+    changed reset-request => {
+        restore-settle.stop();
+        TabsUi.list-restore = -1px;
+        root.reset-pagination();
+    }
     changed selected_scope => { root.reset-pagination(); }
     changed search_query => { root.reset-pagination(); }
     changed search_filter => { root.reset-pagination(); }

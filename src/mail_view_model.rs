@@ -835,12 +835,12 @@ fn label_count_badge(
     let Some(tag_counts) = tag_counts else {
         return Default::default();
     };
-    let key = flectar_mail_core::company_view::tag_key(keyword);
-    tag_counts
-        .iter()
-        .find(|(stored, _)| flectar_mail_core::company_view::tag_key(stored) == key)
-        .and_then(|(_, count)| (*count > 0).then(|| count.to_string().into()))
-        .unwrap_or_default()
+    let count = flectar_mail_core::company_view::tag_count(tag_counts, keyword);
+    if count > 0 {
+        count.to_string().into()
+    } else {
+        Default::default()
+    }
 }
 
 /// Label rows for a message's own chip list: unlike [`make_label_rows`]
@@ -1230,6 +1230,18 @@ fn listed_entry_height(entry: &MailListEntry, row: f32, header: f32) -> f32 {
     } else {
         0.0
     }
+}
+
+/// Start the mail list at the top, as a company tab switch does. The next
+/// tab's list may be shorter than the last one's offset, which otherwise
+/// leaves it scrolled past its end with no scrollbar until it is scrolled.
+/// A refresh inside the shown list still keeps its place; see
+/// [`restore_list_anchor`].
+pub(crate) fn start_list_at_top(app: &AppWindow) {
+    let ui = app.global::<TabsUi>();
+    ui.set_list_restore(-1.0);
+    ui.set_list_hold(-1.0);
+    ui.set_list_reset_request(ui.get_list_reset_request().wrapping_add(1));
 }
 
 /// The message under the current list viewport, so a refresh can put it back.
@@ -1782,11 +1794,18 @@ fn mailbox_scope_title(
             .find(|mailbox| flectar_mail_core::company_view::folder_scope_id(&mailbox.detail) == id)
             .map(|mailbox| flectar_mail_core::company_view::folder_leaf(&mailbox.detail).to_owned())
             .unwrap_or_else(|| "Folder".to_owned()),
-        Scope::TabTag(id) => labels
-            .iter()
-            .find(|label| flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id)
-            .map(|label| label.name.clone())
-            .unwrap_or_else(|| "Tag".to_owned()),
+        Scope::TabTag(id) => {
+            let mut members = labels.iter().filter(|label| {
+                flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id
+            });
+            // Gmail's labels carry no `$label:` prefix; their name leads.
+            let first = members.clone().next();
+            members
+                .find(|label| !label.keyword.starts_with("$label:"))
+                .or(first)
+                .map(|label| label.name.clone())
+                .unwrap_or_else(|| "Tag".to_owned())
+        }
         Scope::Unified(_) | Scope::Important | Scope::Other => scope.to_string(),
         Scope::Folder(_) => {
             mailbox().map_or_else(|| "Folder".into(), |mailbox| mailbox.label.clone())

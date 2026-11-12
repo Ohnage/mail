@@ -1788,7 +1788,26 @@ fn resolve_single_mail_drop(
                 .filter(|path| !path.is_empty())
                 .ok_or_else(|| "folder destination is no longer available".to_owned())?;
             let key = flectar_mail_core::company_view::folder_match_key(&path);
-            if let Some(folder) = state.mailboxes.iter().find(|mailbox| {
+            let gmail = state.connected_accounts.iter().any(|account| {
+                account.id == message.account_id && account.mail_protocol == MailProtocol::Gmail
+            });
+            // Gmail files a company folder's mail as the same-named label.
+            let gmail_label = gmail
+                .then(|| {
+                    state.labels.iter().find(|label| {
+                        label.owner_account_id == Some(message.account_id)
+                            && !label.is_auto
+                            && flectar_mail_core::company_view::folder_match_key(&label.name)
+                                == key
+                    })
+                })
+                .flatten();
+            if let Some(label) = gmail_label {
+                if message.labels.contains(&label.id) {
+                    return Err("message is already in this destination".to_owned());
+                }
+                MailDropDestination::Label(label.id)
+            } else if let Some(folder) = state.mailboxes.iter().find(|mailbox| {
                 mailbox.account_id == message.account_id
                     && !mailbox.is_account
                     && !mailbox.is_standard
@@ -1814,8 +1833,15 @@ fn resolve_single_mail_drop(
                         && flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id
                 })
                 .collect::<Vec<_>>();
+            let gmail = state.connected_accounts.iter().any(|account| {
+                account.id == message.account_id && account.mail_protocol == MailProtocol::Gmail
+            });
+            // A new copy keeps its account's spelling: a Gmail label name, or
+            // a `$label:` keyword elsewhere.
             let sample = copies
-                .first()
+                .iter()
+                .find(|label| label.keyword.starts_with("$label:") != gmail)
+                .or_else(|| copies.first())
                 .ok_or_else(|| "tag destination is no longer available".to_owned())?;
             if let Some(own) = copies
                 .iter()
@@ -2010,6 +2036,17 @@ fn keyword_label_operation(
         .labels
         .iter()
         .find(|label| label.owner_account_id == Some(account_id) && matches(label))
+        .or_else(|| {
+            // Another account's copy lends its spelling only when it is the
+            // same kind: Gmail label names for Gmail, `$label:` elsewhere.
+            let gmail = state.connected_accounts.iter().any(|account| {
+                account.id == account_id && account.mail_protocol == MailProtocol::Gmail
+            });
+            state
+                .labels
+                .iter()
+                .find(|label| matches(label) && label.keyword.starts_with("$label:") != gmail)
+        })
         .or_else(|| state.labels.iter().find(|label| matches(label)));
     mail_work::Operation::Keyword {
         keyword: label

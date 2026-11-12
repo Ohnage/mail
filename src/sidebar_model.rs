@@ -803,6 +803,7 @@ fn label_swatch(value: &str) -> slint::Color {
 fn company_tag_copies(
     source_labels: &[flectar_mail_core::models::Label],
     company: &HashSet<i64>,
+    gmail_account_ids: &HashSet<i32>,
 ) -> Vec<flectar_mail_core::company_view::TagCopy> {
     source_labels
         .iter()
@@ -819,17 +820,59 @@ fn company_tag_copies(
             keyword: label.keyword.clone(),
             name: label.name.clone(),
             color: label.color.clone(),
+            gmail: label
+                .owner_account_id
+                .and_then(|account_id| i32::try_from(account_id).ok())
+                .is_some_and(|account_id| gmail_account_ids.contains(&account_id)),
         })
         .collect()
 }
 
-fn tag_count_badge(tag_counts: &HashMap<String, i64>, keyword: &str) -> slint::SharedString {
-    let key = flectar_mail_core::company_view::tag_key(keyword);
-    tag_counts
+/// Gmail mirrored onto a company tab: which tag copies are filed under a
+/// company folder instead of listed as tags.
+///
+/// Gmail labels are both labels and folders. A Gmail label named like a
+/// folder the tab's other mailboxes already have (mailsort files Stalwart mail
+/// into `Notifications`, Gmail labels it `Notifications`) belongs to that one
+/// folder row. Old mailsort type keywords (`$label:notification`) with no mail
+/// on the tab are filed there too. Status tags (Needs Action, Paid, ...) stay
+/// tags everywhere and merge by [`flectar_mail_core::company_view::tag_key`].
+fn file_tags_under_company_folders(
+    copies: Vec<flectar_mail_core::company_view::TagCopy>,
+    company_folder_paths: &HashSet<String>,
+    gmail_label_folders: &HashMap<i64, i64>,
+    tag_counts: &HashMap<String, i64>,
+) -> (
+    Vec<flectar_mail_core::company_view::TagCopy>,
+    Vec<flectar_mail_core::company_view::TagCopy>,
+) {
+    use flectar_mail_core::company_view::{
+        folder_match_key, is_legacy_folder_tag, is_status_tag, tag_key,
+    };
+    let folder_tag_keys = company_folder_paths
         .iter()
-        .find(|(stored, _)| flectar_mail_core::company_view::tag_key(stored) == key)
-        .and_then(|(_, count)| (*count > 0).then(|| count.to_string().into()))
-        .unwrap_or_default()
+        .map(|path| tag_key(path))
+        .collect::<HashSet<_>>();
+    copies.into_iter().partition(|copy| {
+        if copy.gmail {
+            !is_status_tag(&copy.keyword)
+                && gmail_label_folders.contains_key(&copy.label_id)
+                && company_folder_paths.contains(&folder_match_key(&copy.name))
+        } else {
+            is_legacy_folder_tag(&copy.keyword)
+                && folder_tag_keys.contains(&tag_key(&copy.keyword))
+                && tag_counts.get(&copy.keyword).copied().unwrap_or(0) <= 0
+        }
+    })
+}
+
+fn tag_count_badge(tag_counts: &HashMap<String, i64>, keyword: &str) -> slint::SharedString {
+    let count = flectar_mail_core::company_view::tag_count(tag_counts, keyword);
+    if count > 0 {
+        count.to_string().into()
+    } else {
+        Default::default()
+    }
 }
 
 fn pinned_tag_rows(
@@ -932,7 +975,23 @@ fn make_company_sidebar_rows(
         mailbox,
         ..row(Kind::UnifiedMailbox, "")
     }));
-    let tag_copies = company_tag_copies(source_labels, &company);
+    let company_folder_paths = mailboxes
+        .iter()
+        .filter(|mailbox| {
+            !mailbox.is_account
+                && !mailbox.is_standard
+                && company.contains(&i64::from(mailbox.account_id))
+                && !mailbox.detail.is_empty()
+        })
+        .map(|mailbox| flectar_mail_core::company_view::folder_match_key(&mailbox.detail))
+        .collect::<HashSet<_>>();
+    let gmail_label_folders = flectar_mail_core::company_view::gmail_label_folders(tag_counts);
+    let (filed_tags, tag_copies) = file_tags_under_company_folders(
+        company_tag_copies(source_labels, &company, gmail_account_ids),
+        &company_folder_paths,
+        &gmail_label_folders,
+        tag_counts,
+    );
     let merged_tags = merge_tags(&tag_copies);
     rows.extend(pinned_tag_rows(&merged_tags, pinned_tags, tag_counts));
     rows.push(section(Kind::AccountsHeading, "company-folders", collapsed));
@@ -941,7 +1000,7 @@ fn make_company_sidebar_rows(
     let mut company_mailboxes = Vec::new();
     let mut hidden_depth = None;
     if folders_open {
-    let leaves = mailboxes
+    let mut leaves = mailboxes
         .iter()
         .filter(|mailbox| {
             !mailbox.is_account
@@ -960,6 +1019,17 @@ fn make_company_sidebar_rows(
             }
         })
         .collect::<Vec<_>>();
+    // Gmail labels filed under a company folder count toward that one row.
+    leaves.extend(filed_tags.iter().filter(|copy| copy.gmail).filter_map(|copy| {
+        let folder_id = *gmail_label_folders.get(&copy.label_id)?;
+        Some(FolderLeaf {
+            account_id: copy.account_id,
+            folder_id,
+            path: copy.name.clone(),
+            unread: folder_unreads.get(&folder_id).copied().unwrap_or(0),
+            has_mail: folders_with_mail.contains(&folder_id),
+        })
+    }));
     let merged = merge_folders(&leaves);
     let merged = if show_empty_folders {
         merged
@@ -1606,6 +1676,111 @@ mod tests {
             !rows
                 .iter()
                 .any(|row| { row.kind == Kind::NewLabel && row.mailbox.account_id == 2 })
+        );
+    }
+
+    #[test]
+    fn company_tab_mirrors_gmail_labels_without_double_tags_or_folders() {
+        use flectar_mail_core::company_view::GMAIL_LABEL_FOLDER_PREFIX;
+        use flectar_mail_core::models::Label;
+        let label = |id: i64, owner: i64, name: &str, keyword: &str| Label {
+            id,
+            name: name.into(),
+            color: "#6b7280".into(),
+            keyword: keyword.into(),
+            position: 0,
+            owner_account_id: Some(owner),
+            is_auto: false,
+        };
+        // Tim Mentink tab, 2026-11-12: Gmail (account 2) beside a Stalwart
+        // mailbox (account 10) that mailsort files into folders and tags.
+        let mailboxes = vec![
+            MailboxRow {
+                account_id: 2,
+                is_account: true,
+                label: "Tim Mentink".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 10,
+                is_account: true,
+                label: "ohnage@ug4l.com".into(),
+                ..Default::default()
+            },
+            MailboxRow {
+                account_id: 10,
+                folder_id: 14089,
+                is_selectable: true,
+                label: "Notifications".into(),
+                detail: "Notifications".into(),
+                ..Default::default()
+            },
+        ];
+        let source_labels = vec![
+            label(122, 2, "Notifications", "Notifications"),
+            label(134, 2, "Done", "Done"),
+            label(5, 2, "Orders & Shipping", "Orders_&_Shipping"),
+            label(135, 2, "From a Person", "From_a_Person"),
+            label(90, 10, "Done", "$label:done"),
+            label(60, 10, "Notification", "$label:notification"),
+            label(106, 10, "From Person", "$label:from-person"),
+        ];
+        let tag_counts = HashMap::from([
+            ("Notifications".to_owned(), 529),
+            ("Done".to_owned(), 16),
+            ("$label:done".to_owned(), 15),
+            ("Orders_&_Shipping".to_owned(), 2213),
+            ("From_a_Person".to_owned(), 6),
+            ("$label:from-person".to_owned(), 1),
+            (format!("{GMAIL_LABEL_FOLDER_PREFIX}122"), 14130),
+            (format!("{GMAIL_LABEL_FOLDER_PREFIX}134"), 14142),
+            (format!("{GMAIL_LABEL_FOLDER_PREFIX}5"), 14),
+            (format!("{GMAIL_LABEL_FOLDER_PREFIX}135"), 14143),
+        ]);
+        let (rows, entries) = make_company_sidebar_rows(
+            mailboxes,
+            vec![],
+            vec![],
+            &source_labels,
+            &HashSet::from([2]),
+            &HashSet::new(),
+            &HashSet::new(),
+            &[2, 10],
+            &HashMap::from([(14089, 130), (14130, 384), (14142, 7)]),
+            &HashSet::from([14089, 14130, 14142]),
+            0,
+            "Tim Mentink",
+            None,
+            &[],
+            false,
+            &tag_counts,
+        );
+        let folders = rows
+            .iter()
+            .filter(|row| row.kind == Kind::Folder && row.mailbox.account_id == -2)
+            .map(|row| (row.mailbox.label.to_string(), row.mailbox.count.to_string()))
+            .collect::<Vec<_>>();
+        // Gmail's Notifications label is filed in the one Notifications
+        // folder, whose unread count covers both mailboxes.
+        assert_eq!(folders, vec![("Notifications".to_owned(), "514".to_owned())]);
+        let notifications = entries
+            .iter()
+            .find(|entry| entry.detail == "Notifications")
+            .unwrap();
+        assert_eq!(notifications.count, "514");
+        let tags = rows
+            .iter()
+            .filter(|row| row.key.starts_with("tab-tag:"))
+            .map(|row| (row.label.name.to_string(), row.mailbox.count.to_string()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tags,
+            vec![
+                ("Done".to_owned(), "31".to_owned()),
+                ("From a Person".to_owned(), "7".to_owned()),
+                ("Orders & Shipping".to_owned(), "2213".to_owned()),
+            ],
+            "each tag once, under Gmail's name, with merged counts"
         );
     }
 

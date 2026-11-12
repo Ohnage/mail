@@ -68,8 +68,10 @@ pub fn folder_scope_id(path: &str) -> i64 {
     stable_id(&format!("folder:{}", folder_match_key(path)))
 }
 
+/// Sidebar id of a tab tag. Copies whose keywords share a [`tag_key`] share
+/// one id, so Gmail's `Done` label and mailsort's `$label:done` are one tag.
 pub fn tag_scope_id(keyword: &str) -> i64 {
-    stable_id(&format!("tag:{keyword}"))
+    stable_id(&format!("tag:{}", tag_key(keyword)))
 }
 
 /// Leaf shown for a `/`-separated folder path.
@@ -254,6 +256,9 @@ pub struct TagCopy {
     pub keyword: String,
     pub name: String,
     pub color: String,
+    /// A Gmail label. Gmail is the source of truth for a tag's name, so a
+    /// merged tag shows the Gmail spelling when one of its copies is Gmail's.
+    pub gmail: bool,
 }
 
 /// Tags that share a keyword, in keyword order.
@@ -266,23 +271,35 @@ pub struct MergedTag {
     pub members: Vec<TagCopy>,
 }
 
+/// Tags that share a [`tag_key`] become one tag, in key order.
+///
+/// Gmail's copy leads (its name, keyword and color are the tag's), so a Gmail
+/// label and the same tag on other accounts show once under Gmail's name.
 pub fn merge_tags(tags: &[TagCopy]) -> Vec<MergedTag> {
-    let mut groups: BTreeMap<&str, Vec<&TagCopy>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<&TagCopy>> = BTreeMap::new();
     for tag in tags {
-        let keyword = tag.keyword.trim();
-        if keyword.is_empty() {
+        if tag.keyword.trim().is_empty() {
             continue;
         }
-        groups.entry(keyword).or_default().push(tag);
+        let key = tag_key(&tag.keyword);
+        if key.is_empty() {
+            continue;
+        }
+        groups.entry(key).or_default().push(tag);
     }
     groups
-        .into_iter()
-        .map(|(keyword, members)| MergedTag {
-            id: tag_scope_id(keyword),
-            keyword: keyword.to_owned(),
-            name: members[0].name.clone(),
-            color: members[0].color.clone(),
-            members: members.into_iter().cloned().collect(),
+        .into_values()
+        .map(|mut members| {
+            // Stable: Gmail first, otherwise input order.
+            members.sort_by_key(|member| !member.gmail);
+            let lead = members[0];
+            MergedTag {
+                id: tag_scope_id(&lead.keyword),
+                keyword: lead.keyword.trim().to_owned(),
+                name: lead.name.clone(),
+                color: lead.color.clone(),
+                members: members.into_iter().cloned().collect(),
+            }
         })
         .collect()
 }
@@ -307,9 +324,10 @@ pub fn tag_target_for_account(
     name: &str,
     color: &str,
 ) -> TagTarget {
+    let key = tag_key(keyword);
     if let Some(existing) = tags
         .iter()
-        .find(|tag| tag.account_id == account_id && tag.keyword == keyword)
+        .find(|tag| tag.account_id == account_id && tag_key(&tag.keyword) == key)
     {
         return TagTarget::Label(existing.label_id);
     }
@@ -428,17 +446,119 @@ pub const TAG_ICON_CHECK: i32 = 3;
 /// Clock, for due-soon and waiting tags.
 pub const TAG_ICON_CLOCK: i32 = 4;
 
-/// Lowercase keyword with `$label:` removed and spaces or underscores as hyphens.
-pub fn tag_key(value: &str) -> String {
-    let value = value.trim().to_ascii_lowercase();
+/// Status tags from the mailsort taxonomy. They stay tags on every account,
+/// including Gmail, where they are labels.
+const STATUS_TAG_KEYS: &[&str] = &[
+    "needs-action",
+    "waiting-on",
+    "follow-up",
+    "unpaid",
+    "due-soon",
+    "overdue",
+    "paid",
+    "done",
+    "important",
+    "from-a-person",
+    "transfer-approve",
+    "spam",
+];
+
+/// Older mailsort keywords and the Gmail label (mailsort folder) each means.
+/// `from-person` is the status tag Gmail spells "From a Person"; the others
+/// are pre-v4 type tags whose mail mailsort now files into that folder.
+const TAG_KEY_ALIASES: &[(&str, &str)] = &[
+    ("from-person", "from-a-person"),
+    ("notification", "notifications"),
+    ("newsletter", "marketing-and-newsletters"),
+    ("report", "reports"),
+    ("security", "accounts-and-security"),
+    ("conversation", "correspondence"),
+];
+
+/// Matching form of a tag keyword or name, without aliases.
+fn literal_tag_key(value: &str) -> String {
+    let value = value.trim().to_lowercase();
     let value = value.strip_prefix("$label:").unwrap_or(&value);
-    value
-        .chars()
-        .map(|character| match character {
-            '_' | ' ' => '-',
-            _ => character,
+    let mut key = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '_' | ' ' | '-' => {
+                if !key.is_empty() && !key.ends_with('-') {
+                    key.push('-');
+                }
+            }
+            '&' => {
+                if !key.is_empty() && !key.ends_with('-') {
+                    key.push('-');
+                }
+                key.push_str("and-");
+            }
+            _ => key.push(character),
+        }
+    }
+    while key.ends_with('-') {
+        key.pop();
+    }
+    key
+}
+
+/// Lowercase keyword with `$label:` removed, spaces or underscores as
+/// hyphens, and `&` as `and`, so Gmail's `Receipts_&_Orders` label, the
+/// folder name `Receipts & Orders` and `$label:receipts-and-orders` agree.
+/// Older mailsort keywords map onto the Gmail label they now mean.
+pub fn tag_key(value: &str) -> String {
+    let key = literal_tag_key(value);
+    TAG_KEY_ALIASES
+        .iter()
+        .find(|(alias, _)| *alias == key)
+        .map(|(_, canonical)| (*canonical).to_owned())
+        .unwrap_or(key)
+}
+
+/// A pre-v4 mailsort type keyword (e.g. `$label:notification`) whose mail is
+/// now filed in the folder of the same meaning.
+pub fn is_legacy_folder_tag(keyword: &str) -> bool {
+    let key = literal_tag_key(keyword);
+    TAG_KEY_ALIASES
+        .iter()
+        .any(|(alias, canonical)| *alias == key && !STATUS_TAG_KEYS.contains(canonical))
+}
+
+/// A taxonomy status tag such as Needs Action or Paid.
+pub fn is_status_tag(keyword: &str) -> bool {
+    STATUS_TAG_KEYS.contains(&tag_key(keyword).as_str())
+}
+
+/// Prefix of the entries in a tab's tag-count map that record which local
+/// folder backs each Gmail label: `<prefix><label id>` -> folder id.
+pub const GMAIL_LABEL_FOLDER_PREFIX: &str = "\u{1}gmail-label-folder:";
+
+/// Gmail label id -> its backing folder id, from a tab's tag-count map.
+pub fn gmail_label_folders(counts: &HashMap<String, i64>) -> HashMap<i64, i64> {
+    counts
+        .iter()
+        .filter_map(|(key, folder_id)| {
+            key.strip_prefix(GMAIL_LABEL_FOLDER_PREFIX)?
+                .parse::<i64>()
+                .ok()
+                .map(|label_id| (label_id, *folder_id))
         })
         .collect()
+}
+
+/// Messages tagged with `keyword` in a tab: the sum over every stored keyword
+/// that is the same tag (Gmail's `Done` and `$label:done`).
+pub fn tag_count(counts: &HashMap<String, i64>, keyword: &str) -> i64 {
+    let key = tag_key(keyword);
+    if key.is_empty() {
+        return 0;
+    }
+    counts
+        .iter()
+        .filter(|(stored, _)| !stored.starts_with(GMAIL_LABEL_FOLDER_PREFIX))
+        .filter(|(stored, _)| tag_key(stored) == key)
+        .map(|(_, count)| (*count).max(0))
+        .sum()
 }
 
 /// Labels to add and remove after `added_keyword` is applied.
@@ -789,6 +909,7 @@ mod tests {
                 keyword: "$label:lead".into(),
                 name: "Lead".into(),
                 color: "#112233".into(),
+                gmail: false,
             },
             TagCopy {
                 account_id: 2,
@@ -796,6 +917,7 @@ mod tests {
                 keyword: "$label:lead".into(),
                 name: "Lead".into(),
                 color: "#112233".into(),
+                gmail: false,
             },
             TagCopy {
                 account_id: 1,
@@ -803,6 +925,7 @@ mod tests {
                 keyword: "$label:invoice".into(),
                 name: "Invoice".into(),
                 color: "#abcdef".into(),
+                gmail: false,
             },
         ];
         let merged = merge_tags(&copies);
@@ -826,6 +949,100 @@ mod tests {
             }
         );
         assert_eq!(keyword_for_new_tag("Needs Action"), "$label:needs-action");
+    }
+
+    fn copy(account_id: i64, label_id: i64, keyword: &str, name: &str, gmail: bool) -> TagCopy {
+        TagCopy {
+            account_id,
+            label_id,
+            keyword: keyword.into(),
+            name: name.into(),
+            color: "#6b7280".into(),
+            gmail,
+        }
+    }
+
+    #[test]
+    fn gmail_labels_and_mailsort_keywords_are_one_tag_named_like_gmail() {
+        // Tim Mentink tab on 2026-11-12: Gmail's labels beside the Stalwart
+        // accounts' `$label:*` keywords showed every status tag twice.
+        let copies = vec![
+            copy(10, 90, "$label:done", "Done", false),
+            copy(2, 134, "Done", "Done", true),
+            copy(292, 104, "$label:done", "Done", false),
+            copy(10, 87, "$label:paid", "Paid", false),
+            copy(2, 133, "Paid", "Paid", true),
+            copy(1, 106, "$label:from-person", "From Person", false),
+            copy(2, 135, "From_a_Person", "From a Person", true),
+            copy(2, 129, "Follow_Up", "Follow Up", true),
+            copy(3, 97, "$label:follow-up", "Follow Up", false),
+            copy(2, 127, "Needs_Action", "Needs Action", true),
+            copy(124, 33, "$label:needs-action", "Needs Action", false),
+            copy(2, 128, "Waiting_On", "Waiting On", true),
+            copy(14, 107, "$label:waiting-on", "Waiting On", false),
+        ];
+        let merged = merge_tags(&copies);
+        let names = merged.iter().map(|tag| tag.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["Done", "Follow Up", "From a Person", "Needs Action", "Paid", "Waiting On"]
+        );
+        let done = merged.iter().find(|tag| tag.name == "Done").unwrap();
+        assert_eq!(done.keyword, "Done", "Gmail's label leads");
+        assert_eq!(done.members.len(), 3);
+        assert_eq!(done.members[0].label_id, 134);
+        assert_eq!(done.id, tag_scope_id("$label:done"));
+        let person = merged.iter().find(|tag| tag.name == "From a Person").unwrap();
+        assert_eq!(person.keyword, "From_a_Person");
+        assert_eq!(person.members.len(), 2);
+        // A Gmail message tagged from the merged tag gets the Gmail label.
+        assert_eq!(
+            tag_target_for_account(&copies, 2, "$label:from-person", "From Person", ""),
+            TagTarget::Label(135)
+        );
+        assert_eq!(
+            tag_target_for_account(&copies, 10, "Done", "Done", ""),
+            TagTarget::Label(90)
+        );
+    }
+
+    #[test]
+    fn tag_keys_ignore_case_spacing_ampersands_and_old_mailsort_names() {
+        assert_eq!(tag_key("Receipts_&_Orders"), "receipts-and-orders");
+        assert_eq!(tag_key("Receipts & Orders"), "receipts-and-orders");
+        assert_eq!(tag_key("$label:receipts-and-orders"), "receipts-and-orders");
+        assert_eq!(tag_key("$label:notification"), "notifications");
+        assert_eq!(tag_key("Notifications"), "notifications");
+        assert_eq!(tag_key("$label:newsletter"), "marketing-and-newsletters");
+        assert_eq!(tag_key("Marketing_&_Newsletters"), "marketing-and-newsletters");
+        assert_eq!(tag_key("$label:from-person"), tag_key("From_a_Person"));
+        assert_eq!(tag_key("$label:needs-action"), "needs-action");
+        // Distinct Gmail labels stay distinct: Gmail is mirrored, not merged.
+        assert_ne!(tag_key("Account_&_Security"), tag_key("Accounts_&_Security"));
+        assert_ne!(tag_key("Newsletters"), tag_key("Marketing_&_Newsletters"));
+        assert_ne!(tag_key("$label:lead"), tag_key("Clients_&_Leads"));
+        assert!(is_legacy_folder_tag("$label:notification"));
+        assert!(!is_legacy_folder_tag("$label:from-person"));
+        assert!(!is_legacy_folder_tag("Notifications"));
+        assert!(is_status_tag("Needs_Action"));
+        assert!(is_status_tag("$label:from-person"));
+        assert!(!is_status_tag("Notifications"));
+    }
+
+    #[test]
+    fn tag_counts_sum_every_spelling_and_skip_folder_entries() {
+        let counts = HashMap::from([
+            ("Done".to_owned(), 16),
+            ("$label:done".to_owned(), 15),
+            ("$label:from-person".to_owned(), 1),
+            ("From_a_Person".to_owned(), 6),
+            (format!("{GMAIL_LABEL_FOLDER_PREFIX}122"), 14130),
+        ]);
+        assert_eq!(tag_count(&counts, "$label:done"), 31);
+        assert_eq!(tag_count(&counts, "Done"), 31);
+        assert_eq!(tag_count(&counts, "From a Person"), 7);
+        assert_eq!(tag_count(&counts, "Paid"), 0);
+        assert_eq!(gmail_label_folders(&counts), HashMap::from([(122, 14130)]));
     }
 
     #[test]

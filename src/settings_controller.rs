@@ -1302,6 +1302,8 @@ pub(super) fn register_settings_preference_callbacks(
             crate::account_controller::paint_business_tabs(&app, &state.account_presentation);
         }
         app.invoke_mail_profile_changed();
+        // Every company tab opens at the top of its list.
+        crate::mail_view_model::start_list_at_top(&app);
         let ui_ms = switch_started.elapsed().as_millis();
         {
             let mut state = state_for_tab.borrow_mut();

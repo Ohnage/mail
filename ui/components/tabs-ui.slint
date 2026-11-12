@@ -62,6 +62,10 @@ export global TabsUi {
     in-out property <length> list-header-height: 0px;
     in-out property <length> list-hold: -1px;
     in-out property <int> list-hold-request: 0;
+    // Each request starts the mail list at the top with nothing held or
+    // restored: another company tab can share the mailbox name (both show
+    // "Company Inbox"), so the list's own mailbox change does not fire.
+    in-out property <int> list-reset-request: 0;
     // Re-apply the active tab once local mail storage is ready.
     callback restore-active();
     // Forget every tab and its saved state, leaving one Inbox tab.

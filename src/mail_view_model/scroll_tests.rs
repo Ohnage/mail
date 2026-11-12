@@ -145,6 +145,85 @@ fn repeated_refresh_keeps_a_scrolled_list_on_the_same_message_body() {
 }
 
 #[test]
+fn a_company_tab_switch_starts_the_list_at_the_top() {
+    on_its_own_thread(a_company_tab_switch_starts_the_list_at_the_top_body);
+}
+
+fn a_company_tab_switch_starts_the_list_at_the_top_body() {
+    let (app, window, runtime) = harness();
+    let dir = tempfile::tempdir().unwrap();
+    let (favicons, _) = bounded_ui_channel();
+    let (avatars, _) = bounded_ui_channel();
+    let now = chrono::Local::now().timestamp_millis();
+    let mut state = InboxState::empty(
+        None,
+        UiSender::new(favicons, UiWake::new(app.as_weak(), |_| {})),
+        None,
+        UiSender::new(avatars, UiWake::new(app.as_weak(), |_| {})),
+        false,
+        false,
+        WarmStartCacheWriter::spawn(&runtime, dir.path().join("warm.json")),
+    );
+    state.using_core = true;
+    state.messages = (1..=80)
+        .map(|id| inbox_message(id, now - i64::from(id)))
+        .collect();
+    state.preview_closed = false;
+    app.set_emails(ModelRc::from(state.email_rows.clone()));
+    app.set_mail_list_entries(ModelRc::from(state.mail_list_entries.clone()));
+    let state = Rc::new(RefCell::new(state));
+    render_current(&app, &state, &runtime).unwrap();
+    settle(&window);
+    let row = app.global::<TabsUi>().get_list_row_height();
+    assert!(row > 1.0, "the list has to lay out first, row {row}");
+    let ui = app.global::<TabsUi>();
+    ui.set_list_hold(row * 40.0);
+    ui.set_list_hold_request(ui.get_list_hold_request().wrapping_add(1));
+    settle(&window);
+    let scrolled = app.global::<TabsUi>().get_list_offset();
+    assert!(scrolled > row * 30.0, "scrolled down first, offset {scrolled}");
+
+    // Another company tab: same "Company Inbox" scope, a much shorter list.
+    state.borrow_mut().messages.truncate(3);
+    refresh_rows_only(&app, &state, &runtime);
+    start_list_at_top(&app);
+    settle(&window);
+    assert_eq!(
+        app.global::<TabsUi>().get_list_offset(),
+        0.0,
+        "a tab switch shows the new list from its first row"
+    );
+    assert!(app.global::<TabsUi>().get_list_hold() < 0.0);
+    assert!(app.global::<TabsUi>().get_list_restore() < 0.0);
+
+    // Back to a long list, then new mail inside that same view: the anchor
+    // that keeps a scrolled list in place still works after a reset.
+    state.borrow_mut().messages = (1..=80)
+        .map(|id| inbox_message(id, now - i64::from(id)))
+        .collect();
+    refresh_rows_only(&app, &state, &runtime);
+    start_list_at_top(&app);
+    settle(&window);
+    assert_eq!(app.global::<TabsUi>().get_list_offset(), 0.0);
+    let ui = app.global::<TabsUi>();
+    ui.set_list_hold(row * 12.0);
+    ui.set_list_hold_request(ui.get_list_hold_request().wrapping_add(1));
+    settle(&window);
+    let offset = app.global::<TabsUi>().get_list_offset();
+    state
+        .borrow_mut()
+        .messages
+        .insert(0, inbox_message(100, now + 1));
+    refresh_rows_only(&app, &state, &runtime);
+    settle(&window);
+    let after = app.global::<TabsUi>().get_list_offset();
+    assert!(
+        (after - (offset + row)).abs() < row * 0.75,
+        "new mail keeps the same row under the viewport, before {offset} after {after} row {row}"
+    );
+}
+
+#[test]
 fn refreshing_the_open_message_does_not_jump_the_reader_to_the_top() {
     on_its_own_thread(refreshing_the_open_message_does_not_jump_the_reader_to_the_top_body);
 }

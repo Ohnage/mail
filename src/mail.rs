@@ -3556,8 +3556,11 @@ fn resolve_scope(scope: Scope, folders: &[FolderInfo], labels: &[Label]) -> Scop
                         && flectar_mail_core::company_view::tag_scope_id(&label.keyword) == id
                 })
                 .collect::<Vec<_>>();
+            // Gmail's labels carry no `$label:` prefix; their name leads.
             let title = members
-                .first()
+                .iter()
+                .find(|label| !label.keyword.starts_with("$label:"))
+                .or_else(|| members.first())
                 .map(|label| label.name.clone())
                 .unwrap_or_else(|| "Tag".to_owned());
             ScopeResolution {

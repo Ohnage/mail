@@ -648,6 +648,9 @@ pub fn migrate_default_project_tab(settings: &mut Settings) -> bool {
 /// Catalog version after Pixelated Cities is scoped to hub@ only.
 pub const ADDRESS_CATALOG_PIXELATED_HUB: u32 = 2;
 
+/// Catalog version after city logins renamed hub@\<city\> → contact@\<city\>.
+pub const ADDRESS_CATALOG_CITY_CONTACT: u32 = 3;
+
 /// One-time: Pixelated Cities tab lists only hub@; city hubs stay as send-only
 /// From identities. Other tabs, names, colors, and credentials are untouched.
 pub fn migrate_pixelated_cities_hub_only(
@@ -671,6 +674,116 @@ pub fn migrate_pixelated_cities_hub_only(
     }
     settings.address_catalog_version = ADDRESS_CATALOG_PIXELATED_HUB;
     true
+}
+
+/// Rename stored `hub@<city>` addresses to `contact@<city>` in settings.
+/// Idempotent via [`ADDRESS_CATALOG_CITY_CONTACT`]. Does not touch
+/// `hub@pixelatedcities.com` or create accounts.
+pub fn migrate_pixelated_city_contact_addresses(settings: &mut Settings) -> bool {
+    migrate_default_project_tab(settings);
+    if settings.address_catalog_version >= ADDRESS_CATALOG_CITY_CONTACT {
+        return false;
+    }
+    // Ensure the prior hub-scope migration has a version floor.
+    if settings.address_catalog_version < ADDRESS_CATALOG_PIXELATED_HUB {
+        settings.address_catalog_version = ADDRESS_CATALOG_PIXELATED_HUB;
+    }
+    for view in &mut settings.address_views {
+        if let Some(next) = crate::pixelated_hub::migrate_hub_city_address(&view.address) {
+            view.address = next;
+        }
+        for email in &mut view.source_account_emails {
+            if let Some(next) = crate::pixelated_hub::migrate_hub_city_address(email) {
+                *email = next;
+            }
+        }
+    }
+    for rule in &mut settings.address_rules {
+        for address in &mut rule.addresses {
+            if let Some(next) = crate::pixelated_hub::migrate_hub_city_address(address) {
+                *address = next;
+            }
+        }
+    }
+    for tab in &mut settings.business_tabs {
+        for pattern in &mut tab.recipient_patterns {
+            if let Some(next) = crate::pixelated_hub::migrate_hub_city_address(pattern) {
+                *pattern = next;
+            }
+        }
+        for address in &mut tab.sender_addresses {
+            if let Some(next) = crate::pixelated_hub::migrate_hub_city_address(address) {
+                *address = next;
+            }
+        }
+    }
+    settings.address_catalog_version = ADDRESS_CATALOG_CITY_CONTACT;
+    true
+}
+
+/// Rename `hub@<city>` account emails, usernames, and sender identities in
+/// place. Skips `hub@pixelatedcities.com`. Does not insert accounts.
+pub fn migrate_city_hub_login_rows(conn: &rusqlite::Connection) -> crate::error::Result<usize> {
+    use rusqlite::{OptionalExtension, params};
+    let mut changed = 0usize;
+    let accounts = {
+        let mut stmt = conn.prepare("SELECT id, email, username FROM accounts")?;
+        stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (id, email, username) in accounts {
+        let next_email = crate::pixelated_hub::migrate_hub_city_address(&email);
+        let next_username = crate::pixelated_hub::migrate_hub_city_address(&username);
+        if next_email.is_none() && next_username.is_none() {
+            continue;
+        }
+        let email = next_email.unwrap_or(email);
+        let username = next_username.unwrap_or(username);
+        conn.execute(
+            "UPDATE accounts SET email = ?2, username = ?3 WHERE id = ?1",
+            params![id, email, username],
+        )?;
+        changed += 1;
+    }
+    let identities = {
+        let mut stmt = conn.prepare("SELECT account_id, email FROM sender_identities")?;
+        stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (account_id, email) in identities {
+        let Some(next) = crate::pixelated_hub::migrate_hub_city_address(&email) else {
+            continue;
+        };
+        let exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sender_identities WHERE account_id = ?1 AND email = ?2",
+                params![account_id, next],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if exists {
+            conn.execute(
+                "DELETE FROM sender_identities WHERE account_id = ?1 AND email = ?2",
+                params![account_id, email],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE sender_identities SET email = ?3 WHERE account_id = ?1 AND email = ?2",
+                params![account_id, email, next],
+            )?;
+        }
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 /// City hub account ids that must not sync mail when the PC tab is hub-scoped.
@@ -2061,7 +2174,7 @@ mod tests {
                 account(1, "tmentink@gmail.com"),
                 account(2, "contact@mentinkizm.com"),
                 account(3, "47@mentinkizm.com"),
-                account(4, "hub@abilenetexas.org"),
+                account(4, "contact@abilenetexas.org"),
                 account(5, "other@gmail.com"),
                 account(9, "keep@elsewhere.test"),
             ],
@@ -2162,7 +2275,7 @@ mod tests {
                 account(1, "tmentink@gmail.com"),
                 account(2, "contact@mentinkizm.com"),
                 account(3, "47@mentinkizm.com"),
-                account(4, "hub@abilenetexas.org"),
+                account(4, "contact@abilenetexas.org"),
                 account(5, "other@gmail.com"),
                 account(9, "keep@elsewhere.test"),
             ],
@@ -2416,5 +2529,107 @@ mod tests {
             vec![11, 12]
         );
         assert!(!migrate_pixelated_cities_hub_only(&mut settings, &accounts));
+    }
+
+    #[test]
+    fn pixelated_city_contact_migration_renames_hub_city_views_idempotently() {
+        let mut settings = Settings {
+            address_catalog_version: ADDRESS_CATALOG_PIXELATED_HUB,
+            ..Default::default()
+        };
+        settings.address_views = vec![AddressView {
+            id: 1,
+            address: "hub@jacksonmichigan.org".into(),
+            source_account_emails: vec![
+                "hub@pixelatedcities.com".into(),
+                "hub@jacksonmichigan.org".into(),
+            ],
+            profile_id: Some("pixelated-cities".into()),
+            source: AddressViewSource::Provider,
+        }];
+        settings.address_rules = vec![AddressRule {
+            profile_id: "pixelated-cities".into(),
+            addresses: vec!["hub@annarbormichigan.org".into()],
+            domains: vec!["annarbormichigan.org".into()],
+        }];
+        assert!(migrate_pixelated_city_contact_addresses(&mut settings));
+        assert_eq!(
+            settings.address_catalog_version,
+            ADDRESS_CATALOG_CITY_CONTACT
+        );
+        assert_eq!(
+            settings.address_views[0].address,
+            "contact@jacksonmichigan.org"
+        );
+        assert_eq!(
+            settings.address_views[0].source_account_emails,
+            vec![
+                "hub@pixelatedcities.com".to_owned(),
+                "contact@jacksonmichigan.org".to_owned(),
+            ]
+        );
+        assert_eq!(
+            settings.address_rules[0].addresses,
+            vec!["contact@annarbormichigan.org".to_owned()]
+        );
+        assert!(!migrate_pixelated_city_contact_addresses(&mut settings));
+    }
+
+    #[test]
+    fn migrate_city_hub_login_rows_renames_accounts_and_identities() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::migrations::run(&mut conn).unwrap();
+        let settings = "{\"connection\":{\"incomingSecurity\":\"tls\",\"smtpSecurity\":\"tls\"}}";
+        conn.execute(
+            "INSERT INTO accounts (id, email, provider, auth_kind, username,
+             incoming_host, incoming_port, smtp_host, smtp_port, created_at, mail_protocol, settings_json)
+             VALUES
+             (10,'hub@pixelatedcities.com','generic','password','hub@pixelatedcities.com','h',993,'h',587,0,'jmap',?1),
+             (11,'hub@jacksonmichigan.org','generic','password','hub@jacksonmichigan.org','h',993,'h',587,0,'jmap',?1)",
+            rusqlite::params![settings],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sender_identities (
+               account_id,email,display_name,reply_to_email,is_primary,
+               is_provider_default,verification_status,last_synced_at,source
+             ) VALUES
+               (10, 'hub@pixelatedcities.com', NULL, NULL, 1, 1, 'accepted', 1, 'provider'),
+               (10, 'hub@jacksonmichigan.org', 'Jackson', NULL, 0, 0, 'accepted', 1, 'provider'),
+               (10, 'contact@jacksonmichigan.org', 'Jackson', NULL, 0, 0, 'accepted', 1, 'provider')",
+            [],
+        )
+        .unwrap();
+        let renamed = migrate_city_hub_login_rows(&conn).unwrap();
+        assert!(renamed >= 2);
+        let email: String = conn
+            .query_row("SELECT email FROM accounts WHERE id = 11", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(email, "contact@jacksonmichigan.org");
+        let hub: String = conn
+            .query_row("SELECT email FROM accounts WHERE id = 10", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(hub, "hub@pixelatedcities.com");
+        let leftover: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sender_identities WHERE email = 'hub@jacksonmichigan.org'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftover, 0);
+        let contact: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sender_identities WHERE email = 'contact@jacksonmichigan.org'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(contact, 1);
+        assert_eq!(migrate_city_hub_login_rows(&conn).unwrap(), 0);
     }
 }

@@ -707,7 +707,7 @@ mod tests {
             },
             SenderIdentity {
                 account_id: 10,
-                email: "hub@jacksonmichigan.org".into(),
+                email: "contact@jacksonmichigan.org".into(),
                 display_name: Some("Jackson, MI".into()),
                 reply_to_email: None,
                 is_primary: false,
@@ -721,11 +721,67 @@ mod tests {
         ];
         source.to = vec![address("", "hub@pixelatedcities.com")];
         // X-Pixelated-Hub lands first in delivery_recipients.
-        source.delivery_recipients = vec![address("", "hub@jacksonmichigan.org")];
+        source.delivery_recipients = vec![address("", "contact@jacksonmichigan.org")];
         source.from = address("Lead", "lead@example.com");
         let prepared = prepare_message_compose(&source, "reply", "", english).unwrap();
-        assert_eq!(prepared.sender_email, "hub@jacksonmichigan.org");
+        assert_eq!(prepared.sender_email, "contact@jacksonmichigan.org");
         assert_eq!(prepared.account_id, 10);
+    }
+
+    #[test]
+    fn reply_from_city_aliases_map_lead_plus_legacy_hub_and_keep_allowed_locals() {
+        let city_identity = |email: &str| SenderIdentity {
+            account_id: 10,
+            email: email.into(),
+            display_name: None,
+            reply_to_email: None,
+            is_primary: false,
+            is_provider_default: false,
+            verification_status: "accepted".into(),
+            last_synced_at: 1,
+            source: SenderIdentitySource::Provider,
+            delivery_status: SenderDeliveryStatus::Unknown,
+            delivery_error: None,
+        };
+        let mut source = source();
+        source.account_id = 10;
+        source.account_email = "hub@pixelatedcities.com".into();
+        source.default_sender_email = "hub@pixelatedcities.com".into();
+        source.sender_identities = vec![
+            SenderIdentity {
+                account_id: 10,
+                email: "hub@pixelatedcities.com".into(),
+                display_name: None,
+                reply_to_email: None,
+                is_primary: true,
+                is_provider_default: true,
+                verification_status: "accepted".into(),
+                last_synced_at: 1,
+                source: SenderIdentitySource::Provider,
+                delivery_status: SenderDeliveryStatus::Unknown,
+                delivery_error: None,
+            },
+            city_identity("contact@jacksonmichigan.org"),
+            city_identity("lead@jacksonmichigan.org"),
+            city_identity("privacy@jacksonmichigan.org"),
+        ];
+        source.to = vec![address("", "hub@pixelatedcities.com")];
+        source.from = address("Lead", "lead@example.com");
+
+        let cases = [
+            ("lead+roofing@jacksonmichigan.org", "contact@jacksonmichigan.org"),
+            ("lead@jacksonmichigan.org", "lead@jacksonmichigan.org"),
+            ("privacy@jacksonmichigan.org", "privacy@jacksonmichigan.org"),
+            ("hub@jacksonmichigan.org", "contact@jacksonmichigan.org"),
+        ];
+        for (received, expected) in cases {
+            source.delivery_recipients = vec![address("", received)];
+            let prepared = prepare_message_compose(&source, "reply", "", english).unwrap();
+            assert_eq!(
+                prepared.sender_email, expected,
+                "reply From for {received}"
+            );
+        }
     }
 
     #[test]

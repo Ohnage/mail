@@ -854,7 +854,8 @@ impl Core {
         }
         apply_oauth_settings(&settings);
 
-        // Pixelated Cities: show/sync hub@ only; city hubs become send-only.
+        // Pixelated Cities: show/sync hub@ only; city hubs become send-only;
+        // then rename leftover hub@<city> logins/addresses to contact@<city>.
         // Settings backup runs inside repo::settings::set. Mirror-safe: the
         // catalog version and account syncMail flag round-trip in JSON.
         {
@@ -867,13 +868,19 @@ impl Core {
                         .iter()
                         .map(|account| (account.id, account.email.clone()))
                         .collect::<Vec<_>>();
-                    let settings_changed = crate::brand_registry::migrate_pixelated_cities_hub_only(
-                        &mut settings,
-                        &pairs,
-                    );
+                    let mut settings_changed =
+                        crate::brand_registry::migrate_pixelated_cities_hub_only(
+                            &mut settings,
+                            &pairs,
+                        );
+                    settings_changed |=
+                        crate::brand_registry::migrate_pixelated_city_contact_addresses(
+                            &mut settings,
+                        );
                     if settings_changed {
                         repo::settings::set(conn, &settings)?;
                     }
+                    let renamed = crate::brand_registry::migrate_city_hub_login_rows(conn)?;
                     let send_only = crate::brand_registry::pixelated_cities_send_only_account_ids(
                         &settings, &pairs,
                     );
@@ -887,11 +894,19 @@ impl Core {
                         config.settings.sync_mail = false;
                         repo::accounts::set_settings(conn, account_id, &config.settings)?;
                     }
-                    Ok(settings_changed)
+                    Ok((settings_changed, renamed))
                 })
                 .await?;
-            if applied {
-                tracing::info!("migrated Pixelated Cities tab to hub@ sync scope");
+            if applied.0 {
+                tracing::info!(
+                    "migrated Pixelated Cities tab to hub@ sync scope / contact@ cities"
+                );
+            }
+            if applied.1 > 0 {
+                tracing::info!(
+                    renamed = applied.1,
+                    "renamed hub@ city logins/identities to contact@"
+                );
             }
         }
 

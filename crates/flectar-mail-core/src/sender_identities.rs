@@ -542,11 +542,34 @@ pub fn reply_sender<'a>(
             .iter()
             .filter(|identity| identity.is_selectable())
     };
-    let exact = recipients.clone().into_iter().find_map(|address| {
+    let pick = |wanted: &str| {
         selectable()
-            .find(|identity| identity.email.eq_ignore_ascii_case(address.email.trim()))
+            .find(|identity| identity.email.eq_ignore_ascii_case(wanted))
             .map(|identity| identity.email.clone())
+    };
+    // City domains we receive on: lead+x / legacy hub@ → contact@; allowed
+    // locals keep themselves. Never rewrite a third-party city-domain From.
+    let city = recipients.clone().into_iter().find_map(|address| {
+        let email = address.email.trim();
+        if !owns_city_receipt(identities, email) {
+            return None;
+        }
+        let mapped = crate::pixelated_hub::city_reply_from(email)?;
+        pick(&mapped)
+            .or_else(|| pick(email))
+            .or_else(|| {
+                crate::pixelated_hub::migrate_hub_city_address(email)
+                    .and_then(|legacy| pick(&legacy))
+            })
+            .or(Some(mapped))
     });
+    if let Some(email) = city {
+        return Some(email);
+    }
+    let exact = recipients
+        .clone()
+        .into_iter()
+        .find_map(|address| pick(address.email.trim()));
     exact
         .or_else(|| {
             recipients.clone().into_iter().find_map(|address| {
@@ -563,10 +586,30 @@ pub fn reply_sender<'a>(
         .or_else(|| {
             recipients.into_iter().find_map(|address| {
                 let base = without_subaddress(&address.email)?;
-                selectable()
-                    .find(|identity| identity.email.eq_ignore_ascii_case(&base))
-                    .map(|identity| identity.email.clone())
+                pick(&base)
             })
+        })
+}
+
+fn owns_city_receipt(identities: &[SenderIdentity], email: &str) -> bool {
+    if crate::pixelated_hub::is_city_from_address(email)
+        || crate::pixelated_hub::migrate_hub_city_address(email).is_some()
+    {
+        return true;
+    }
+    let Some(mapped) = crate::pixelated_hub::city_reply_from(email) else {
+        return false;
+    };
+    // lead+niche@city is ours when contact@ / lead@ / legacy hub@ is selectable.
+    is_own_address(identities, email)
+        || is_own_address(identities, &mapped)
+        || identities.iter().any(|identity| {
+            identity.is_selectable()
+                && (identity.email.eq_ignore_ascii_case(&mapped)
+                    || crate::pixelated_hub::migrate_hub_city_address(&identity.email).as_deref()
+                        == Some(mapped.as_str())
+                    || crate::pixelated_hub::city_reply_from(&identity.email).as_deref()
+                        == Some(mapped.as_str()))
         })
 }
 

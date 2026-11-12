@@ -1,5 +1,5 @@
 {
- "source": "mailsort schema.json pixelated_hub (Nov 11 2026)",
+ "source": "mailsort schema.json pixelated_hub (Nov 11 2026 contact@ rename)",
  "pixelated_hub": {
   "address": "hub@pixelatedcities.com",
   "cities_parent": "Cities",
@@ -29,1247 +29,1256 @@
    "Archive"
   ],
   "city_folders": {
-   "hub@abilenetexas.org": "Abilene, TX",
-   "hub@albuquerquenewmexico.org": "Albuquerque, NM",
-   "hub@allentexas.org": "Allen, TX",
-   "hub@allentownpennsylvania.org": "Allentown, PA",
-   "hub@annarbormichigan.org": "Ann Arbor, MI",
-   "hub@antiochca.org": "Antioch, CA",
-   "hub@arnoldsparkia.org": "Arnolds Park, IA",
-   "hub@arvadaco.org": "Arvada, CO",
-   "hub@aspencolorado.org": "Aspen, CO",
-   "hub@auburnhillsmi.com": "Auburn Hills, MI",
-   "hub@auroraillinois.org": "Aurora, IL",
-   "hub@bakersfieldca.org": "Bakersfield, CA",
-   "hub@balharbourfl.org": "Bal Harbour, FL",
-   "hub@batonrougelouisiana.org": "Baton Rouge, LA",
-   "hub@baylakefl.com": "Bay Lake, FL",
-   "hub@beaumonttx.org": "Beaumont, TX",
-   "hub@bellevuewashington.org": "Bellevue, WA",
-   "hub@berkeleyca.org": "Berkeley, CA",
-   "hub@billingsmontana.org": "Billings, MT",
-   "hub@bloomingtonminnesota.org": "Bloomington, MN",
-   "hub@breckenridgecolorado.org": "Breckenridge, CO",
-   "hub@brocktonmassachusetts.org": "Brockton, MA",
-   "hub@buenaparkcalifornia.org": "Buena Park, CA",
-   "hub@buffalonewyork.org": "Buffalo, NY",
-   "hub@cannonbeachoregon.org": "Cannon Beach, OR",
-   "hub@capemaynewjersey.com": "Cape May, NJ",
-   "hub@carlsbadcalifornia.org": "Carlsbad, CA",
-   "hub@carrolltontexas.org": "Carrollton, TX",
-   "hub@carynorthcarolina.org": "Cary, NC",
-   "hub@cedarrapidsia.org": "Cedar Rapids, IA",
-   "hub@centennialcolorado.org": "Centennial, CO",
-   "hub@charlestownwestvirginia.org": "Charles Town, WV",
-   "hub@chattanoogatennessee.org": "Chattanooga, TN",
-   "hub@chesapeakevirginia.org": "Chesapeake, VA",
-   "hub@chulavistaca.org": "Chula Vista, CA",
-   "hub@cityofcommerceca.com": "Commerce, CA",
-   "hub@cityofindustryca.com": "Industry, CA",
-   "hub@clarksvilletennessee.org": "Clarksville, TN",
-   "hub@clovisca.org": "Clovis, CA",
-   "hub@collegestationtexas.org": "College Station, TX",
-   "hub@coloradospringscolorado.org": "Colorado Springs, CO",
-   "hub@columbiamissouri.org": "Columbia, MO",
-   "hub@columbiasouthcarolina.org": "Columbia, SC",
-   "hub@concordca.org": "Concord, CA",
-   "hub@concordnorthcarolina.org": "Concord, NC",
-   "hub@cooperstownnewyork.org": "Cooperstown, NY",
-   "hub@coralspringsflorida.org": "Coral Springs, FL",
-   "hub@coronaca.org": "Corona, CA",
-   "hub@corpuschristitexas.org": "Corpus Christi, TX",
-   "hub@costamesaca.org": "Costa Mesa, CA",
-   "hub@dalycityca.org": "Daly City, CA",
-   "hub@davenportia.org": "Davenport, IA",
-   "hub@daviefl.org": "Davie, FL",
-   "hub@daytonoh.org": "Dayton, OH",
-   "hub@deadwoodsouthdakota.org": "Deadwood, SD",
-   "hub@dearbornmi.org": "Dearborn, MI",
-   "hub@dentontexas.org": "Denton, TX",
-   "hub@deweybeachde.org": "Dewey Beach, DE",
-   "hub@doswellva.com": "Doswell, VA",
-   "hub@downeycalifornia.org": "Downey, CA",
-   "hub@durhamnorthcarolina.org": "Durham, NC",
-   "hub@eastrutherfordnewjersey.com": "East Rutherford, NJ",
-   "hub@edgartownmassachusetts.org": "Edgartown, MA",
-   "hub@edinburgtexas.org": "Edinburg, TX",
-   "hub@edisonnewjersey.org": "Edison, NJ",
-   "hub@elizabethnewjersey.org": "Elizabeth, NJ",
-   "hub@elkgroveca.org": "Elk Grove, CA",
-   "hub@elmonteca.org": "El Monte, CA",
-   "hub@escondidoca.org": "Escondido, CA",
-   "hub@eugeneor.org": "Eugene, OR",
-   "hub@eurekaspringsar.org": "Eureka Springs, AR",
-   "hub@evansvillein.org": "Evansville, IN",
-   "hub@everettwashington.org": "Everett, WA",
-   "hub@fairbanksak.org": "Fairbanks, AK",
-   "hub@fairfieldcalifornia.org": "Fairfield, CA",
-   "hub@fargond.org": "Fargo, ND",
-   "hub@fishersindiana.org": "Fishers, IN",
-   "hub@fontanacalifornia.org": "Fontana, CA",
-   "hub@fortcollinscolorado.org": "Fort Collins, CO",
-   "hub@fortwayneindiana.org": "Fort Wayne, IN",
-   "hub@foxboroughma.org": "Foxborough, MA",
-   "hub@fremontca.org": "Fremont, CA",
-   "hub@friscotx.org": "Frisco, TX",
-   "hub@fullertonca.org": "Fullerton, CA",
-   "hub@gardengroveca.org": "Garden Grove, CA",
-   "hub@gatlinburgtennessee.org": "Gatlinburg, TN",
-   "hub@gilbertarizona.org": "Gilbert, AZ",
-   "hub@glendalecalifornia.org": "Glendale, CA",
-   "hub@goodyeararizona.org": "Goodyear, AZ",
-   "hub@grandprairietexas.org": "Grand Prairie, TX",
-   "hub@grandrapidsmichigan.org": "Grand Rapids, MI",
-   "hub@greeleycolorado.org": "Greeley, CO",
-   "hub@greensboronorthcarolina.org": "Greensboro, NC",
-   "hub@greshamor.org": "Gresham, OR",
-   "hub@gulfshoresal.org": "Gulf Shores, AL",
-   "hub@hamptonvirginia.org": "Hampton, VA",
-   "hub@hanovernewhampshire.org": "Hanover, NH",
-   "hub@haywardca.org": "Hayward, CA",
-   "hub@hendersonnevada.org": "Henderson, NV",
-   "hub@hersheypennsylvania.org": "Hershey, PA",
-   "hub@hialeahfl.org": "Hialeah, FL",
-   "hub@highpointnorthcarolina.org": "High Point, NC",
-   "hub@hillsboroor.org": "Hillsboro, OR",
-   "hub@huntingtonbeachcalifornia.org": "Huntington Beach, CA",
-   "hub@inclinevillagenevada.com": "Incline Village, NV",
-   "hub@inglewoodca.org": "Inglewood, CA",
-   "hub@irvinecalifornia.org": "Irvine, CA",
-   "hub@islandofhawaii.org": "Hawaii Island, HI",
-   "hub@jacksonmichigan.org": "Jackson, MI",
-   "hub@jerseycitynewjersey.org": "Jersey City, NJ",
-   "hub@jolietil.org": "Joliet, IL",
-   "hub@jurupavalleyca.org": "Jurupa Valley, CA",
-   "hub@kansascitykansas.org": "Kansas City, KS",
-   "hub@kansascitymissouri.org": "Kansas City, MO",
-   "hub@kenoshawi.org": "Kenosha, WI",
-   "hub@kentwashington.org": "Kent, WA",
-   "hub@kiawahislandsc.org": "Kiawah Island, SC",
-   "hub@killeentx.org": "Killeen, TX",
-   "hub@kingsislandohio.org": "Kings Island, OH",
-   "hub@kodiakak.org": "Kodiak, AK",
-   "hub@kohlerwi.org": "Kohler, WI",
-   "hub@lafayettelouisiana.org": "Lafayette, LA",
-   "hub@lahainahawaii.org": "Lahaina, HI",
-   "hub@lakebuenavistafl.org": "Lake Buena Vista, FL",
-   "hub@lakegenevawi.org": "Lake Geneva, WI",
-   "hub@lakewoodnewjersey.org": "Lakewood, NJ",
-   "hub@lancasterca.org": "Lancaster, CA",
-   "hub@lansingmichigan.org": "Lansing, MI",
-   "hub@laredotx.org": "Laredo, TX",
-   "hub@lascrucesnewmexico.org": "Las Cruces, NM",
-   "hub@leaguecitytexas.org": "League City, TX",
-   "hub@lewisvilletexas.org": "Lewisville, TX",
-   "hub@lincolnne.org": "Lincoln, NE",
-   "hub@littlerockar.org": "Little Rock, AR",
-   "hub@losalamosnewmexico.org": "Los Alamos, NM",
-   "hub@lowellmassachusetts.org": "Lowell, MA",
-   "hub@lynnma.org": "Lynn, MA",
-   "hub@macongeorgia.org": "Macon, GA",
-   "hub@manchesternewhampshire.org": "Manchester, NH",
-   "hub@marcoislandfl.org": "Marco Island, FL",
-   "hub@mcallentexas.org": "McAllen, TX",
-   "hub@mcleanva.org": "McLean, VA",
-   "hub@meridianidaho.org": "Meridian, ID",
-   "hub@mesquitetx.org": "Mesquite, TX",
-   "hub@miamigardensfl.org": "Miami Gardens, FL",
-   "hub@midlandtx.org": "Midland, TX",
-   "hub@minneapolisminnesota.org": "Minneapolis, MN",
-   "hub@miramarflorida.org": "Miramar, FL",
-   "hub@mobileal.org": "Mobile, AL",
-   "hub@modestoca.org": "Modesto, CA",
-   "hub@montgomeryalabama.org": "Montgomery, AL",
-   "hub@morenovalleyca.org": "Moreno Valley, CA",
-   "hub@murfreesborotennessee.org": "Murfreesboro, TN",
-   "hub@murrietaca.org": "Murrieta, CA",
-   "hub@muskegonmi.org": "Muskegon, MI",
-   "hub@nagsheadnc.org": "Nags Head, NC",
-   "hub@nampaidaho.org": "Nampa, ID",
-   "hub@napaca.org": "Napa, CA",
-   "hub@napavalleyca.org": "Napa Valley, CA",
-   "hub@napervilleillinois.org": "Naperville, IL",
-   "hub@newalbanyoh.org": "New Albany, OH",
-   "hub@newarknewjersey.org": "Newark, NJ",
-   "hub@newbedfordma.org": "New Bedford, MA",
-   "hub@newhavenconnecticut.org": "New Haven, CT",
-   "hub@normanoklahoma.org": "Norman, OK",
-   "hub@northcharlestonsc.org": "North Charleston, SC",
-   "hub@northlasvegasnevada.org": "North Las Vegas, NV",
-   "hub@oceansidecalifornia.org": "Oceanside, CA",
-   "hub@odessatexas.org": "Odessa, TX",
-   "hub@oklahomacityoklahoma.org": "Oklahoma City, OK",
-   "hub@ontarioca.org": "Ontario, CA",
-   "hub@overlandparkkansas.org": "Overland Park, KS",
-   "hub@oxnardca.org": "Oxnard, CA",
-   "hub@palmbayfl.org": "Palm Bay, FL",
-   "hub@palmdaleca.org": "Palmdale, CA",
-   "hub@paradisenv.org": "Paradise, NV",
-   "hub@pasadenacalifornia.org": "Pasadena, CA",
-   "hub@patersonnewjersey.org": "Paterson, NJ",
-   "hub@peachtreecitygeorgia.org": "Peachtree City, GA",
-   "hub@pembrokepinesfl.org": "Pembroke Pines, FL",
-   "hub@peoriaarizona.org": "Peoria, AZ",
-   "hub@pinehurstnc.org": "Pinehurst, NC",
-   "hub@pittsburghpennsylvania.org": "Pittsburgh, PA",
-   "hub@pomonaca.org": "Pomona, CA",
-   "hub@pompanobeachflorida.org": "Pompano Beach, FL",
-   "hub@portsmouthnewhampshire.org": "Portsmouth, NH",
-   "hub@portstlucieflorida.org": "Port St. Lucie, FL",
-   "hub@princevillehawaii.org": "Princeville, HI",
-   "hub@provoutah.org": "Provo, UT",
-   "hub@raleighnorthcarolina.org": "Raleigh, NC",
-   "hub@ranchocucamongacalifornia.org": "Rancho Cucamonga, CA",
-   "hub@rehobothbeachdelaware.com": "Rehoboth Beach, DE",
-   "hub@rentonwa.org": "Renton, WA",
-   "hub@richardsontx.org": "Richardson, TX",
-   "hub@richmondca.org": "Richmond, CA",
-   "hub@ridgelandmississippi.org": "Ridgeland, MS",
-   "hub@rochesterminnesota.org": "Rochester, MN",
-   "hub@rochesternewyork.org": "Rochester, NY",
-   "hub@rockfordillinois.org": "Rockford, IL",
-   "hub@rosemontil.com": "Rosemont, IL",
-   "hub@rosevilleca.org": "Roseville, CA",
-   "hub@roundrocktx.org": "Round Rock, TX",
-   "hub@saintpaulminnesota.org": "Saint Paul, MN",
-   "hub@salinasca.org": "Salinas, CA",
-   "hub@sanbernardinoca.org": "San Bernardino, CA",
-   "hub@sanduskyoh.org": "Sandusky, OH",
-   "hub@sandyspringsgeorgia.org": "Sandy Springs, GA",
-   "hub@santaclaraca.org": "Santa Clara, CA",
-   "hub@santaclaritacalifornia.org": "Santa Clarita, CA",
-   "hub@santaclausin.org": "Santa Claus, IN",
-   "hub@santamariaca.org": "Santa Maria, CA",
-   "hub@santarosaca.org": "Santa Rosa, CA",
-   "hub@saratogaspringsnewyork.org": "Saratoga Springs, NY",
-   "hub@seaislandga.com": "Sea Island, GA",
-   "hub@sedonaarizona.org": "Sedona, AZ",
-   "hub@shakopeeminnesota.org": "Shakopee, MN",
-   "hub@shreveportlouisiana.org": "Shreveport, LA",
-   "hub@silvercitynewmexico.org": "Silver City, NM",
-   "hub@simivalleyca.org": "Simi Valley, CA",
-   "hub@siouxfallssouthdakota.org": "Sioux Falls, SD",
-   "hub@southbendindiana.org": "South Bend, IN",
-   "hub@southfultonga.org": "South Fulton, GA",
-   "hub@sparksnevada.org": "Sparks, NV",
-   "hub@speedwayin.org": "Speedway, IN",
-   "hub@spokanevalleywa.org": "Spokane Valley, WA",
-   "hub@springfieldmassachusetts.org": "Springfield, MA",
-   "hub@springfieldmissouri.org": "Springfield, MO",
-   "hub@stamfordconnecticut.org": "Stamford, CT",
-   "hub@sterlingheightsmi.org": "Sterling Heights, MI",
-   "hub@stocktonca.org": "Stockton, CA",
-   "hub@sugarlandtexas.org": "Sugar Land, TX",
-   "hub@sunnyislesbeachfl.org": "Sunny Isles Beach, FL",
-   "hub@sunnyvaleca.org": "Sunnyvale, CA",
-   "hub@sunriveror.com": "Sunriver, OR",
-   "hub@sunvalleyid.org": "Sun Valley, ID",
-   "hub@surprisearizona.org": "Surprise, AZ",
-   "hub@syracusenewyork.org": "Syracuse, NY",
-   "hub@tacomawa.org": "Tacoma, WA",
-   "hub@taosnewmexico.org": "Taos, NM",
-   "hub@temeculacalifornia.org": "Temecula, CA",
-   "hub@tempearizona.org": "Tempe, AZ",
-   "hub@thorntonco.org": "Thornton, CO",
-   "hub@thousandoakscalifornia.org": "Thousand Oaks, CA",
-   "hub@toledooh.org": "Toledo, OH",
-   "hub@topekakansas.org": "Topeka, KS",
-   "hub@torranceca.org": "Torrance, CA",
-   "hub@troymichigan.org": "Troy, MI",
-   "hub@tuscaloosaalabama.org": "Tuscaloosa, AL",
-   "hub@tysonsvirginia.org": "Tysons, VA",
-   "hub@valdezak.org": "Valdez, AK",
-   "hub@vallejoca.org": "Vallejo, CA",
-   "hub@vancouverwa.org": "Vancouver, WA",
-   "hub@venturaca.org": "Ventura, CA",
-   "hub@victorvilleca.org": "Victorville, CA",
-   "hub@virginiabeachvirginia.org": "Virginia Beach, VA",
-   "hub@visaliacalifornia.org": "Visalia, CA",
-   "hub@waileahawaii.org": "Wailea, HI",
-   "hub@warrenmi.org": "Warren, MI",
-   "hub@waterburyconnecticut.org": "Waterbury, CT",
-   "hub@westjordanut.org": "West Jordan, UT",
-   "hub@westminsterco.org": "Westminster, CO",
-   "hub@westpalmbeachflorida.org": "West Palm Beach, FL",
-   "hub@westvalleycityut.org": "West Valley City, UT",
-   "hub@whitefishmontana.org": "Whitefish, MT",
-   "hub@whitesulphurspringswestvirginia.com": "White Sulphur Springs, WV",
-   "hub@williamsburgvirginia.org": "Williamsburg, VA",
-   "hub@willistonnorthdakota.org": "Williston, ND",
-   "hub@winstonsalemnorthcarolina.com": "Winston-Salem, NC",
-   "hub@wisconsindellswi.org": "Wisconsin Dells, WI",
-   "hub@woodstockvermont.org": "Woodstock, VT",
-   "hub@worcestermassachusetts.org": "Worcester, MA",
-   "hub@yarrowpointwa.com": "Yarrow Point, WA",
-   "hub@yonkersnewyork.org": "Yonkers, NY"
+   "contact@abilenetexas.org": "Abilene, TX",
+   "contact@albuquerquenewmexico.org": "Albuquerque, NM",
+   "contact@allentexas.org": "Allen, TX",
+   "contact@allentownpennsylvania.org": "Allentown, PA",
+   "contact@annarbormichigan.org": "Ann Arbor, MI",
+   "contact@antiochca.org": "Antioch, CA",
+   "contact@arnoldsparkia.org": "Arnolds Park, IA",
+   "contact@arvadaco.org": "Arvada, CO",
+   "contact@aspencolorado.org": "Aspen, CO",
+   "contact@auburnhillsmi.com": "Auburn Hills, MI",
+   "contact@auroraillinois.org": "Aurora, IL",
+   "contact@bakersfieldca.org": "Bakersfield, CA",
+   "contact@balharbourfl.org": "Bal Harbour, FL",
+   "contact@batonrougelouisiana.org": "Baton Rouge, LA",
+   "contact@baylakefl.com": "Bay Lake, FL",
+   "contact@beaumonttx.org": "Beaumont, TX",
+   "contact@bellevuewashington.org": "Bellevue, WA",
+   "contact@berkeleyca.org": "Berkeley, CA",
+   "contact@billingsmontana.org": "Billings, MT",
+   "contact@bloomingtonminnesota.org": "Bloomington, MN",
+   "contact@breckenridgecolorado.org": "Breckenridge, CO",
+   "contact@brocktonmassachusetts.org": "Brockton, MA",
+   "contact@buenaparkcalifornia.org": "Buena Park, CA",
+   "contact@buffalonewyork.org": "Buffalo, NY",
+   "contact@cannonbeachoregon.org": "Cannon Beach, OR",
+   "contact@capemaynewjersey.com": "Cape May, NJ",
+   "contact@carlsbadcalifornia.org": "Carlsbad, CA",
+   "contact@carrolltontexas.org": "Carrollton, TX",
+   "contact@carynorthcarolina.org": "Cary, NC",
+   "contact@cedarrapidsia.org": "Cedar Rapids, IA",
+   "contact@centennialcolorado.org": "Centennial, CO",
+   "contact@charlestownwestvirginia.org": "Charles Town, WV",
+   "contact@chattanoogatennessee.org": "Chattanooga, TN",
+   "contact@chesapeakevirginia.org": "Chesapeake, VA",
+   "contact@chulavistaca.org": "Chula Vista, CA",
+   "contact@cityofcommerceca.com": "Commerce, CA",
+   "contact@cityofindustryca.com": "Industry, CA",
+   "contact@clarksvilletennessee.org": "Clarksville, TN",
+   "contact@clovisca.org": "Clovis, CA",
+   "contact@collegestationtexas.org": "College Station, TX",
+   "contact@coloradospringscolorado.org": "Colorado Springs, CO",
+   "contact@columbiamissouri.org": "Columbia, MO",
+   "contact@columbiasouthcarolina.org": "Columbia, SC",
+   "contact@concordca.org": "Concord, CA",
+   "contact@concordnorthcarolina.org": "Concord, NC",
+   "contact@cooperstownnewyork.org": "Cooperstown, NY",
+   "contact@coralspringsflorida.org": "Coral Springs, FL",
+   "contact@coronaca.org": "Corona, CA",
+   "contact@corpuschristitexas.org": "Corpus Christi, TX",
+   "contact@costamesaca.org": "Costa Mesa, CA",
+   "contact@dalycityca.org": "Daly City, CA",
+   "contact@davenportia.org": "Davenport, IA",
+   "contact@daviefl.org": "Davie, FL",
+   "contact@daytonoh.org": "Dayton, OH",
+   "contact@deadwoodsouthdakota.org": "Deadwood, SD",
+   "contact@dearbornmi.org": "Dearborn, MI",
+   "contact@dentontexas.org": "Denton, TX",
+   "contact@deweybeachde.org": "Dewey Beach, DE",
+   "contact@doswellva.com": "Doswell, VA",
+   "contact@downeycalifornia.org": "Downey, CA",
+   "contact@durhamnorthcarolina.org": "Durham, NC",
+   "contact@eastrutherfordnewjersey.com": "East Rutherford, NJ",
+   "contact@edgartownmassachusetts.org": "Edgartown, MA",
+   "contact@edinburgtexas.org": "Edinburg, TX",
+   "contact@edisonnewjersey.org": "Edison, NJ",
+   "contact@elizabethnewjersey.org": "Elizabeth, NJ",
+   "contact@elkgroveca.org": "Elk Grove, CA",
+   "contact@elmonteca.org": "El Monte, CA",
+   "contact@escondidoca.org": "Escondido, CA",
+   "contact@eugeneor.org": "Eugene, OR",
+   "contact@eurekaspringsar.org": "Eureka Springs, AR",
+   "contact@evansvillein.org": "Evansville, IN",
+   "contact@everettwashington.org": "Everett, WA",
+   "contact@fairbanksak.org": "Fairbanks, AK",
+   "contact@fairfieldcalifornia.org": "Fairfield, CA",
+   "contact@fargond.org": "Fargo, ND",
+   "contact@fishersindiana.org": "Fishers, IN",
+   "contact@fontanacalifornia.org": "Fontana, CA",
+   "contact@fortcollinscolorado.org": "Fort Collins, CO",
+   "contact@fortwayneindiana.org": "Fort Wayne, IN",
+   "contact@foxboroughma.org": "Foxborough, MA",
+   "contact@fremontca.org": "Fremont, CA",
+   "contact@friscotx.org": "Frisco, TX",
+   "contact@fullertonca.org": "Fullerton, CA",
+   "contact@gardengroveca.org": "Garden Grove, CA",
+   "contact@gatlinburgtennessee.org": "Gatlinburg, TN",
+   "contact@gilbertarizona.org": "Gilbert, AZ",
+   "contact@glendalecalifornia.org": "Glendale, CA",
+   "contact@goodyeararizona.org": "Goodyear, AZ",
+   "contact@grandprairietexas.org": "Grand Prairie, TX",
+   "contact@grandrapidsmichigan.org": "Grand Rapids, MI",
+   "contact@greeleycolorado.org": "Greeley, CO",
+   "contact@greensboronorthcarolina.org": "Greensboro, NC",
+   "contact@greshamor.org": "Gresham, OR",
+   "contact@gulfshoresal.org": "Gulf Shores, AL",
+   "contact@hamptonvirginia.org": "Hampton, VA",
+   "contact@hanovernewhampshire.org": "Hanover, NH",
+   "contact@haywardca.org": "Hayward, CA",
+   "contact@hendersonnevada.org": "Henderson, NV",
+   "contact@hersheypennsylvania.org": "Hershey, PA",
+   "contact@hialeahfl.org": "Hialeah, FL",
+   "contact@highpointnorthcarolina.org": "High Point, NC",
+   "contact@hillsboroor.org": "Hillsboro, OR",
+   "contact@huntingtonbeachcalifornia.org": "Huntington Beach, CA",
+   "contact@inclinevillagenevada.com": "Incline Village, NV",
+   "contact@inglewoodca.org": "Inglewood, CA",
+   "contact@irvinecalifornia.org": "Irvine, CA",
+   "contact@islandofhawaii.org": "Hawaii Island, HI",
+   "contact@jacksonmichigan.org": "Jackson, MI",
+   "contact@jerseycitynewjersey.org": "Jersey City, NJ",
+   "contact@jolietil.org": "Joliet, IL",
+   "contact@jurupavalleyca.org": "Jurupa Valley, CA",
+   "contact@kansascitykansas.org": "Kansas City, KS",
+   "contact@kansascitymissouri.org": "Kansas City, MO",
+   "contact@kenoshawi.org": "Kenosha, WI",
+   "contact@kentwashington.org": "Kent, WA",
+   "contact@kiawahislandsc.org": "Kiawah Island, SC",
+   "contact@killeentx.org": "Killeen, TX",
+   "contact@kingsislandohio.org": "Kings Island, OH",
+   "contact@kodiakak.org": "Kodiak, AK",
+   "contact@kohlerwi.org": "Kohler, WI",
+   "contact@lafayettelouisiana.org": "Lafayette, LA",
+   "contact@lahainahawaii.org": "Lahaina, HI",
+   "contact@lakebuenavistafl.org": "Lake Buena Vista, FL",
+   "contact@lakegenevawi.org": "Lake Geneva, WI",
+   "contact@lakewoodnewjersey.org": "Lakewood, NJ",
+   "contact@lancasterca.org": "Lancaster, CA",
+   "contact@lansingmichigan.org": "Lansing, MI",
+   "contact@laredotx.org": "Laredo, TX",
+   "contact@lascrucesnewmexico.org": "Las Cruces, NM",
+   "contact@leaguecitytexas.org": "League City, TX",
+   "contact@lewisvilletexas.org": "Lewisville, TX",
+   "contact@lincolnne.org": "Lincoln, NE",
+   "contact@littlerockar.org": "Little Rock, AR",
+   "contact@losalamosnewmexico.org": "Los Alamos, NM",
+   "contact@lowellmassachusetts.org": "Lowell, MA",
+   "contact@lynnma.org": "Lynn, MA",
+   "contact@macongeorgia.org": "Macon, GA",
+   "contact@manchesternewhampshire.org": "Manchester, NH",
+   "contact@marcoislandfl.org": "Marco Island, FL",
+   "contact@mcallentexas.org": "McAllen, TX",
+   "contact@mcleanva.org": "McLean, VA",
+   "contact@meridianidaho.org": "Meridian, ID",
+   "contact@mesquitetx.org": "Mesquite, TX",
+   "contact@miamigardensfl.org": "Miami Gardens, FL",
+   "contact@midlandtx.org": "Midland, TX",
+   "contact@minneapolisminnesota.org": "Minneapolis, MN",
+   "contact@miramarflorida.org": "Miramar, FL",
+   "contact@mobileal.org": "Mobile, AL",
+   "contact@modestoca.org": "Modesto, CA",
+   "contact@montgomeryalabama.org": "Montgomery, AL",
+   "contact@morenovalleyca.org": "Moreno Valley, CA",
+   "contact@murfreesborotennessee.org": "Murfreesboro, TN",
+   "contact@murrietaca.org": "Murrieta, CA",
+   "contact@muskegonmi.org": "Muskegon, MI",
+   "contact@nagsheadnc.org": "Nags Head, NC",
+   "contact@nampaidaho.org": "Nampa, ID",
+   "contact@napaca.org": "Napa, CA",
+   "contact@napavalleyca.org": "Napa Valley, CA",
+   "contact@napervilleillinois.org": "Naperville, IL",
+   "contact@newalbanyoh.org": "New Albany, OH",
+   "contact@newarknewjersey.org": "Newark, NJ",
+   "contact@newbedfordma.org": "New Bedford, MA",
+   "contact@newhavenconnecticut.org": "New Haven, CT",
+   "contact@normanoklahoma.org": "Norman, OK",
+   "contact@northcharlestonsc.org": "North Charleston, SC",
+   "contact@northlasvegasnevada.org": "North Las Vegas, NV",
+   "contact@oceansidecalifornia.org": "Oceanside, CA",
+   "contact@odessatexas.org": "Odessa, TX",
+   "contact@oklahomacityoklahoma.org": "Oklahoma City, OK",
+   "contact@ontarioca.org": "Ontario, CA",
+   "contact@overlandparkkansas.org": "Overland Park, KS",
+   "contact@oxnardca.org": "Oxnard, CA",
+   "contact@palmbayfl.org": "Palm Bay, FL",
+   "contact@palmdaleca.org": "Palmdale, CA",
+   "contact@paradisenv.org": "Paradise, NV",
+   "contact@pasadenacalifornia.org": "Pasadena, CA",
+   "contact@patersonnewjersey.org": "Paterson, NJ",
+   "contact@peachtreecitygeorgia.org": "Peachtree City, GA",
+   "contact@pembrokepinesfl.org": "Pembroke Pines, FL",
+   "contact@peoriaarizona.org": "Peoria, AZ",
+   "contact@pinehurstnc.org": "Pinehurst, NC",
+   "contact@pittsburghpennsylvania.org": "Pittsburgh, PA",
+   "contact@pomonaca.org": "Pomona, CA",
+   "contact@pompanobeachflorida.org": "Pompano Beach, FL",
+   "contact@portsmouthnewhampshire.org": "Portsmouth, NH",
+   "contact@portstlucieflorida.org": "Port St. Lucie, FL",
+   "contact@princevillehawaii.org": "Princeville, HI",
+   "contact@provoutah.org": "Provo, UT",
+   "contact@raleighnorthcarolina.org": "Raleigh, NC",
+   "contact@ranchocucamongacalifornia.org": "Rancho Cucamonga, CA",
+   "contact@rehobothbeachdelaware.com": "Rehoboth Beach, DE",
+   "contact@rentonwa.org": "Renton, WA",
+   "contact@richardsontx.org": "Richardson, TX",
+   "contact@richmondca.org": "Richmond, CA",
+   "contact@ridgelandmississippi.org": "Ridgeland, MS",
+   "contact@rochesterminnesota.org": "Rochester, MN",
+   "contact@rochesternewyork.org": "Rochester, NY",
+   "contact@rockfordillinois.org": "Rockford, IL",
+   "contact@rosemontil.com": "Rosemont, IL",
+   "contact@rosevilleca.org": "Roseville, CA",
+   "contact@roundrocktx.org": "Round Rock, TX",
+   "contact@saintpaulminnesota.org": "Saint Paul, MN",
+   "contact@salinasca.org": "Salinas, CA",
+   "contact@sanbernardinoca.org": "San Bernardino, CA",
+   "contact@sanduskyoh.org": "Sandusky, OH",
+   "contact@sandyspringsgeorgia.org": "Sandy Springs, GA",
+   "contact@santaclaraca.org": "Santa Clara, CA",
+   "contact@santaclaritacalifornia.org": "Santa Clarita, CA",
+   "contact@santaclausin.org": "Santa Claus, IN",
+   "contact@santamariaca.org": "Santa Maria, CA",
+   "contact@santarosaca.org": "Santa Rosa, CA",
+   "contact@saratogaspringsnewyork.org": "Saratoga Springs, NY",
+   "contact@seaislandga.com": "Sea Island, GA",
+   "contact@sedonaarizona.org": "Sedona, AZ",
+   "contact@shakopeeminnesota.org": "Shakopee, MN",
+   "contact@shreveportlouisiana.org": "Shreveport, LA",
+   "contact@silvercitynewmexico.org": "Silver City, NM",
+   "contact@simivalleyca.org": "Simi Valley, CA",
+   "contact@siouxfallssouthdakota.org": "Sioux Falls, SD",
+   "contact@southbendindiana.org": "South Bend, IN",
+   "contact@southfultonga.org": "South Fulton, GA",
+   "contact@sparksnevada.org": "Sparks, NV",
+   "contact@speedwayin.org": "Speedway, IN",
+   "contact@spokanevalleywa.org": "Spokane Valley, WA",
+   "contact@springfieldmassachusetts.org": "Springfield, MA",
+   "contact@springfieldmissouri.org": "Springfield, MO",
+   "contact@stamfordconnecticut.org": "Stamford, CT",
+   "contact@sterlingheightsmi.org": "Sterling Heights, MI",
+   "contact@stocktonca.org": "Stockton, CA",
+   "contact@sugarlandtexas.org": "Sugar Land, TX",
+   "contact@sunnyislesbeachfl.org": "Sunny Isles Beach, FL",
+   "contact@sunnyvaleca.org": "Sunnyvale, CA",
+   "contact@sunriveror.com": "Sunriver, OR",
+   "contact@sunvalleyid.org": "Sun Valley, ID",
+   "contact@surprisearizona.org": "Surprise, AZ",
+   "contact@syracusenewyork.org": "Syracuse, NY",
+   "contact@tacomawa.org": "Tacoma, WA",
+   "contact@taosnewmexico.org": "Taos, NM",
+   "contact@temeculacalifornia.org": "Temecula, CA",
+   "contact@tempearizona.org": "Tempe, AZ",
+   "contact@thorntonco.org": "Thornton, CO",
+   "contact@thousandoakscalifornia.org": "Thousand Oaks, CA",
+   "contact@toledooh.org": "Toledo, OH",
+   "contact@topekakansas.org": "Topeka, KS",
+   "contact@torranceca.org": "Torrance, CA",
+   "contact@troymichigan.org": "Troy, MI",
+   "contact@tuscaloosaalabama.org": "Tuscaloosa, AL",
+   "contact@tysonsvirginia.org": "Tysons, VA",
+   "contact@valdezak.org": "Valdez, AK",
+   "contact@vallejoca.org": "Vallejo, CA",
+   "contact@vancouverwa.org": "Vancouver, WA",
+   "contact@venturaca.org": "Ventura, CA",
+   "contact@victorvilleca.org": "Victorville, CA",
+   "contact@virginiabeachvirginia.org": "Virginia Beach, VA",
+   "contact@visaliacalifornia.org": "Visalia, CA",
+   "contact@waileahawaii.org": "Wailea, HI",
+   "contact@warrenmi.org": "Warren, MI",
+   "contact@waterburyconnecticut.org": "Waterbury, CT",
+   "contact@westjordanut.org": "West Jordan, UT",
+   "contact@westminsterco.org": "Westminster, CO",
+   "contact@westpalmbeachflorida.org": "West Palm Beach, FL",
+   "contact@westvalleycityut.org": "West Valley City, UT",
+   "contact@whitefishmontana.org": "Whitefish, MT",
+   "contact@whitesulphurspringswestvirginia.com": "White Sulphur Springs, WV",
+   "contact@williamsburgvirginia.org": "Williamsburg, VA",
+   "contact@willistonnorthdakota.org": "Williston, ND",
+   "contact@winstonsalemnorthcarolina.com": "Winston-Salem, NC",
+   "contact@wisconsindellswi.org": "Wisconsin Dells, WI",
+   "contact@woodstockvermont.org": "Woodstock, VT",
+   "contact@worcestermassachusetts.org": "Worcester, MA",
+   "contact@yarrowpointwa.com": "Yarrow Point, WA",
+   "contact@yonkersnewyork.org": "Yonkers, NY"
   },
   "city_domains": {
-   "hub@abilenetexas.org": [
+   "contact@abilenetexas.org": [
     "abilenetexas.org"
    ],
-   "hub@albuquerquenewmexico.org": [
+   "contact@albuquerquenewmexico.org": [
     "albuquerquenewmexico.org"
    ],
-   "hub@allentexas.org": [
+   "contact@allentexas.org": [
     "allentexas.org"
    ],
-   "hub@allentownpennsylvania.org": [
+   "contact@allentownpennsylvania.org": [
     "allentownpennsylvania.org"
    ],
-   "hub@annarbormichigan.org": [
+   "contact@annarbormichigan.org": [
     "annarbormichigan.org"
    ],
-   "hub@antiochca.org": [
+   "contact@antiochca.org": [
     "antiochca.org",
     "antiochcalifornia.org"
    ],
-   "hub@arnoldsparkia.org": [
+   "contact@arnoldsparkia.org": [
     "arnoldsparkia.org",
     "arnoldsparkiowa.org"
    ],
-   "hub@arvadaco.org": [
+   "contact@arvadaco.org": [
     "arvadaco.org",
     "arvadacolorado.org"
    ],
-   "hub@aspencolorado.org": [
+   "contact@aspencolorado.org": [
     "aspencolorado.org"
    ],
-   "hub@auburnhillsmi.com": [
+   "contact@auburnhillsmi.com": [
     "auburnhillsmi.com",
     "auburnhillsmi.org",
     "auburnhillsmichigan.com",
     "auburnhillsmichigan.org"
    ],
-   "hub@auroraillinois.org": [
+   "contact@auroraillinois.org": [
     "auroraillinois.org"
    ],
-   "hub@bakersfieldca.org": [
+   "contact@bakersfieldca.org": [
     "bakersfieldca.org",
     "bakersfieldcalifornia.org"
    ],
-   "hub@balharbourfl.org": [
+   "contact@balharbourfl.org": [
     "balharbourfl.org",
     "balharbourflorida.org"
    ],
-   "hub@batonrougelouisiana.org": [
+   "contact@batonrougelouisiana.org": [
     "batonrougelouisiana.org"
    ],
-   "hub@baylakefl.com": [
+   "contact@baylakefl.com": [
     "baylakefl.com",
     "baylakefl.org",
     "baylakeflorida.org"
    ],
-   "hub@beaumonttx.org": [
+   "contact@beaumonttx.org": [
     "beaumonttx.org"
    ],
-   "hub@bellevuewashington.org": [
+   "contact@bellevuewashington.org": [
     "bellevuewashington.org"
    ],
-   "hub@berkeleyca.org": [
+   "contact@berkeleyca.org": [
     "berkeleyca.org",
     "berkeleycalifornia.org"
    ],
-   "hub@billingsmontana.org": [
+   "contact@billingsmontana.org": [
     "billingsmontana.org"
    ],
-   "hub@bloomingtonminnesota.org": [
+   "contact@bloomingtonminnesota.org": [
     "bloomingtonminnesota.org"
    ],
-   "hub@breckenridgecolorado.org": [
+   "contact@breckenridgecolorado.org": [
     "breckenridgecolorado.org"
    ],
-   "hub@brocktonmassachusetts.org": [
+   "contact@brocktonmassachusetts.org": [
     "brocktonmassachusetts.org"
    ],
-   "hub@buenaparkcalifornia.org": [
+   "contact@buenaparkcalifornia.org": [
     "buenaparkcalifornia.org"
    ],
-   "hub@buffalonewyork.org": [
+   "contact@buffalonewyork.org": [
     "buffalonewyork.org"
    ],
-   "hub@cannonbeachoregon.org": [
+   "contact@cannonbeachoregon.org": [
     "cannonbeachoregon.org"
    ],
-   "hub@capemaynewjersey.com": [
+   "contact@capemaynewjersey.com": [
     "capemaynewjersey.com",
     "capemaynewjersey.org"
    ],
-   "hub@carlsbadcalifornia.org": [
+   "contact@carlsbadcalifornia.org": [
     "carlsbadcalifornia.org"
    ],
-   "hub@carrolltontexas.org": [
+   "contact@carrolltontexas.org": [
     "carrolltontexas.org",
     "carrolltontx.org"
    ],
-   "hub@carynorthcarolina.org": [
+   "contact@carynorthcarolina.org": [
     "carynorthcarolina.org"
    ],
-   "hub@cedarrapidsia.org": [
+   "contact@cedarrapidsia.org": [
     "cedarrapidsia.org",
     "cedarrapidsiowa.org"
    ],
-   "hub@centennialcolorado.org": [
+   "contact@centennialcolorado.org": [
     "centennialcolorado.org"
    ],
-   "hub@charlestownwestvirginia.org": [
+   "contact@charlestownwestvirginia.org": [
     "charlestownwestvirginia.org",
     "charlestownwv.org"
    ],
-   "hub@chattanoogatennessee.org": [
+   "contact@chattanoogatennessee.org": [
     "chattanoogatennessee.org"
    ],
-   "hub@chesapeakevirginia.org": [
+   "contact@chesapeakevirginia.org": [
     "chesapeakevirginia.org"
    ],
-   "hub@chulavistaca.org": [
+   "contact@chulavistaca.org": [
     "chulavistaca.org",
     "chulavistacalifornia.org"
    ],
-   "hub@cityofcommerceca.com": [
+   "contact@cityofcommerceca.com": [
     "cityofcommerceca.com",
     "cityofcommerceca.org",
     "cityofcommercecalifornia.com",
     "cityofcommercecalifornia.org"
    ],
-   "hub@cityofindustryca.com": [
+   "contact@cityofindustryca.com": [
     "cityofindustryca.com",
     "cityofindustryca.org",
     "cityofindustrycalifornia.com",
     "cityofindustrycalifornia.org"
    ],
-   "hub@clarksvilletennessee.org": [
+   "contact@clarksvilletennessee.org": [
     "clarksvilletennessee.org"
    ],
-   "hub@clovisca.org": [
+   "contact@clovisca.org": [
     "clovisca.org",
     "cloviscalifornia.org"
    ],
-   "hub@collegestationtexas.org": [
+   "contact@collegestationtexas.org": [
     "collegestationtexas.org"
    ],
-   "hub@coloradospringscolorado.org": [
+   "contact@coloradospringscolorado.org": [
     "coloradospringscolorado.org"
    ],
-   "hub@columbiamissouri.org": [
+   "contact@columbiamissouri.org": [
     "columbiamissouri.org"
    ],
-   "hub@columbiasouthcarolina.org": [
+   "contact@columbiasouthcarolina.org": [
     "columbiasouthcarolina.org"
    ],
-   "hub@concordca.org": [
+   "contact@concordca.org": [
     "concordca.org",
     "concordcalifornia.org"
    ],
-   "hub@concordnorthcarolina.org": [
+   "contact@concordnorthcarolina.org": [
     "concordnorthcarolina.org"
    ],
-   "hub@cooperstownnewyork.org": [
+   "contact@cooperstownnewyork.org": [
     "cooperstownnewyork.org"
    ],
-   "hub@coralspringsflorida.org": [
+   "contact@coralspringsflorida.org": [
     "coralspringsflorida.org"
    ],
-   "hub@coronaca.org": [
+   "contact@coronaca.org": [
     "coronaca.org",
     "coronacalifornia.org"
    ],
-   "hub@corpuschristitexas.org": [
+   "contact@corpuschristitexas.org": [
     "corpuschristitexas.org",
     "corpuschristitx.org"
    ],
-   "hub@costamesaca.org": [
+   "contact@costamesaca.org": [
     "costamesaca.org",
     "costamesacalifornia.org"
    ],
-   "hub@dalycityca.org": [
+   "contact@dalycityca.org": [
     "dalycityca.org",
     "dalycitycalifornia.org"
    ],
-   "hub@davenportia.org": [
+   "contact@davenportia.org": [
     "davenportia.org"
    ],
-   "hub@daviefl.org": [
+   "contact@daviefl.org": [
     "daviefl.org",
     "davieflorida.org"
    ],
-   "hub@daytonoh.org": [
+   "contact@daytonoh.org": [
     "daytonoh.org"
    ],
-   "hub@deadwoodsouthdakota.org": [
+   "contact@deadwoodsouthdakota.org": [
     "deadwoodsouthdakota.org"
    ],
-   "hub@dearbornmi.org": [
+   "contact@dearbornmi.org": [
     "dearbornmi.org"
    ],
-   "hub@dentontexas.org": [
+   "contact@dentontexas.org": [
     "dentontexas.org"
    ],
-   "hub@deweybeachde.org": [
+   "contact@deweybeachde.org": [
     "deweybeachde.org"
    ],
-   "hub@doswellva.com": [
+   "contact@doswellva.com": [
     "doswellva.com",
     "doswellva.org",
     "doswellvirginia.com",
     "doswellvirginia.org"
    ],
-   "hub@downeycalifornia.org": [
+   "contact@downeycalifornia.org": [
     "downeycalifornia.org"
    ],
-   "hub@durhamnorthcarolina.org": [
+   "contact@durhamnorthcarolina.org": [
     "durhamnorthcarolina.org"
    ],
-   "hub@eastrutherfordnewjersey.com": [
+   "contact@eastrutherfordnewjersey.com": [
     "eastrutherfordnewjersey.com",
     "eastrutherfordnewjersey.org"
    ],
-   "hub@edgartownmassachusetts.org": [
+   "contact@edgartownmassachusetts.org": [
     "edgartownmassachusetts.org"
    ],
-   "hub@edinburgtexas.org": [
+   "contact@edinburgtexas.org": [
     "edinburgtexas.org",
     "edinburgtx.org"
    ],
-   "hub@edisonnewjersey.org": [
+   "contact@edisonnewjersey.org": [
     "edisonnewjersey.org"
    ],
-   "hub@elizabethnewjersey.org": [
+   "contact@elizabethnewjersey.org": [
     "elizabethnewjersey.org"
    ],
-   "hub@elkgroveca.org": [
+   "contact@elkgroveca.org": [
     "elkgroveca.org",
     "elkgrovecalifornia.org"
    ],
-   "hub@elmonteca.org": [
+   "contact@elmonteca.org": [
     "elmonteca.org",
     "elmontecalifornia.org"
    ],
-   "hub@escondidoca.org": [
+   "contact@escondidoca.org": [
     "escondidoca.org",
     "escondidocalifornia.org"
    ],
-   "hub@eugeneor.org": [
+   "contact@eugeneor.org": [
     "eugeneor.org",
     "eugeneoregon.org"
    ],
-   "hub@eurekaspringsar.org": [
+   "contact@eurekaspringsar.org": [
     "eurekaspringsar.org",
     "eurekaspringsarkansas.org"
    ],
-   "hub@evansvillein.org": [
+   "contact@evansvillein.org": [
     "evansvillein.org"
    ],
-   "hub@everettwashington.org": [
+   "contact@everettwashington.org": [
     "everettwashington.org"
    ],
-   "hub@fairbanksak.org": [
+   "contact@fairbanksak.org": [
     "fairbanksak.org"
    ],
-   "hub@fairfieldcalifornia.org": [
+   "contact@fairfieldcalifornia.org": [
     "fairfieldcalifornia.org",
     "fairfieldca.org"
    ],
-   "hub@fargond.org": [
+   "contact@fargond.org": [
     "fargond.org",
     "fargonorthdakota.org"
    ],
-   "hub@fishersindiana.org": [
+   "contact@fishersindiana.org": [
     "fishersindiana.org"
    ],
-   "hub@fontanacalifornia.org": [
+   "contact@fontanacalifornia.org": [
     "fontanacalifornia.org"
    ],
-   "hub@fortcollinscolorado.org": [
+   "contact@fortcollinscolorado.org": [
     "fortcollinscolorado.org"
    ],
-   "hub@fortwayneindiana.org": [
+   "contact@fortwayneindiana.org": [
     "fortwayneindiana.org"
    ],
-   "hub@foxboroughma.org": [
+   "contact@foxboroughma.org": [
     "foxboroughma.org",
     "foxboroughmassachusetts.org"
    ],
-   "hub@fremontca.org": [
+   "contact@fremontca.org": [
     "fremontca.org",
     "fremontcalifornia.org"
    ],
-   "hub@friscotx.org": [
+   "contact@friscotx.org": [
     "friscotx.org"
    ],
-   "hub@fullertonca.org": [
+   "contact@fullertonca.org": [
     "fullertonca.org",
     "fullertoncalifornia.org"
    ],
-   "hub@gardengroveca.org": [
+   "contact@gardengroveca.org": [
     "gardengroveca.org",
     "gardengrovecalifornia.org"
    ],
-   "hub@gatlinburgtennessee.org": [
+   "contact@gatlinburgtennessee.org": [
     "gatlinburgtennessee.org",
     "gatlinburgtn.org"
    ],
-   "hub@gilbertarizona.org": [
+   "contact@gilbertarizona.org": [
     "gilbertarizona.org"
    ],
-   "hub@glendalecalifornia.org": [
+   "contact@glendalecalifornia.org": [
     "glendalecalifornia.org"
    ],
-   "hub@goodyeararizona.org": [
+   "contact@goodyeararizona.org": [
     "goodyeararizona.org"
    ],
-   "hub@grandprairietexas.org": [
+   "contact@grandprairietexas.org": [
     "grandprairietexas.org",
     "grandprairietx.org"
    ],
-   "hub@grandrapidsmichigan.org": [
+   "contact@grandrapidsmichigan.org": [
     "grandrapidsmichigan.org"
    ],
-   "hub@greeleycolorado.org": [
+   "contact@greeleycolorado.org": [
     "greeleycolorado.org"
    ],
-   "hub@greensboronorthcarolina.org": [
+   "contact@greensboronorthcarolina.org": [
     "greensboronorthcarolina.org"
    ],
-   "hub@greshamor.org": [
+   "contact@greshamor.org": [
     "greshamor.org",
     "greshamoregon.org"
    ],
-   "hub@gulfshoresal.org": [
+   "contact@gulfshoresal.org": [
     "gulfshoresal.org"
    ],
-   "hub@hamptonvirginia.org": [
+   "contact@hamptonvirginia.org": [
     "hamptonvirginia.org"
    ],
-   "hub@hanovernewhampshire.org": [
+   "contact@hanovernewhampshire.org": [
     "hanovernewhampshire.org"
    ],
-   "hub@haywardca.org": [
+   "contact@haywardca.org": [
     "haywardca.org",
     "haywardcalifornia.org"
    ],
-   "hub@hendersonnevada.org": [
+   "contact@hendersonnevada.org": [
     "hendersonnevada.org"
    ],
-   "hub@hersheypennsylvania.org": [
+   "contact@hersheypennsylvania.org": [
     "hersheypennsylvania.org"
    ],
-   "hub@hialeahfl.org": [
+   "contact@hialeahfl.org": [
     "hialeahfl.org",
     "hialeahflorida.org"
    ],
-   "hub@highpointnorthcarolina.org": [
+   "contact@highpointnorthcarolina.org": [
     "highpointnorthcarolina.org"
    ],
-   "hub@hillsboroor.org": [
+   "contact@hillsboroor.org": [
     "hillsboroor.org",
     "hillsborooregon.org"
    ],
-   "hub@huntingtonbeachcalifornia.org": [
+   "contact@huntingtonbeachcalifornia.org": [
     "huntingtonbeachcalifornia.org"
    ],
-   "hub@inclinevillagenevada.com": [
+   "contact@inclinevillagenevada.com": [
     "inclinevillagenevada.com",
     "inclinevillagenevada.org",
     "inclinevillagenv.org"
    ],
-   "hub@inglewoodca.org": [
+   "contact@inglewoodca.org": [
     "inglewoodca.org",
     "inglewoodcalifornia.org"
    ],
-   "hub@irvinecalifornia.org": [
+   "contact@irvinecalifornia.org": [
     "irvinecalifornia.org"
    ],
-   "hub@islandofhawaii.org": [
+   "contact@islandofhawaii.org": [
     "islandofhawaii.org"
    ],
-   "hub@jacksonmichigan.org": [
+   "contact@jacksonmichigan.org": [
     "jacksonmichigan.org",
     "jacksonmichigan.net"
    ],
-   "hub@jerseycitynewjersey.org": [
+   "contact@jerseycitynewjersey.org": [
     "jerseycitynewjersey.org"
    ],
-   "hub@jolietil.org": [
+   "contact@jolietil.org": [
     "jolietil.org",
     "jolietillinois.org"
    ],
-   "hub@jurupavalleyca.org": [
+   "contact@jurupavalleyca.org": [
     "jurupavalleyca.org",
     "jurupavalleycalifornia.com",
     "jurupavalleycalifornia.org"
    ],
-   "hub@kansascitykansas.org": [
+   "contact@kansascitykansas.org": [
     "kansascitykansas.org",
     "kansascityks.org"
    ],
-   "hub@kansascitymissouri.org": [
+   "contact@kansascitymissouri.org": [
     "kansascitymissouri.org"
    ],
-   "hub@kenoshawi.org": [
+   "contact@kenoshawi.org": [
     "kenoshawi.org",
     "kenoshawisconsin.org"
    ],
-   "hub@kentwashington.org": [
+   "contact@kentwashington.org": [
     "kentwashington.org"
    ],
-   "hub@kiawahislandsc.org": [
+   "contact@kiawahislandsc.org": [
     "kiawahislandsc.org",
     "kiawahislandsouthcarolina.org"
    ],
-   "hub@killeentx.org": [
+   "contact@killeentx.org": [
     "killeentx.org"
    ],
-   "hub@kingsislandohio.org": [
+   "contact@kingsislandohio.org": [
     "kingsislandohio.org"
    ],
-   "hub@kodiakak.org": [
+   "contact@kodiakak.org": [
     "kodiakak.org",
     "kodiakalaska.org"
    ],
-   "hub@kohlerwi.org": [
+   "contact@kohlerwi.org": [
     "kohlerwi.org",
     "kohlerwisconsin.org"
    ],
-   "hub@lafayettelouisiana.org": [
+   "contact@lafayettelouisiana.org": [
     "lafayettelouisiana.org"
    ],
-   "hub@lahainahawaii.org": [
+   "contact@lahainahawaii.org": [
     "lahainahawaii.org",
     "lahainahi.org"
    ],
-   "hub@lakebuenavistafl.org": [
+   "contact@lakebuenavistafl.org": [
     "lakebuenavistafl.org",
     "lakebuenavistaflorida.com",
     "lakebuenavistaflorida.org"
    ],
-   "hub@lakegenevawi.org": [
+   "contact@lakegenevawi.org": [
     "lakegenevawi.org",
     "lakegenevawisconsin.com",
     "lakegenevawisconsin.org"
    ],
-   "hub@lakewoodnewjersey.org": [
+   "contact@lakewoodnewjersey.org": [
     "lakewoodnewjersey.org"
    ],
-   "hub@lancasterca.org": [
+   "contact@lancasterca.org": [
     "lancasterca.org",
     "lancastercalifornia.org"
    ],
-   "hub@lansingmichigan.org": [
+   "contact@lansingmichigan.org": [
     "lansingmichigan.org"
    ],
-   "hub@laredotx.org": [
+   "contact@laredotx.org": [
     "laredotx.org"
    ],
-   "hub@lascrucesnewmexico.org": [
+   "contact@lascrucesnewmexico.org": [
     "lascrucesnewmexico.org",
     "lascrucesnm.org"
    ],
-   "hub@leaguecitytexas.org": [
+   "contact@leaguecitytexas.org": [
     "leaguecitytexas.org",
     "leaguecitytx.org"
    ],
-   "hub@lewisvilletexas.org": [
+   "contact@lewisvilletexas.org": [
     "lewisvilletexas.org",
     "lewisvilletx.org"
    ],
-   "hub@lincolnne.org": [
+   "contact@lincolnne.org": [
     "lincolnne.org"
    ],
-   "hub@littlerockar.org": [
+   "contact@littlerockar.org": [
     "littlerockar.org",
     "littlerockarkansas.org"
    ],
-   "hub@losalamosnewmexico.org": [
+   "contact@losalamosnewmexico.org": [
     "losalamosnewmexico.org",
     "losalamosnm.org"
    ],
-   "hub@lowellmassachusetts.org": [
+   "contact@lowellmassachusetts.org": [
     "lowellmassachusetts.org"
    ],
-   "hub@lynnma.org": [
+   "contact@lynnma.org": [
     "lynnma.org",
     "lynnmassachusetts.org"
    ],
-   "hub@macongeorgia.org": [
+   "contact@macongeorgia.org": [
     "macongeorgia.org"
    ],
-   "hub@manchesternewhampshire.org": [
+   "contact@manchesternewhampshire.org": [
     "manchesternewhampshire.org"
    ],
-   "hub@marcoislandfl.org": [
+   "contact@marcoislandfl.org": [
     "marcoislandfl.org"
    ],
-   "hub@mcallentexas.org": [
+   "contact@mcallentexas.org": [
     "mcallentexas.org",
     "mcallentx.org"
    ],
-   "hub@mcleanva.org": [
+   "contact@mcleanva.org": [
     "mcleanva.org",
     "mcleanvirginia.org"
    ],
-   "hub@meridianidaho.org": [
+   "contact@meridianidaho.org": [
     "meridianidaho.org"
    ],
-   "hub@mesquitetx.org": [
+   "contact@mesquitetx.org": [
     "mesquitetx.org"
    ],
-   "hub@miamigardensfl.org": [
+   "contact@miamigardensfl.org": [
     "miamigardensfl.org",
     "miamigardensflorida.com",
     "miamigardensflorida.org"
    ],
-   "hub@midlandtx.org": [
+   "contact@midlandtx.org": [
     "midlandtx.org"
    ],
-   "hub@minneapolisminnesota.org": [
+   "contact@minneapolisminnesota.org": [
     "minneapolisminnesota.org"
    ],
-   "hub@miramarflorida.org": [
+   "contact@miramarflorida.org": [
     "miramarflorida.org"
    ],
-   "hub@mobileal.org": [
+   "contact@mobileal.org": [
     "mobileal.org"
    ],
-   "hub@modestoca.org": [
+   "contact@modestoca.org": [
     "modestoca.org",
     "modestocalifornia.org"
    ],
-   "hub@montgomeryalabama.org": [
+   "contact@montgomeryalabama.org": [
     "montgomeryalabama.org"
    ],
-   "hub@morenovalleyca.org": [
+   "contact@morenovalleyca.org": [
     "morenovalleyca.org",
     "morenovalleycalifornia.org"
    ],
-   "hub@murfreesborotennessee.org": [
+   "contact@murfreesborotennessee.org": [
     "murfreesborotennessee.org"
    ],
-   "hub@murrietaca.org": [
+   "contact@murrietaca.org": [
     "murrietaca.org",
     "murrietacalifornia.org"
    ],
-   "hub@muskegonmi.org": [
+   "contact@muskegonmi.org": [
     "muskegonmi.org",
     "muskegonmichigan.org"
    ],
-   "hub@nagsheadnc.org": [
+   "contact@nagsheadnc.org": [
     "nagsheadnc.org",
     "nagsheadnorthcarolina.org"
    ],
-   "hub@nampaidaho.org": [
+   "contact@nampaidaho.org": [
     "nampaidaho.org"
    ],
-   "hub@napaca.org": [
+   "contact@napaca.org": [
     "napaca.org",
     "napacalifornia.org"
    ],
-   "hub@napavalleyca.org": [
+   "contact@napavalleyca.org": [
     "napavalleyca.org",
     "napavalleycalifornia.org"
    ],
-   "hub@napervilleillinois.org": [
+   "contact@napervilleillinois.org": [
     "napervilleillinois.org"
    ],
-   "hub@newalbanyoh.org": [
+   "contact@newalbanyoh.org": [
     "newalbanyoh.org"
    ],
-   "hub@newarknewjersey.org": [
+   "contact@newarknewjersey.org": [
     "newarknewjersey.org"
    ],
-   "hub@newbedfordma.org": [
+   "contact@newbedfordma.org": [
     "newbedfordma.org",
     "newbedfordmassachusetts.org"
    ],
-   "hub@newhavenconnecticut.org": [
+   "contact@newhavenconnecticut.org": [
     "newhavenconnecticut.org"
    ],
-   "hub@normanoklahoma.org": [
+   "contact@normanoklahoma.org": [
     "normanoklahoma.org"
    ],
-   "hub@northcharlestonsc.org": [
+   "contact@northcharlestonsc.org": [
     "northcharlestonsc.org",
     "northcharlestonsouthcarolina.com",
     "northcharlestonsouthcarolina.org"
    ],
-   "hub@northlasvegasnevada.org": [
+   "contact@northlasvegasnevada.org": [
     "northlasvegasnevada.org",
     "northlasvegasnv.org"
    ],
-   "hub@oceansidecalifornia.org": [
+   "contact@oceansidecalifornia.org": [
     "oceansidecalifornia.org"
    ],
-   "hub@odessatexas.org": [
+   "contact@odessatexas.org": [
     "odessatexas.org",
     "odessatx.org"
    ],
-   "hub@oklahomacityoklahoma.org": [
+   "contact@oklahomacityoklahoma.org": [
     "oklahomacityoklahoma.org"
    ],
-   "hub@ontarioca.org": [
+   "contact@ontarioca.org": [
     "ontarioca.org",
     "ontariocalifornia.org"
    ],
-   "hub@overlandparkkansas.org": [
+   "contact@overlandparkkansas.org": [
     "overlandparkkansas.org"
    ],
-   "hub@oxnardca.org": [
+   "contact@oxnardca.org": [
     "oxnardca.org",
     "oxnardcalifornia.org"
    ],
-   "hub@palmbayfl.org": [
+   "contact@palmbayfl.org": [
     "palmbayfl.org"
    ],
-   "hub@palmdaleca.org": [
+   "contact@palmdaleca.org": [
     "palmdaleca.org",
     "palmdalecalifornia.org"
    ],
-   "hub@paradisenv.org": [
+   "contact@paradisenv.org": [
     "paradisenv.org",
     "paradisenevada.org"
    ],
-   "hub@pasadenacalifornia.org": [
+   "contact@pasadenacalifornia.org": [
     "pasadenacalifornia.org"
    ],
-   "hub@patersonnewjersey.org": [
+   "contact@patersonnewjersey.org": [
     "patersonnewjersey.org"
    ],
-   "hub@peachtreecitygeorgia.org": [
+   "contact@peachtreecitygeorgia.org": [
     "peachtreecitygeorgia.org"
    ],
-   "hub@pembrokepinesfl.org": [
+   "contact@pembrokepinesfl.org": [
     "pembrokepinesfl.org"
    ],
-   "hub@peoriaarizona.org": [
+   "contact@peoriaarizona.org": [
     "peoriaarizona.org"
    ],
-   "hub@pinehurstnc.org": [
+   "contact@pinehurstnc.org": [
     "pinehurstnc.org",
     "pinehurstnorthcarolina.org"
    ],
-   "hub@pittsburghpennsylvania.org": [
+   "contact@pittsburghpennsylvania.org": [
     "pittsburghpennsylvania.org"
    ],
-   "hub@pomonaca.org": [
+   "contact@pomonaca.org": [
     "pomonaca.org",
     "pomonacalifornia.org"
    ],
-   "hub@pompanobeachflorida.org": [
+   "contact@pompanobeachflorida.org": [
     "pompanobeachflorida.org"
    ],
-   "hub@portsmouthnewhampshire.org": [
+   "contact@portsmouthnewhampshire.org": [
     "portsmouthnewhampshire.org"
    ],
-   "hub@portstlucieflorida.org": [
+   "contact@portstlucieflorida.org": [
     "portstlucieflorida.org"
    ],
-   "hub@princevillehawaii.org": [
+   "contact@princevillehawaii.org": [
     "princevillehawaii.org",
     "princevillehi.com",
     "princevillehi.org"
    ],
-   "hub@provoutah.org": [
+   "contact@provoutah.org": [
     "provoutah.org"
    ],
-   "hub@raleighnorthcarolina.org": [
+   "contact@raleighnorthcarolina.org": [
     "raleighnorthcarolina.org"
    ],
-   "hub@ranchocucamongacalifornia.org": [
+   "contact@ranchocucamongacalifornia.org": [
     "ranchocucamongacalifornia.org"
    ],
-   "hub@rehobothbeachdelaware.com": [
+   "contact@rehobothbeachdelaware.com": [
     "rehobothbeachdelaware.com"
    ],
-   "hub@rentonwa.org": [
+   "contact@rentonwa.org": [
     "rentonwa.org",
     "rentonwashington.org"
    ],
-   "hub@richardsontx.org": [
+   "contact@richardsontx.org": [
     "richardsontx.org"
    ],
-   "hub@richmondca.org": [
+   "contact@richmondca.org": [
     "richmondca.org"
    ],
-   "hub@ridgelandmississippi.org": [
+   "contact@ridgelandmississippi.org": [
     "ridgelandmississippi.org"
    ],
-   "hub@rochesterminnesota.org": [
+   "contact@rochesterminnesota.org": [
     "rochesterminnesota.org"
    ],
-   "hub@rochesternewyork.org": [
+   "contact@rochesternewyork.org": [
     "rochesternewyork.org"
    ],
-   "hub@rockfordillinois.org": [
+   "contact@rockfordillinois.org": [
     "rockfordillinois.org"
    ],
-   "hub@rosemontil.com": [
+   "contact@rosemontil.com": [
     "rosemontil.com",
     "rosemontil.org",
     "rosemontillinois.org"
    ],
-   "hub@rosevilleca.org": [
+   "contact@rosevilleca.org": [
     "rosevilleca.org",
     "rosevillecalifornia.org"
    ],
-   "hub@roundrocktx.org": [
+   "contact@roundrocktx.org": [
     "roundrocktx.org"
    ],
-   "hub@saintpaulminnesota.org": [
+   "contact@saintpaulminnesota.org": [
     "saintpaulminnesota.org",
     "stpaulminnesota.org",
     "stpaulmn.org"
    ],
-   "hub@salinasca.org": [
+   "contact@salinasca.org": [
     "salinasca.org",
     "salinascalifornia.org"
    ],
-   "hub@sanbernardinoca.org": [
+   "contact@sanbernardinoca.org": [
     "sanbernardinoca.org",
     "sanbernardinocalifornia.org"
    ],
-   "hub@sanduskyoh.org": [
+   "contact@sanduskyoh.org": [
     "sanduskyoh.org",
     "sanduskyohio.org"
    ],
-   "hub@sandyspringsgeorgia.org": [
+   "contact@sandyspringsgeorgia.org": [
     "sandyspringsgeorgia.org"
    ],
-   "hub@santaclaraca.org": [
+   "contact@santaclaraca.org": [
     "santaclaraca.org",
     "santaclaracalifornia.org"
    ],
-   "hub@santaclaritacalifornia.org": [
+   "contact@santaclaritacalifornia.org": [
     "santaclaritacalifornia.org"
    ],
-   "hub@santaclausin.org": [
+   "contact@santaclausin.org": [
     "santaclausin.org"
    ],
-   "hub@santamariaca.org": [
+   "contact@santamariaca.org": [
     "santamariaca.org",
     "santamariacalifornia.org"
    ],
-   "hub@santarosaca.org": [
+   "contact@santarosaca.org": [
     "santarosaca.org",
     "santarosacalifornia.org"
    ],
-   "hub@saratogaspringsnewyork.org": [
+   "contact@saratogaspringsnewyork.org": [
     "saratogaspringsnewyork.org",
     "saratogaspringsny.org"
    ],
-   "hub@seaislandga.com": [
+   "contact@seaislandga.com": [
     "seaislandga.com",
     "seaislandga.org",
     "seaislandgeorgia.com",
     "seaislandgeorgia.org"
    ],
-   "hub@sedonaarizona.org": [
+   "contact@sedonaarizona.org": [
     "sedonaarizona.org"
    ],
-   "hub@shakopeeminnesota.org": [
+   "contact@shakopeeminnesota.org": [
     "shakopeeminnesota.org"
    ],
-   "hub@shreveportlouisiana.org": [
+   "contact@shreveportlouisiana.org": [
     "shreveportlouisiana.org"
    ],
-   "hub@silvercitynewmexico.org": [
+   "contact@silvercitynewmexico.org": [
     "silvercitynewmexico.org",
     "silvercitynm.org"
    ],
-   "hub@simivalleyca.org": [
+   "contact@simivalleyca.org": [
     "simivalleyca.org",
     "simivalleycalifornia.org"
    ],
-   "hub@siouxfallssouthdakota.org": [
+   "contact@siouxfallssouthdakota.org": [
     "siouxfallssouthdakota.org"
    ],
-   "hub@southbendindiana.org": [
+   "contact@southbendindiana.org": [
     "southbendindiana.org"
    ],
-   "hub@southfultonga.org": [
+   "contact@southfultonga.org": [
     "southfultonga.org",
     "southfultongeorgia.org"
    ],
-   "hub@sparksnevada.org": [
+   "contact@sparksnevada.org": [
     "sparksnevada.org",
     "sparksnv.org"
    ],
-   "hub@speedwayin.org": [
+   "contact@speedwayin.org": [
     "speedwayin.org",
     "speedwayindiana.org"
    ],
-   "hub@spokanevalleywa.org": [
+   "contact@spokanevalleywa.org": [
     "spokanevalleywa.org",
     "spokanevalleywashington.org"
    ],
-   "hub@springfieldmassachusetts.org": [
+   "contact@springfieldmassachusetts.org": [
     "springfieldmassachusetts.org"
    ],
-   "hub@springfieldmissouri.org": [
+   "contact@springfieldmissouri.org": [
     "springfieldmissouri.org"
    ],
-   "hub@stamfordconnecticut.org": [
+   "contact@stamfordconnecticut.org": [
     "stamfordconnecticut.org"
    ],
-   "hub@sterlingheightsmi.org": [
+   "contact@sterlingheightsmi.org": [
     "sterlingheightsmi.org",
     "sterlingheightsmichigan.org"
    ],
-   "hub@stocktonca.org": [
+   "contact@stocktonca.org": [
     "stocktonca.org",
     "stocktoncalifornia.org"
    ],
-   "hub@sugarlandtexas.org": [
+   "contact@sugarlandtexas.org": [
     "sugarlandtexas.org"
    ],
-   "hub@sunnyislesbeachfl.org": [
+   "contact@sunnyislesbeachfl.org": [
     "sunnyislesbeachfl.org",
     "sunnyislesbeachflorida.org"
    ],
-   "hub@sunnyvaleca.org": [
+   "contact@sunnyvaleca.org": [
     "sunnyvaleca.org",
     "sunnyvalecalifornia.org"
    ],
-   "hub@sunriveror.com": [
+   "contact@sunriveror.com": [
     "sunriveror.com",
     "sunriveror.org"
    ],
-   "hub@sunvalleyid.org": [
+   "contact@sunvalleyid.org": [
     "sunvalleyid.org"
    ],
-   "hub@surprisearizona.org": [
+   "contact@surprisearizona.org": [
     "surprisearizona.org"
    ],
-   "hub@syracusenewyork.org": [
+   "contact@syracusenewyork.org": [
     "syracusenewyork.org"
    ],
-   "hub@tacomawa.org": [
+   "contact@tacomawa.org": [
     "tacomawa.org",
     "tacomawashington.org"
    ],
-   "hub@taosnewmexico.org": [
+   "contact@taosnewmexico.org": [
     "taosnewmexico.org"
    ],
-   "hub@temeculacalifornia.org": [
+   "contact@temeculacalifornia.org": [
     "temeculacalifornia.org"
    ],
-   "hub@tempearizona.org": [
+   "contact@tempearizona.org": [
     "tempearizona.org",
     "tempeaz.org"
    ],
-   "hub@thorntonco.org": [
+   "contact@thorntonco.org": [
     "thorntonco.org"
    ],
-   "hub@thousandoakscalifornia.org": [
+   "contact@thousandoakscalifornia.org": [
     "thousandoakscalifornia.org"
    ],
-   "hub@toledooh.org": [
+   "contact@toledooh.org": [
     "toledooh.org",
     "toledoohio.org"
    ],
-   "hub@topekakansas.org": [
+   "contact@topekakansas.org": [
     "topekakansas.org",
     "topekaks.org"
    ],
-   "hub@torranceca.org": [
+   "contact@torranceca.org": [
     "torranceca.org",
     "torrancecalifornia.org"
    ],
-   "hub@troymichigan.org": [
+   "contact@troymichigan.org": [
     "troymichigan.org"
    ],
-   "hub@tuscaloosaalabama.org": [
+   "contact@tuscaloosaalabama.org": [
     "tuscaloosaalabama.org"
    ],
-   "hub@tysonsvirginia.org": [
+   "contact@tysonsvirginia.org": [
     "tysonsvirginia.org"
    ],
-   "hub@valdezak.org": [
+   "contact@valdezak.org": [
     "valdezak.org"
    ],
-   "hub@vallejoca.org": [
+   "contact@vallejoca.org": [
     "vallejoca.org",
     "vallejocalifornia.org"
    ],
-   "hub@vancouverwa.org": [
+   "contact@vancouverwa.org": [
     "vancouverwa.org",
     "vancouverwashington.org"
    ],
-   "hub@venturaca.org": [
+   "contact@venturaca.org": [
     "venturaca.org",
     "venturacalifornia.org"
    ],
-   "hub@victorvilleca.org": [
+   "contact@victorvilleca.org": [
     "victorvilleca.org",
     "victorvillecalifornia.org"
    ],
-   "hub@virginiabeachvirginia.org": [
+   "contact@virginiabeachvirginia.org": [
     "virginiabeachvirginia.org"
    ],
-   "hub@visaliacalifornia.org": [
+   "contact@visaliacalifornia.org": [
     "visaliacalifornia.org"
    ],
-   "hub@waileahawaii.org": [
+   "contact@waileahawaii.org": [
     "waileahawaii.org",
     "waileahi.org"
    ],
-   "hub@warrenmi.org": [
+   "contact@warrenmi.org": [
     "warrenmi.org",
     "warrenmichigan.org"
    ],
-   "hub@waterburyconnecticut.org": [
+   "contact@waterburyconnecticut.org": [
     "waterburyconnecticut.org"
    ],
-   "hub@westjordanut.org": [
+   "contact@westjordanut.org": [
     "westjordanut.org",
     "westjordanutah.org"
    ],
-   "hub@westminsterco.org": [
+   "contact@westminsterco.org": [
     "westminsterco.org",
     "westminstercolorado.org"
    ],
-   "hub@westpalmbeachflorida.org": [
+   "contact@westpalmbeachflorida.org": [
     "westpalmbeachflorida.org"
    ],
-   "hub@westvalleycityut.org": [
+   "contact@westvalleycityut.org": [
     "westvalleycityut.org",
     "westvalleycityutah.org"
    ],
-   "hub@whitefishmontana.org": [
+   "contact@whitefishmontana.org": [
     "whitefishmontana.org"
    ],
-   "hub@whitesulphurspringswestvirginia.com": [
+   "contact@whitesulphurspringswestvirginia.com": [
     "whitesulphurspringswestvirginia.com",
     "whitesulphurspringswestvirginia.org",
     "whitesulphurspringswv.com"
    ],
-   "hub@williamsburgvirginia.org": [
+   "contact@williamsburgvirginia.org": [
     "williamsburgvirginia.org"
    ],
-   "hub@willistonnorthdakota.org": [
+   "contact@willistonnorthdakota.org": [
     "willistonnorthdakota.org"
    ],
-   "hub@winstonsalemnorthcarolina.com": [
+   "contact@winstonsalemnorthcarolina.com": [
     "winstonsalemnorthcarolina.com",
     "winstonsalemnorthcarolina.org"
    ],
-   "hub@wisconsindellswi.org": [
+   "contact@wisconsindellswi.org": [
     "wisconsindellswi.org",
     "wisconsindellswisconsin.org"
    ],
-   "hub@woodstockvermont.org": [
+   "contact@woodstockvermont.org": [
     "woodstockvermont.org"
    ],
-   "hub@worcestermassachusetts.org": [
+   "contact@worcestermassachusetts.org": [
     "worcestermassachusetts.org"
    ],
-   "hub@yarrowpointwa.com": [
+   "contact@yarrowpointwa.com": [
     "yarrowpointwa.com",
     "yarrowpointwa.org",
     "yarrowpointwashington.com",
     "yarrowpointwashington.org"
    ],
-   "hub@yonkersnewyork.org": [
+   "contact@yonkersnewyork.org": [
     "yonkersnewyork.org"
    ]
-  }
+  },
+  "city_send_as": [
+   "contact",
+   "hi",
+   "no-reply",
+   "lead",
+   "legal",
+   "privacy",
+   "postmaster"
+  ]
  }
 }

@@ -3643,8 +3643,8 @@ mod city_smtp_routing_tests {
 
     #[test]
     fn city_from_uses_hub_smtp_while_hub_stays_on_jmap() {
-        assert!(city_from_uses_hub_smtp("hub@jacksonmichigan.org"));
-        assert!(city_from_uses_hub_smtp("Hub@AnnArborMichigan.org"));
+        assert!(city_from_uses_hub_smtp("contact@jacksonmichigan.org"));
+        assert!(city_from_uses_hub_smtp("contact@annarbormichigan.org"));
         assert!(!city_from_uses_hub_smtp("hub@pixelatedcities.com"));
         assert!(!city_from_uses_hub_smtp("tim@mentinkizm.com"));
     }

@@ -3193,7 +3193,7 @@ mod delivery_recipient_tests {
     #[test]
     fn pixelated_hub_header_is_preferred_over_delivered_to() {
         let parsed = parse_header_block(
-            b"To: hub@pixelatedcities.com\r\nDelivered-To: hub@pixelatedcities.com\r\nX-Pixelated-Hub: hub@jacksonmichigan.org\r\n\r\n",
+            b"To: hub@pixelatedcities.com\r\nDelivered-To: hub@pixelatedcities.com\r\nX-Pixelated-Hub: contact@jacksonmichigan.org\r\n\r\n",
         )
         .unwrap();
         assert_eq!(
@@ -3202,7 +3202,7 @@ mod delivery_recipient_tests {
                 .iter()
                 .map(|address| address.email.as_str())
                 .collect::<Vec<_>>(),
-            vec!["hub@jacksonmichigan.org", "hub@pixelatedcities.com"]
+            vec!["contact@jacksonmichigan.org", "hub@pixelatedcities.com"]
         );
     }
 }

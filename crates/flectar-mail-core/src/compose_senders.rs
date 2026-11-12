@@ -1098,8 +1098,8 @@ mod tests {
         tabs[0].account_ids = Some(vec![10]);
         let views = vec![
             view("hub@pixelatedcities.com", "pixelated-cities"),
-            view("hub@jacksonmichigan.org", "pixelated-cities"),
-            view("hub@annarbormichigan.org", "pixelated-cities"),
+            view("contact@jacksonmichigan.org", "pixelated-cities"),
+            view("contact@annarbormichigan.org", "pixelated-cities"),
         ];
         let rules = vec![AddressRule {
             profile_id: "pixelated-cities".into(),
@@ -1116,8 +1116,8 @@ mod tests {
             profile_id: Some("pixelated-cities".into()),
             identities: vec![
                 identity(10, "hub@pixelatedcities.com", "accepted"),
-                identity(10, "hub@jacksonmichigan.org", "accepted"),
-                identity(10, "hub@annarbormichigan.org", "accepted"),
+                identity(10, "contact@jacksonmichigan.org", "accepted"),
+                identity(10, "contact@annarbormichigan.org", "accepted"),
             ],
         }];
         let profiles = vec![MailProfile {
@@ -1132,18 +1132,18 @@ mod tests {
         assert_eq!(
             emails(pc),
             vec![
-                "hub@annarbormichigan.org",
-                "hub@jacksonmichigan.org",
+                "contact@annarbormichigan.org",
+                "contact@jacksonmichigan.org",
                 "hub@pixelatedcities.com",
             ]
         );
         assert_eq!(
-            transport_account(&groups, "hub@jacksonmichigan.org"),
+            transport_account(&groups, "contact@jacksonmichigan.org"),
             Some(10),
             "city From authenticates as hub@"
         );
         assert!(crate::pixelated_hub::is_city_from_address(
-            "hub@jacksonmichigan.org"
+            "contact@jacksonmichigan.org"
         ));
     }
 

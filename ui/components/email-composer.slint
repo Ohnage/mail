@@ -92,6 +92,9 @@ export component EmailComposer inherits Rectangle {
     private property <bool> caret-visible: true;
     private property <string> pending-key-text: "";
     private property <bool> ime-edit-pending: false;
+    // C2: only reveal the caret after a user edit/caret key/click. Programmatic
+    // set-selection-offsets and model refresh must not yank the scroll.
+    private property <bool> reveal-caret-after-user-input: false;
     private property <length> input-caret-x: 0px;
     private property <length> input-caret-y: 0px;
     private property <bool> has-content: root.to != "" || root.cc != "" || root.bcc != ""
@@ -131,7 +134,11 @@ export component EmailComposer inherits Rectangle {
 
     back-requested => { root.request-close(); }
 
-    function reveal-editor-caret() {
+    function reveal-editor-caret-if-user-moved() {
+        if (!root.reveal-caret-after-user-input) {
+            return;
+        }
+        root.reveal-caret-after-user-input = false;
         if (root.editor-caret-y * 1px + body-scroll.content-y < 8px) {
             body-scroll.content-y = min(
                 0px,
@@ -150,6 +157,13 @@ export component EmailComposer inherits Rectangle {
                 ),
             );
         }
+    }
+
+    function caret-nav-key(text: string) -> bool {
+        text == Key.LeftArrow || text == Key.RightArrow || text == Key.UpArrow
+            || text == Key.DownArrow || text == Key.Home || text == Key.End
+            || text == Key.PageUp || text == Key.PageDown
+            || text == Key.Backspace || text == Key.Delete || text == Key.Return;
     }
 
     changed open => {
@@ -419,6 +433,7 @@ export component EmailComposer inherits Rectangle {
                     wrap: word-wrap;
                     page-height: body-scroll.visible-height;
                     edited => {
+                        root.reveal-caret-after-user-input = true;
                         root.body = self.text;
                         root.body-edited(
                             self.text,
@@ -449,6 +464,7 @@ export component EmailComposer inherits Rectangle {
                             return accept;
                         }
                         if ((event.modifiers.control || event.modifiers.meta) && event.text.to-lowercase() == "z") {
+                            root.reveal-caret-after-user-input = true;
                             root.history-requested(event.modifiers.shift ? "redo" : "undo");
                             self.set-selection-offsets(root.selection-start, root.selection-end);
                             return accept;
@@ -464,8 +480,12 @@ export component EmailComposer inherits Rectangle {
                             event.modifiers.alt,
                             event.modifiers.meta,
                         )) {
+                            root.reveal-caret-after-user-input = true;
                             self.set-selection-offsets(root.selection-start, root.selection-end);
                             return accept;
+                        }
+                        if (root.caret-nav-key(event.text)) {
+                            root.reveal-caret-after-user-input = true;
                         }
                         if (!event.modifiers.control && !event.modifiers.alt && !event.modifiers.meta
                             && root.editor-preedit-text == "" && !root.ime-edit-pending) {
@@ -482,7 +502,7 @@ export component EmailComposer inherits Rectangle {
                             self.anchor-position-byte-offset,
                             self.cursor-position_byte_offset,
                         );
-                        root.reveal-editor-caret();
+                        root.reveal-editor-caret-if-user-moved();
                     }
                 }
 
@@ -497,6 +517,7 @@ export component EmailComposer inherits Rectangle {
                         if (event.button == PointerEventButton.left || event.kind == PointerEventKind.move || event.kind == PointerEventKind.cancel) {
                             if (event.button == PointerEventButton.left && event.kind == PointerEventKind.down) {
                                 body-input.focus();
+                                root.reveal-caret-after-user-input = true;
                             }
                             root.editor-pointer-event(
                                 editor-hit.mouse-x / 1px,

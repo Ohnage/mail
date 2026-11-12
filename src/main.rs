@@ -526,14 +526,31 @@ struct AccountPresentationSettings {
     account_icon_images: HashMap<String, slint::Image>,
     tab_icons: HashMap<String, slint::Image>,
     profile_logos: HashMap<String, slint::Image>,
-    /// Bumped when tabs/views/accounts change so memoized scopes refresh.
+    /// Bumped when memoized scopes must refresh (includes tab switches).
     settings_revision: u64,
+    /// Bumped when address_views / profiles / rules inputs change.
+    hosted_inputs_revision: u64,
+    /// Bumped when connected account emails change.
+    accounts_revision: u64,
     /// Memoized `view_scope` for the active tab at `settings_revision`.
     scope_cache: Option<CachedViewScope>,
     /// Memoized shared Tim/company split per (tab, settings_revision).
     shared_scope_cache: Option<CachedSharedScope>,
     /// profile_id → address view indexes (built once per settings revision).
     views_by_profile: HashMap<String, Vec<usize>>,
+    /// address view id → index into `address_views`.
+    views_by_id: HashMap<i64, usize>,
+    /// Off-UI-thread HostedAddressIndex cache, keyed by [`Self::index_generation`].
+    hosted_index: std::sync::Arc<std::sync::RwLock<Option<HostedIndexSlot>>>,
+}
+
+#[derive(Clone)]
+struct HostedIndexSlot {
+    generation: u64,
+    index: std::sync::Arc<flectar_mail_core::compose_senders::HostedAddressIndex>,
+    /// Retained for realdata / perf reporting.
+    #[allow(dead_code)]
+    build_ms: u128,
 }
 
 type ViewScopeParts = (
@@ -572,12 +589,26 @@ impl AccountPresentationSettings {
             tab_icons: HashMap::new(),
             profile_logos: HashMap::new(),
             settings_revision: 1,
+            hosted_inputs_revision: 1,
+            accounts_revision: 0,
             scope_cache: None,
             shared_scope_cache: None,
             views_by_profile: HashMap::new(),
+            views_by_id: HashMap::new(),
+            hosted_index: std::sync::Arc::new(std::sync::RwLock::new(None)),
         };
         presentation.rebuild_view_indexes();
+        presentation.schedule_hosted_index_rebuild();
+        // Settings/startup can wait here so the first tab click already has a
+        // generation. Tab clicks never rebuild or wait.
+        let _ = presentation.wait_hosted_index(std::time::Duration::from_secs(120));
         presentation
+    }
+
+    pub(crate) fn index_generation(&self) -> u64 {
+        self.hosted_inputs_revision
+            .wrapping_mul(1_000_003)
+            .wrapping_add(self.accounts_revision)
     }
 
     pub(crate) fn invalidate_scope_cache(&mut self) {
@@ -586,9 +617,101 @@ impl AccountPresentationSettings {
         self.shared_scope_cache = None;
     }
 
+    /// Address catalog / profiles changed. Rebuild the ownership index off-thread.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn invalidate_hosted_inputs(&mut self) {
+        self.hosted_inputs_revision = self.hosted_inputs_revision.wrapping_add(1);
+        self.invalidate_scope_cache();
+        self.schedule_hosted_index_rebuild();
+    }
+
+    /// Build the Tim/company ownership index off this thread. Click paths only
+    /// read the slot; they never call [`HostedAddressIndex::build`].
+    pub(crate) fn schedule_hosted_index_rebuild(&self) {
+        let generation = self.index_generation();
+        let views = self.address_views.clone();
+        let profiles = self.profiles.clone();
+        let emails = self
+            .connected_account_emails
+            .iter()
+            .map(|(email, id)| (*id, email.clone()))
+            .collect::<Vec<_>>();
+        let slot = std::sync::Arc::clone(&self.hosted_index);
+        let _ = std::thread::Builder::new()
+            .name("hosted-index".into())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                let index = flectar_mail_core::compose_senders::HostedAddressIndex::build(
+                    &views, &profiles, &emails,
+                );
+                let build_ms = started.elapsed().as_millis();
+                let built = HostedIndexSlot {
+                    generation,
+                    index: std::sync::Arc::new(index),
+                    build_ms,
+                };
+                if let Ok(mut guard) = slot.write()
+                    && guard
+                        .as_ref()
+                        .is_none_or(|current| current.generation <= generation)
+                {
+                    *guard = Some(built);
+                }
+            });
+    }
+
+    /// Latest ready index, preferring the current generation then any prior.
+    pub(crate) fn peek_hosted_index(
+        &self,
+    ) -> Option<std::sync::Arc<flectar_mail_core::compose_senders::HostedAddressIndex>> {
+        self.hosted_index
+            .read()
+            .ok()?
+            .as_ref()
+            .map(|slot| std::sync::Arc::clone(&slot.index))
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn hosted_index_build_ms(&self) -> Option<u128> {
+        self.hosted_index
+            .read()
+            .ok()?
+            .as_ref()
+            .map(|slot| slot.build_ms)
+    }
+
+    /// Block a worker (never the UI click path) until the current generation
+    /// is ready, or return the best available index.
+    pub(crate) fn wait_hosted_index(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Option<std::sync::Arc<flectar_mail_core::compose_senders::HostedAddressIndex>> {
+        let want = self.index_generation();
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Ok(guard) = self.hosted_index.read()
+                && let Some(slot) = guard.as_ref()
+            {
+                if slot.generation >= want {
+                    return Some(std::sync::Arc::clone(&slot.index));
+                }
+                // Stale-but-ready index keeps routing correct until swap-in.
+                if std::time::Instant::now() >= deadline {
+                    return Some(std::sync::Arc::clone(&slot.index));
+                }
+            } else if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
     pub(crate) fn rebuild_view_indexes(&mut self) {
         self.views_by_profile.clear();
+        self.views_by_id.clear();
+        self.views_by_id.reserve(self.address_views.len());
         for (index, view) in self.address_views.iter().enumerate() {
+            self.views_by_id.insert(view.id, index);
             if let Some(profile) = view.profile_id.as_ref() {
                 self.views_by_profile
                     .entry(profile.clone())
@@ -655,7 +778,9 @@ impl AccountPresentationSettings {
             .collect::<HashMap<_, _>>();
         if emails != self.connected_account_emails {
             self.connected_account_emails = emails;
+            self.accounts_revision = self.accounts_revision.wrapping_add(1);
             self.invalidate_scope_cache();
+            self.schedule_hosted_index_rebuild();
         }
     }
 
@@ -764,6 +889,12 @@ impl AccountPresentationSettings {
             self.active_business_tab.clone(),
             self.settings_revision,
             computed.clone(),
+        ));
+        // Same generation for page + metadata: memoize the Tim/company split.
+        self.shared_scope_cache = Some((
+            self.active_business_tab.clone(),
+            self.settings_revision,
+            self.active_shared_scope(),
         ));
         computed
     }
@@ -1059,16 +1190,25 @@ impl AccountPresentationSettings {
         ids
     }
 
+    #[cfg(test)]
+    pub(crate) fn active_shared_scope_for_bench(
+        &self,
+    ) -> Option<flectar_mail_core::recipient_match::MailScope> {
+        self.active_shared_scope()
+    }
+
     fn active_shared_scope(&self) -> Option<flectar_mail_core::recipient_match::MailScope> {
-        // ponytail: HostedAddressIndex over ~28k address views scans every
-        // catalog mailbox for Tim hosts and freezes the UI for tens of seconds
-        // on the real PC. Skip the Tim/company split on the click path until it
-        // is built off-thread and cached per settings revision.
-        const SHARED_SCOPE_VIEW_CEILING: usize = 2_048;
-        if self.address_views.len() > SHARED_SCOPE_VIEW_CEILING {
-            return None;
-        }
         let active_id = self.active_business().map(|tab| tab.id.clone())?;
+        if let Some((tab_id, revision, cached)) = &self.shared_scope_cache
+            && *revision == self.settings_revision
+            && tab_id.as_deref() == Some(active_id.as_str())
+        {
+            return cached.clone();
+        }
+        // Click path: O(1) read of the off-thread cache. Never call build here.
+        // Stale generation stays correct until the newer index swaps in; a cold
+        // miss returns None so the caller keeps the unsplit scope briefly.
+        let hosted = self.peek_hosted_index()?;
         let sets = self
             .business_tabs
             .iter()
@@ -1092,13 +1232,12 @@ impl AccountPresentationSettings {
             .iter()
             .map(|(email, id)| (*id, email.clone()))
             .collect::<Vec<_>>();
-        flectar_mail_core::compose_senders::shared_tab_scope(
+        flectar_mail_core::compose_senders::shared_tab_scope_with_index(
             &self.business_tabs,
             &sets,
             &tim_mailbox_ids,
             &active_id,
-            &self.address_views,
-            &self.profiles,
+            hosted.as_ref(),
             &emails,
         )
     }

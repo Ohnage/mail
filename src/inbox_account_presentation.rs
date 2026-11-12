@@ -92,12 +92,14 @@ impl AccountPresentationSettings {
         let address_inboxes = if prefer_group {
             Vec::new()
         } else {
-            let member_ids = self.inbox_members(account);
-            let ids = member_ids.into_iter().collect::<HashSet<_>>();
-            self.address_views
-                .iter()
-                .filter(|view| ids.contains(&view.id))
-                .map(|view| self.address_filter(view))
+            self.inbox_members(account)
+                .into_iter()
+                .filter_map(|id| {
+                    self.views_by_id
+                        .get(&id)
+                        .and_then(|index| self.address_views.get(*index))
+                        .map(|view| self.address_filter(view))
+                })
                 .collect()
         };
         let address_groups = account

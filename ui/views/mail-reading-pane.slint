@@ -910,7 +910,7 @@ export component MailReadingPane inherits FocusScope {
                                                         }
                                                         label-name := Text {
                                                             x: 30px;
-                                                            width: parent.width - 88px;
+                                                            width: parent.width - 88px - (label.count == "" ? 0px : 36px);
                                                             y: 3px;
                                                             height: max(20px, self.preferred-height);
                                                             text: label.name;
@@ -919,6 +919,17 @@ export component MailReadingPane inherits FocusScope {
                                                             font-weight: label.applied ? 600 : 500;
                                                             font-family: label.name_has_emoji ? "Noto Emoji" : "";
                                                             overflow: elide;
+                                                            vertical-alignment: center;
+                                                        }
+                                                        if label.count != "" : Text {
+                                                            x: parent.width - 52px;
+                                                            width: 40px;
+                                                            y: 3px;
+                                                            height: max(20px, self.preferred-height);
+                                                            text: label.count;
+                                                            color: root.muted-text;
+                                                            font-size: TypeScale.caption;
+                                                            horizontal-alignment: right;
                                                             vertical-alignment: center;
                                                         }
                                                         label-detail := Text {
@@ -1229,7 +1240,7 @@ export component MailReadingPane inherits FocusScope {
                                                         }
                                                         chip-label-name := Text {
                                                             x: 32px;
-                                                            width: parent.width - 44px;
+                                                            width: parent.width - 44px - (label.count == "" ? 0px : 36px);
                                                             y: 3px;
                                                             height: max(20px, self.preferred-height);
                                                             text: label.name;
@@ -1238,6 +1249,17 @@ export component MailReadingPane inherits FocusScope {
                                                             font-weight: label.applied ? 600 : 500;
                                                             font-family: label.name_has_emoji ? "Noto Emoji" : "";
                                                             overflow: elide;
+                                                            vertical-alignment: center;
+                                                        }
+                                                        if label.count != "" : Text {
+                                                            x: parent.width - 40px;
+                                                            width: 36px;
+                                                            y: 3px;
+                                                            height: max(20px, self.preferred-height);
+                                                            text: label.count;
+                                                            color: root.muted-text;
+                                                            font-size: TypeScale.caption;
+                                                            horizontal-alignment: right;
                                                             vertical-alignment: center;
                                                         }
                                                         chip-label-detail := Text {

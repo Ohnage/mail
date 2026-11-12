@@ -7,21 +7,22 @@ use crate::models::{Label, MailGrouping, MailboxBadgeCounts, SplitRule, UnreadCo
 use rusqlite::Connection;
 use std::collections::HashMap;
 
+// Start from inbox folder membership (indexed), then count unread threads.
+// Per-thread EXISTS over every unread row scanned the whole mailbox (~1 s+).
 const INBOX_BADGE_SQL: &str = "SELECT t.account_id, COUNT(*)
          FROM threads t
-         LEFT JOIN snoozes s ON s.thread_id = t.id
          WHERE t.unread_count > 0
-           AND s.thread_id IS NULL
-           AND (EXISTS (
-                SELECT 1 FROM messages m
-                WHERE m.thread_id = t.id
-                  AND m.folder_id IN (SELECT id FROM folders WHERE role = 'inbox')
-           ) OR EXISTS (
-                SELECT 1 FROM messages m
-                JOIN message_folders mf ON mf.message_id = m.id
-                JOIN folders f ON f.id = mf.folder_id
-                WHERE m.thread_id = t.id AND f.role = 'inbox'
-           ))
+           AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.thread_id = t.id)
+           AND t.id IN (
+                SELECT m.thread_id FROM folders f
+                JOIN messages m ON m.folder_id = f.id
+                WHERE f.role = 'inbox' AND m.thread_id IS NOT NULL
+                UNION
+                SELECT m.thread_id FROM folders f
+                JOIN message_folders mf ON mf.folder_id = f.id
+                JOIN messages m ON m.id = mf.message_id
+                WHERE f.role = 'inbox' AND m.thread_id IS NOT NULL
+           )
          GROUP BY t.account_id";
 
 /// Unread messages in an inbox outside snoozed conversations, for lists that
@@ -29,18 +30,22 @@ const INBOX_BADGE_SQL: &str = "SELECT t.account_id, COUNT(*)
 /// `threads::list_messages`.
 const INBOX_MESSAGE_BADGE_SQL: &str = "SELECT m.account_id, COUNT(*)
          FROM messages m
-         JOIN accounts a ON a.id = m.account_id
-         LEFT JOIN snoozes s ON s.thread_id = m.thread_id
          WHERE m.is_read = 0
            AND m.is_draft = 0
            AND m.thread_id IS NOT NULL
-           AND s.thread_id IS NULL
-           AND (m.folder_id IN (SELECT id FROM folders WHERE role = 'inbox')
-                OR EXISTS (
-                     SELECT 1 FROM message_folders mf
-                     JOIN folders f ON f.id = mf.folder_id
-                     WHERE mf.message_id = m.id AND f.role = 'inbox'
-                ))
+           AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.thread_id = m.thread_id)
+           AND m.id IN (
+                SELECT m2.id FROM folders f
+                JOIN messages m2 ON m2.folder_id = f.id
+                WHERE f.role = 'inbox'
+                  AND m2.is_read = 0 AND m2.is_draft = 0 AND m2.thread_id IS NOT NULL
+                UNION
+                SELECT mf.message_id FROM folders f
+                JOIN message_folders mf ON mf.folder_id = f.id
+                JOIN messages m2 ON m2.id = mf.message_id
+                WHERE f.role = 'inbox'
+                  AND m2.is_read = 0 AND m2.is_draft = 0 AND m2.thread_id IS NOT NULL
+           )
          GROUP BY m.account_id";
 
 /// Query-plan details for the inbox badge path used by `mailbox_badge_counts`.
@@ -383,7 +388,7 @@ fn scoped_badge_sql(
 }
 
 /// Unread threads in each folder. A thread counts once per folder that holds
-/// one of its messages. `account_ids` limits the scan to one company tab.
+/// an unread message. `account_ids` limits the scan to one company tab.
 pub fn folder_unread_counts_for(
     conn: &Connection,
     account_ids: Option<&[i64]>,
@@ -407,21 +412,21 @@ pub fn folder_unread_counts_for(
             binds.push(Box::new(value));
         }
     }
+    // Drive from the unread partial index instead of joining every message of
+    // every unread thread (including already-read copies in other folders).
     let mut stmt = conn.prepare(&format!(
         "SELECT folder_id, COUNT(DISTINCT thread_id) FROM (
              SELECT m.folder_id AS folder_id, m.thread_id AS thread_id
              FROM messages m
-             JOIN threads t ON t.id = m.thread_id
              JOIN folders f ON f.id = m.folder_id
-             WHERE t.unread_count > 0 AND m.folder_id IS NOT NULL
+             WHERE m.is_read = 0 AND m.is_draft = 0 AND m.thread_id IS NOT NULL
                AND COALESCE(f.role, '') != 'all'{filter}
              UNION
              SELECT mf.folder_id, m.thread_id
-             FROM message_folders mf
-             JOIN messages m ON m.id = mf.message_id
-             JOIN threads t ON t.id = m.thread_id
+             FROM messages m
+             JOIN message_folders mf ON mf.message_id = m.id
              JOIN folders f ON f.id = mf.folder_id
-             WHERE t.unread_count > 0
+             WHERE m.is_read = 0 AND m.is_draft = 0 AND m.thread_id IS NOT NULL
                AND COALESCE(f.role, '') != 'all'{filter}
          )
          GROUP BY folder_id"
@@ -840,6 +845,26 @@ mod tests {
             folder_unread_counts_for(&conn, Some(&[]), None)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn inbox_badge_counts_unread_inbox_threads_via_membership() {
+        let conn = test_db();
+        crate::db::migrations::ensure_count_covering_indexes(&conn).unwrap();
+        seed_thread(&conn, 1, 1, false);
+        seed_thread(&conn, 2, 0, false);
+        let badges =
+            mailbox_badge_counts_filtered(&conn, MailGrouping::Conversations, &Default::default())
+                .unwrap();
+        assert_eq!(badges[0].inbox, 1);
+        let plan = inbox_badge_query_plan(&conn)
+            .unwrap()
+            .join("\n")
+            .to_lowercase();
+        assert!(
+            plan.contains("folders") || plan.contains("idx_folders_role"),
+            "expected inbox-folder membership, got {plan}"
         );
     }
 

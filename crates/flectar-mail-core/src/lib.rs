@@ -1939,6 +1939,17 @@ impl Core {
             }
         }
 
+        // Count indexes after paint: CREATE INDEX on a multi-GB mailbox can
+        // take minutes the first time and must not sit on the startup path.
+        match self
+            .db
+            .write(|conn| crate::db::migrations::ensure_count_covering_indexes(conn))
+            .await
+        {
+            Ok(()) => tracing::debug!("count covering indexes ensured"),
+            Err(error) => tracing::warn!(%error, "count covering indexes failed"),
+        }
+
         match self
             .db
             .write(|conn| repo::actions::recover_inflight(conn))

@@ -75,6 +75,8 @@ export struct MailLabelRow {
     is_global: bool,
     // 0 tag, 1 alert, 2 dollar, 3 check, 4 clock. See company_view::TAG_ICON_*.
     icon_kind: int,
+    // Scoped message count for the open company tab; empty until cached.
+    count: string,
 }
 
 // One visible navigation entry per list row; stable keys also identify sections.

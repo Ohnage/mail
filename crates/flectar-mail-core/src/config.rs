@@ -81,6 +81,12 @@ impl Paths {
         self.cache_dir.join("warm-start-mailbox.json")
     }
 
+    /// Per-business-tab folder trees, counts, tag counts, and first pages.
+    /// Painted on tab click before a background refresh; written after prefetch.
+    pub fn warm_start_tabs_file(&self) -> PathBuf {
+        self.cache_dir.join("warm-start-tabs.json")
+    }
+
     /// Superseded reconstructable caches that can be removed without reading.
     ///
     /// TODO(warm-start-v2-cleanup): After the first public release using the
@@ -162,6 +168,10 @@ mod tests {
         assert_eq!(
             paths.warm_start_file(),
             root.join("cache/warm-start-mailbox.json")
+        );
+        assert_eq!(
+            paths.warm_start_tabs_file(),
+            root.join("cache/warm-start-tabs.json")
         );
         assert_eq!(
             paths.obsolete_warm_start_files(),

@@ -300,23 +300,20 @@ pub fn folder_ids_with_mail(conn: &Connection, account_ids: &[i64]) -> Result<Ha
     if account_ids.is_empty() {
         return Ok(HashSet::new());
     }
+    // Probe each folder with EXISTS on the folder indexes instead of scanning
+    // every message row for the account set (~400 ms → ~1 ms on the real copy).
     let mut binds: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    let accounts = super::search::account_set_clause("m.account_id", account_ids, &mut binds);
+    let accounts = super::search::account_set_clause("f.account_id", account_ids, &mut binds);
     let sql = format!(
-        "SELECT DISTINCT folder_id FROM (
-             SELECT m.folder_id AS folder_id
-             FROM messages m
-             JOIN folders f ON f.id = m.folder_id
-             WHERE {accounts} AND m.folder_id IS NOT NULL
-               AND COALESCE(f.role, '') != 'all'
-             UNION
-             SELECT mf.folder_id
-             FROM message_folders mf
-             JOIN messages m ON m.id = mf.message_id
-             JOIN folders f ON f.id = mf.folder_id
-             WHERE {accounts}
-               AND COALESCE(f.role, '') != 'all'
-         )"
+        "SELECT f.id FROM folders f
+         WHERE {accounts}
+           AND COALESCE(f.role, '') != 'all'
+           AND (
+                EXISTS (SELECT 1 FROM messages m WHERE m.folder_id = f.id LIMIT 1)
+                OR EXISTS (
+                    SELECT 1 FROM message_folders mf WHERE mf.folder_id = f.id LIMIT 1
+                )
+           )"
     );
     let mut stmt = conn.prepare(&sql)?;
     let params: Vec<&dyn rusqlite::types::ToSql> =

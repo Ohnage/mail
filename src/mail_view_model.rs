@@ -553,7 +553,15 @@ pub(super) fn render_current(
         .set_selected(selected_email.as_ref().is_some_and(|email| {
             state.borrow().local_mail.map(|local| local.account_id) == Some(email.account_id)
         }));
-    apply_label_rows(app, &labels, selected_email.as_ref());
+    {
+        let state = state.borrow();
+        let tag_counts = state
+            .account_presentation
+            .active_business_tab
+            .as_ref()
+            .and_then(|id| state.tag_counts_by_tab.get(id));
+        apply_label_rows(app, &labels, selected_email.as_ref(), tag_counts);
+    }
     app.set_previous_email_id(previous_email_id);
     app.set_next_email_id(next_email_id);
     state.borrow().queue_warm_start_update();
@@ -723,8 +731,9 @@ pub(super) fn apply_label_rows(
     app: &AppWindow,
     labels: &[flectar_mail_core::models::Label],
     selected: Option<&MailMessage>,
+    tag_counts: Option<&HashMap<String, i64>>,
 ) {
-    let picker_rows = make_label_rows(labels, selected, "");
+    let picker_rows = make_label_rows_with_counts(labels, selected, "", tag_counts);
     let chip_rows = selected
         .map(|message| applied_label_rows(labels, &message.labels))
         .unwrap_or_default();
@@ -741,6 +750,15 @@ pub(super) fn make_label_rows(
     selected: Option<&MailMessage>,
     query: &str,
 ) -> Vec<MailLabelRow> {
+    make_label_rows_with_counts(labels, selected, query, None)
+}
+
+pub(super) fn make_label_rows_with_counts(
+    labels: &[flectar_mail_core::models::Label],
+    selected: Option<&MailMessage>,
+    query: &str,
+    tag_counts: Option<&HashMap<String, i64>>,
+) -> Vec<MailLabelRow> {
     let applied = selected
         .map(|message| message.labels.as_slice())
         .unwrap_or_default();
@@ -749,6 +767,7 @@ pub(super) fn make_label_rows(
         applied,
         selected.map(|message| message.account_id),
         query,
+        tag_counts,
     );
     if let Some(message) = selected {
         for row in &mut rows {
@@ -769,6 +788,7 @@ fn project_label_rows(
     applied: &[i64],
     selected_account_id: Option<i64>,
     query: &str,
+    tag_counts: Option<&HashMap<String, i64>>,
 ) -> Vec<MailLabelRow> {
     let query = query.trim().to_lowercase();
     labels
@@ -802,9 +822,25 @@ fn project_label_rows(
                 is_auto: label.is_auto,
                 is_global: !label.is_auto && label.owner_account_id.is_none(),
                 icon_kind,
+                count: label_count_badge(tag_counts, &label.keyword),
             })
         })
         .collect()
+}
+
+fn label_count_badge(
+    tag_counts: Option<&HashMap<String, i64>>,
+    keyword: &str,
+) -> slint::SharedString {
+    let Some(tag_counts) = tag_counts else {
+        return Default::default();
+    };
+    let key = flectar_mail_core::company_view::tag_key(keyword);
+    tag_counts
+        .iter()
+        .find(|(stored, _)| flectar_mail_core::company_view::tag_key(stored) == key)
+        .and_then(|(_, count)| (*count > 0).then(|| count.to_string().into()))
+        .unwrap_or_default()
 }
 
 /// Label rows for a message's own chip list: unlike [`make_label_rows`]
@@ -840,6 +876,7 @@ fn applied_label_rows(
                 is_auto: label.is_auto,
                 is_global: !label.is_auto && label.owner_account_id.is_none(),
                 icon_kind,
+                count: Default::default(),
             })
         })
         .collect()
@@ -1357,7 +1394,15 @@ pub(super) fn refresh_rows_only(
         .set_selected(selected_email.as_ref().is_some_and(|email| {
             state.borrow().local_mail.map(|local| local.account_id) == Some(email.account_id)
         }));
-    apply_label_rows(app, &labels, selected_email.as_ref());
+    {
+        let borrowed = state.borrow();
+        let tag_counts = borrowed
+            .account_presentation
+            .active_business_tab
+            .as_ref()
+            .and_then(|id| borrowed.tag_counts_by_tab.get(id));
+        apply_label_rows(app, &labels, selected_email.as_ref(), tag_counts);
+    }
     refresh_sidebar(state);
     let selected_domain = selected_email.as_ref().map(|email| {
         let state = state.borrow();
@@ -2532,7 +2577,7 @@ mod tests {
             owner_account_id: None,
             is_auto: false,
         }];
-        assert!(project_label_rows(&labels, &[1], None, "")[0].name_has_emoji);
+        assert!(project_label_rows(&labels, &[1], None, "", None)[0].name_has_emoji);
     }
 
     #[test]

@@ -260,7 +260,7 @@ impl WarmStartCursor {
         }
     }
 
-    fn mail_cursor(self) -> MailCursor {
+    pub(crate) fn mail_cursor(self) -> MailCursor {
         match self {
             Self::Thread(cursor) => MailCursor::Thread(cursor),
             Self::Message(cursor) => MailCursor::Message(cursor),
@@ -581,6 +581,15 @@ pub(crate) enum StartupUpdate {
     Preferences(Box<Settings>),
     Ready(Result<Box<StartupSnapshot>, String>),
     MailMetadata(Result<mail::MailMetadata, String>),
+    /// Persisted per-tab trees/counts from the previous session.
+    WarmTabs(Box<WarmStartTabsCache>),
+    /// One business tab's first page + counts after background prefetch.
+    TabPrefetch {
+        tab_id: String,
+        page: Box<mail::MailPage>,
+        metadata: Box<mail::MailMetadata>,
+        tag_counts: HashMap<String, i64>,
+    },
     Calendar {
         generation: u64,
         month: chrono::NaiveDate,
@@ -590,6 +599,132 @@ pub(crate) enum StartupUpdate {
         calendar: Vec<CalendarConnection>,
         contacts: Vec<CardDavConnection>,
     },
+}
+
+const WARM_START_TABS_FORMAT_VERSION: u32 = 1;
+const MAX_WARM_START_TABS_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct WarmStartTabEntry {
+    pub(crate) scope: Scope,
+    pub(crate) inbox_count: usize,
+    pub(crate) next_cursor: Option<WarmStartCursor>,
+    pub(crate) messages: Vec<WarmStartMessage>,
+    pub(crate) mailboxes: Vec<WarmStartMailbox>,
+    pub(crate) unified_mailboxes: Vec<WarmStartMailbox>,
+    #[serde(default)]
+    pub(crate) folder_unreads: HashMap<i64, i64>,
+    #[serde(default)]
+    pub(crate) folders_with_mail: Vec<i64>,
+    #[serde(default)]
+    pub(crate) tag_counts: HashMap<String, i64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct WarmStartTabsCache {
+    pub(crate) format_version: u32,
+    pub(crate) saved_at_ms: i64,
+    pub(crate) tabs: HashMap<String, WarmStartTabEntry>,
+}
+
+impl WarmStartTabsCache {
+    pub(crate) fn fresh() -> Self {
+        Self {
+            format_version: WARM_START_TABS_FORMAT_VERSION,
+            saved_at_ms: chrono::Utc::now().timestamp_millis(),
+            tabs: HashMap::new(),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        self.format_version == WARM_START_TABS_FORMAT_VERSION
+            && self.tabs.len() <= 32
+            && self.tabs.values().all(|tab| {
+                tab.messages.len() <= MAX_WARM_START_MESSAGES
+                    && tab.mailboxes.len() <= MAX_WARM_START_MAILBOXES
+                    && tab.unified_mailboxes.len() <= MAX_WARM_START_MAILBOXES
+            })
+    }
+}
+
+pub(crate) async fn load_warm_start_tabs(path: &Path) -> Option<WarmStartTabsCache> {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut bytes = Vec::with_capacity(MAX_WARM_START_TABS_BYTES as usize);
+    if file
+        .take(MAX_WARM_START_TABS_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .is_err()
+        || bytes.len() as u64 > MAX_WARM_START_TABS_BYTES
+    {
+        return None;
+    }
+    serde_json::from_slice::<WarmStartTabsCache>(&bytes)
+        .ok()
+        .filter(WarmStartTabsCache::is_valid)
+}
+
+pub(crate) async fn write_warm_start_tabs(
+    path: &Path,
+    cache: &WarmStartTabsCache,
+) -> Result<(), String> {
+    let bytes = serde_json::to_vec(cache).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_WARM_START_TABS_BYTES {
+        return Err("warm-start tabs cache exceeded its size limit".into());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| "warm-start tabs cache has no parent directory".to_owned())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|error| error.to_string())?;
+    let temporary = path.with_extension(format!("json.{}.tmp", std::process::id()));
+    tokio::fs::write(&temporary, bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        tokio::fs::remove_file(path)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    tokio::fs::rename(&temporary, path)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(crate) fn warm_start_tab_entry(
+    page: &mail::MailPage,
+    metadata: &mail::MailMetadata,
+    tag_counts: &HashMap<String, i64>,
+) -> WarmStartTabEntry {
+    WarmStartTabEntry {
+        scope: metadata.scope,
+        inbox_count: metadata.inbox_count,
+        next_cursor: page.next_cursor.and_then(WarmStartCursor::of),
+        messages: page
+            .messages
+            .iter()
+            .take(MAX_WARM_START_MESSAGES)
+            .map(WarmStartMessage::from)
+            .collect(),
+        mailboxes: metadata
+            .mailboxes
+            .iter()
+            .take(MAX_WARM_START_MAILBOXES)
+            .map(WarmStartMailbox::from)
+            .collect(),
+        unified_mailboxes: metadata
+            .unified_mailboxes
+            .iter()
+            .take(MAX_WARM_START_MAILBOXES)
+            .map(WarmStartMailbox::from)
+            .collect(),
+        folder_unreads: metadata.folder_unreads.clone(),
+        folders_with_mail: metadata.folders_with_mail.iter().copied().collect(),
+        tag_counts: tag_counts.clone(),
+    }
 }
 
 const MAX_PENDING_THREAD_UPDATES: usize = 2_048;
@@ -1356,6 +1491,41 @@ mod warm_start_tests {
             is_account: false,
             count: "3".into(),
         }
+    }
+
+    #[test]
+    fn warm_start_tabs_round_trip_keeps_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("warm-start-tabs.json");
+        let mut cache = WarmStartTabsCache::fresh();
+        cache.tabs.insert(
+            "tab-5".into(),
+            WarmStartTabEntry {
+                scope: Scope::CompanyInbox,
+                inbox_count: 3,
+                next_cursor: None,
+                messages: vec![WarmStartMessage::from(&message())],
+                mailboxes: vec![WarmStartMailbox::from(&mailbox())],
+                unified_mailboxes: vec![],
+                folder_unreads: HashMap::from([(9, 2)]),
+                folders_with_mail: vec![9],
+                tag_counts: HashMap::from([("$label:lead".into(), 4)]),
+            },
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(write_warm_start_tabs(&path, &cache))
+            .unwrap();
+        let loaded = runtime.block_on(load_warm_start_tabs(&path)).unwrap();
+        assert_eq!(loaded.tabs["tab-5"].inbox_count, 3);
+        assert_eq!(loaded.tabs["tab-5"].folder_unreads.get(&9), Some(&2));
+        assert_eq!(
+            loaded.tabs["tab-5"].tag_counts.get("$label:lead"),
+            Some(&4)
+        );
     }
 
     #[test]

@@ -138,11 +138,12 @@ use sidebar_model::{SidebarAnimation, SidebarModel, refresh_sidebar, refresh_sid
 use slint::{DataTransfer, Image, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, Timer, VecModel};
 use startup::{
     PendingCoreUpdates, StartupCalendarSnapshot, StartupSnapshot, StartupUpdate,
-    WarmStartCacheWriter, WarmStartCursor, WarmStartProjection, WarmStartSnapshot, apply_settings,
-    apply_warm_start_snapshot, load_startup_calendar_snapshot, load_startup_mail_metadata,
-    publish_saved_preferences,
-    load_startup_snapshot, load_warm_start_snapshot, refresh_startup_catalog_background,
-    spawn_core_event_listener,
+    WarmStartCacheWriter, WarmStartCursor, WarmStartProjection, WarmStartSnapshot,
+    WarmStartTabEntry, WarmStartTabsCache, apply_settings, apply_warm_start_snapshot,
+    load_startup_calendar_snapshot, load_startup_mail_metadata, load_startup_snapshot,
+    load_warm_start_snapshot, load_warm_start_tabs, publish_saved_preferences,
+    refresh_startup_catalog_background, spawn_core_event_listener, warm_start_tab_entry,
+    write_warm_start_tabs,
 };
 use startup_metrics::StartupMetrics;
 use std::{
@@ -1564,6 +1565,41 @@ fn apply_tab_local(state: &mut InboxState, snapshot: TabLocalSnapshot) {
     state.set_scope(snapshot.scope);
 }
 
+fn tab_local_from_prefetch(
+    page: mail::MailPage,
+    metadata: mail::MailMetadata,
+) -> TabLocalSnapshot {
+    TabLocalSnapshot {
+        messages: page.messages,
+        labels: page.labels,
+        mailboxes: metadata.mailboxes,
+        unified_mailboxes: metadata.unified_mailboxes,
+        folder_unreads: metadata.folder_unreads,
+        folders_with_mail: metadata.folders_with_mail,
+        inbox_count: metadata.inbox_count,
+        next_cursor: page.next_cursor,
+        scope: metadata.scope,
+    }
+}
+
+fn tab_local_from_warm_entry(entry: WarmStartTabEntry) -> TabLocalSnapshot {
+    TabLocalSnapshot {
+        messages: entry.messages.into_iter().map(Into::into).collect(),
+        labels: Vec::new(),
+        mailboxes: entry.mailboxes.into_iter().map(Into::into).collect(),
+        unified_mailboxes: entry
+            .unified_mailboxes
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        folder_unreads: entry.folder_unreads,
+        folders_with_mail: entry.folders_with_mail.into_iter().collect(),
+        inbox_count: entry.inbox_count,
+        next_cursor: entry.next_cursor.map(WarmStartCursor::mail_cursor),
+        scope: entry.scope,
+    }
+}
+
 #[derive(Debug)]
 struct MailDragPayload {
     items: Vec<MailDragItem>,
@@ -2765,6 +2801,11 @@ fn spawn_startup_load(
         let warm = load_warm_start_snapshot(&paths.warm_start_file())
             .await
             .filter(|snapshot| snapshot.grouping == grouping);
+        if let Some(tabs) = load_warm_start_tabs(&paths.warm_start_tabs_file()).await {
+            let _ = startup_tx
+                .send(StartupUpdate::WarmTabs(Box::new(tabs)))
+                .await;
+        }
         let preferred_scope = warm
             .as_ref()
             .map_or(Scope::UNIFIED_INBOX, |snapshot| snapshot.scope);
@@ -2792,6 +2833,7 @@ fn spawn_startup_load(
             let _ = tokio::time::timeout(Duration::from_millis(250), applied_rx).await;
         }
 
+        let tabs_path = paths.warm_start_tabs_file();
         let result = load_startup_snapshot(
             paths,
             credentials,
@@ -2847,41 +2889,56 @@ fn spawn_startup_load(
             }
         });
 
-        // Prefetch every business tab's first page + metadata + tag counts.
+        // Prefetch every business tab into tab_local without touching the open
+        // tab's view-scope locks, then persist next to the warm-start snapshot.
         let prefetch_core = core.clone();
+        let prefetch_tx = startup_tx.clone();
         tokio::spawn(async move {
             let Ok(settings) = prefetch_core.load_settings().await else {
                 return;
             };
             let accounts = prefetch_core.load_accounts().await.unwrap_or_default();
-            let tabs = settings.business_tabs.clone();
-            // Collect Send-only scope inputs before any await — presentation
-            // holds Slint images and is not Send.
-            let scopes = tabs
-                .into_iter()
+            let jobs = settings
+                .business_tabs
+                .iter()
                 .map(|tab| {
                     let mut presentation = AccountPresentationSettings::from_settings(&settings);
-                    presentation.active_business_tab = Some(tab.id);
+                    presentation.active_business_tab = Some(tab.id.clone());
                     presentation.bind_accounts(&accounts);
                     presentation.invalidate_scope_cache();
-                    let (sidebar, query, scope_filter) = presentation.view_scope_cached();
+                    let (_sidebar, _query, scope_filter) = presentation.view_scope_cached();
                     let company = presentation.company_account_ids(&accounts);
-                    (sidebar, query, scope_filter, company)
+                    (tab.id.clone(), company, scope_filter)
                 })
                 .collect::<Vec<_>>();
-            for (sidebar, query, scope_filter, company) in scopes {
-                let _ = prefetch_core.set_view_scope(
-                    sidebar,
-                    query,
-                    scope_filter,
-                    false,
-                    Some(company.clone()),
+            let mut cache = WarmStartTabsCache::fresh();
+            for (tab_id, company, scope_filter) in jobs {
+                if company.is_empty() {
+                    continue;
+                }
+                let Ok((page, metadata, tag_counts)) = prefetch_core
+                    .prefetch_tab_bundle(company, scope_filter, PAGE_SIZE as i64)
+                    .await
+                else {
+                    continue;
+                };
+                cache.tabs.insert(
+                    tab_id.clone(),
+                    warm_start_tab_entry(&page, &metadata, &tag_counts),
                 );
-                let _ = prefetch_core
-                    .load_page(Scope::CompanyInbox, "", None, PAGE_SIZE as i64, false)
+                let _ = prefetch_tx
+                    .send(StartupUpdate::TabPrefetch {
+                        tab_id,
+                        page: Box::new(page),
+                        metadata: Box::new(metadata),
+                        tag_counts,
+                    })
                     .await;
-                let _ = prefetch_core.load_mail_metadata(Scope::CompanyInbox).await;
-                let _ = prefetch_core.tag_message_counts_for(company).await;
+            }
+            if !cache.tabs.is_empty()
+                && let Err(error) = write_warm_start_tabs(&tabs_path, &cache).await
+            {
+                tracing::warn!(%error, "warm-start tabs cache write failed");
             }
         });
     });
@@ -6180,8 +6237,8 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                             state.mailboxes = metadata.mailboxes;
                             state.unified_mailboxes = metadata.unified_mailboxes;
                             state.inbox_count = metadata.inbox_count;
-                state.folder_unreads = metadata.folder_unreads.clone();
-                state.folders_with_mail = metadata.folders_with_mail.clone();
+                            state.folder_unreads = metadata.folder_unreads.clone();
+                            state.folders_with_mail = metadata.folders_with_mail.clone();
                         }
                         refresh_list_metadata(&app, &startup_state);
                     }
@@ -6190,6 +6247,36 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                         refresh_list_metadata(&app, &startup_state);
                     }
                 },
+                StartupUpdate::WarmTabs(cache) => {
+                    let mut state = startup_state.borrow_mut();
+                    for (tab_id, entry) in cache.tabs {
+                        state
+                            .tag_counts_by_tab
+                            .insert(tab_id.clone(), entry.tag_counts.clone());
+                        state
+                            .tab_local
+                            .insert(tab_id, tab_local_from_warm_entry(entry));
+                    }
+                }
+                StartupUpdate::TabPrefetch {
+                    tab_id,
+                    page,
+                    metadata,
+                    tag_counts,
+                } => {
+                    let mut state = startup_state.borrow_mut();
+                    state.tag_counts_by_tab.insert(tab_id.clone(), tag_counts);
+                    let active = state.account_presentation.active_business_tab.clone();
+                    state
+                        .tab_local
+                        .insert(tab_id.clone(), tab_local_from_prefetch(*page, *metadata));
+                    let refresh_active = active.as_deref() == Some(tab_id.as_str());
+                    drop(state);
+                    if refresh_active {
+                        refresh_sidebar(&startup_state);
+                        refresh_list_metadata(&app, &startup_state);
+                    }
+                }
                 StartupUpdate::Calendar { generation, month, snapshot: StartupCalendarSnapshot {
                     calendar_connections,
                     carddav_connections,
@@ -7740,10 +7827,16 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
         let selected = state
             .selected_id
             .and_then(|id| state.messages.iter().find(|message| message.id == id));
-        app.set_mail_label_results(ModelRc::new(VecModel::from(make_label_rows(
+        let tag_counts = state
+            .account_presentation
+            .active_business_tab
+            .as_ref()
+            .and_then(|id| state.tag_counts_by_tab.get(id));
+        app.set_mail_label_results(ModelRc::new(VecModel::from(make_label_rows_with_counts(
             &state.labels,
             selected,
             query.as_str(),
+            tag_counts,
         ))));
     });
 

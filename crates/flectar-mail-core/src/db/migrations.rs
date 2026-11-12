@@ -148,6 +148,13 @@ pub fn run(conn: &mut Connection) -> Result<()> {
     upgrade_to(conn, LATEST_VERSION)
 }
 
+/// Covering indexes for company-tab cold counts. Runs after first paint so a
+/// large CREATE INDEX never blocks startup. Safe to call repeatedly.
+pub fn ensure_count_covering_indexes(conn: &Connection) -> Result<()> {
+    conn.execute_batch(include_str!("migrations/028_count_covering_indexes.sql"))?;
+    Ok(())
+}
+
 fn upgrade_to(conn: &mut Connection, latest: i64) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > LATEST_VERSION {
@@ -413,6 +420,16 @@ mod tests {
             ["folder_id", "account_id", "thread_id"]
         );
         assert_eq!(index_columns("idx_folders_role"), ["role"]);
+        ensure_count_covering_indexes(&conn).unwrap();
+        ensure_count_covering_indexes(&conn).unwrap();
+        assert_eq!(
+            index_columns("idx_threads_account_unread"),
+            ["account_id", "id"]
+        );
+        assert_eq!(
+            index_columns("idx_messages_account_folder_unread"),
+            ["account_id", "folder_id", "thread_id"]
+        );
 
         for forbidden in [
             "calendar_events",

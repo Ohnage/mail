@@ -737,6 +737,126 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    /// Background prefetch for one business tab. Does not touch the shared
+    /// view-scope locks, so the open tab's queries stay undisturbed.
+    pub async fn prefetch_tab_bundle(
+        &self,
+        company: Vec<i64>,
+        mail_scope: flectar_mail_core::recipient_match::MailScope,
+        limit: i64,
+    ) -> Result<
+        (
+            MailPage,
+            MailMetadata,
+            std::collections::HashMap<String, i64>,
+        ),
+        String,
+    > {
+        let revision = self.account_revision();
+        let mut accounts = self
+            .core
+            .list_accounts()
+            .await
+            .map_err(|error| error.to_string())?;
+        let local_mail = self.load_local_mail_account().await?;
+        let profile = Some(company.as_slice());
+        let mut folders = self.list_folders_for_profile(profile).await?;
+        retain_profile_accounts(profile, &mut accounts, &mut folders);
+        let all_accounts = accounts.clone();
+
+        let badge_scope = if mail_scope.splits_shared_mailbox() {
+            mail_scope.clone()
+        } else {
+            flectar_mail_core::recipient_match::MailScope {
+                base_account_ids: Some(company.clone()),
+                ..Default::default()
+            }
+        };
+        let badges = self
+            .core
+            .mailbox_badge_counts_filtered(self.grouping(), badge_scope.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let inbox_badges = badges
+            .iter()
+            .filter(|counts| company.contains(&counts.account_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let folder_scope = mail_scope
+            .splits_shared_mailbox()
+            .then(|| mail_scope.clone());
+        let folder_unreads = self
+            .core
+            .folder_unread_counts_for(Some(company.clone()), folder_scope)
+            .await
+            .map_err(|error| error.to_string())?;
+        let folders_with_mail = self
+            .core
+            .folder_ids_with_mail(company.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let tag_counts = self
+            .core
+            .tag_message_counts_for(company.clone())
+            .await
+            .map_err(|error| error.to_string())?;
+        let metadata = MailMetadata {
+            account_revision: revision,
+            scope: Scope::CompanyInbox,
+            inbox_count: inbox_badges
+                .iter()
+                .map(|counts| counts.inbox.max(0) as usize)
+                .sum(),
+            mailboxes: mailbox_entries_with_counts(&accounts, &folders, local_mail, &badges),
+            unified_mailboxes: unified_mailbox_entries(&inbox_badges),
+            folder_unreads,
+            folders_with_mail,
+            local_mail,
+        };
+
+        let mut labels = self
+            .core
+            .list_labels()
+            .await
+            .map_err(|error| error.to_string())?;
+        retain_profile_labels(profile, &mut labels);
+        let resolved = resolve_scope(Scope::CompanyInbox, &folders, &labels);
+        let list_scope = if mail_scope.splits_shared_mailbox() {
+            mail_scope
+        } else {
+            flectar_mail_core::recipient_match::MailScope::default()
+        };
+        let page = self
+            .core
+            .list_threads_scoped(
+                resolved.view,
+                resolved.split_id,
+                None,
+                Some(company),
+                resolved.label_id,
+                resolved.folder_id,
+                list_scope,
+                (None, limit),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        let messages = page
+            .threads
+            .into_iter()
+            .filter_map(|thread| summary_to_message(thread, &all_accounts, resolved.title.as_str()))
+            .collect();
+        let mail_page = MailPage {
+            account_revision: revision,
+            messages,
+            labels,
+            mailboxes: metadata.mailboxes.clone(),
+            next_cursor: page.next_cursor.map(MailCursor::Thread),
+            account_count: all_accounts.len(),
+            unified_mailboxes: metadata.unified_mailboxes.clone(),
+        };
+        Ok((mail_page, metadata, tag_counts))
+    }
+
     async fn load_local_mail_account(&self) -> Result<Option<i64>, String> {
         self.core
             .local_mail_account()

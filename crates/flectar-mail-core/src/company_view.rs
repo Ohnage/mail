@@ -515,13 +515,22 @@ pub fn tag_key(value: &str) -> String {
         .unwrap_or(key)
 }
 
+/// Pre-v4 mailsort type keywords. mailsort now files that mail in the folder
+/// of the same meaning (`$label:archive` in Archive).
+const LEGACY_FOLDER_TAGS: &[&str] = &[
+    "notification",
+    "newsletter",
+    "report",
+    "security",
+    "conversation",
+    "archive",
+];
+
 /// A pre-v4 mailsort type keyword (e.g. `$label:notification`) whose mail is
 /// now filed in the folder of the same meaning.
 pub fn is_legacy_folder_tag(keyword: &str) -> bool {
-    let key = literal_tag_key(keyword);
-    TAG_KEY_ALIASES
-        .iter()
-        .any(|(alias, canonical)| *alias == key && !STATUS_TAG_KEYS.contains(canonical))
+    keyword.trim().to_lowercase().starts_with("$label:")
+        && LEGACY_FOLDER_TAGS.contains(&literal_tag_key(keyword).as_str())
 }
 
 /// A taxonomy status tag such as Needs Action or Paid.
@@ -1022,6 +1031,8 @@ mod tests {
         assert_ne!(tag_key("Newsletters"), tag_key("Marketing_&_Newsletters"));
         assert_ne!(tag_key("$label:lead"), tag_key("Clients_&_Leads"));
         assert!(is_legacy_folder_tag("$label:notification"));
+        assert!(is_legacy_folder_tag("$label:archive"));
+        assert!(!is_legacy_folder_tag("$label:lead"));
         assert!(!is_legacy_folder_tag("$label:from-person"));
         assert!(!is_legacy_folder_tag("Notifications"));
         assert!(is_status_tag("Needs_Action"));

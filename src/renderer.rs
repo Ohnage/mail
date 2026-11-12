@@ -1829,7 +1829,7 @@ fn prepare_email_html_at_with_font_ctx(
     let mut count = 0usize;
     while let Some((id, depth)) = stack.pop() {
         count += 1;
-        if depth > 48 || count > 30_000 {
+        if depth > 96 || count > 30_000 {
             return Err("Message structure exceeds rendering limits. Use plain text.".into());
         }
         if let Some(node) = document.get_node(id) {
@@ -2122,6 +2122,39 @@ mod tests {
 
         let linked = prepare_email_html(&fixtures()[1].html).expect("linked fixture should parse");
         assert_eq!(linked.links.len(), 2);
+    }
+
+    #[test]
+    fn github_notification_renders_as_html_on_the_ui_stack() {
+        // Shipped Windows builds link the UI thread at 8 MB; render on a
+        // thread of that size so nesting at the limit proves it fits.
+        std::thread::Builder::new()
+            .stack_size(8_000_000)
+            .spawn(|| {
+                let mut github = prepare_email_html(include_str!(
+                    "../resources/test-emails/github-actions-run-failed.html"
+                ))
+                .expect("GitHub notification should parse");
+                assert!(github.notice.is_none(), "{:?}", github.notice);
+                assert!(github.plain_text.contains("View workflow run"));
+                render_prepared_cpu(&mut github, 520, 900, 1.0)
+                    .expect("GitHub notification should render");
+
+                // html and body add two levels to the bounded_html walk.
+                let depth = 90;
+                let mut deep = prepare_email_html(&format!(
+                    "<html><body>{}deep{}</body></html>",
+                    "<div style='padding-left:1px'>".repeat(depth),
+                    "</div>".repeat(depth)
+                ))
+                .expect("deep mail should parse");
+                assert!(deep.notice.is_none(), "{:?}", deep.notice);
+                render_prepared_cpu(&mut deep, 520, 900, 1.0)
+                    .expect("mail at the nesting limit should render");
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

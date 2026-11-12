@@ -346,6 +346,13 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
         } else {
             &state.collapsed_folder_ids
         };
+        let tag_counts = state
+            .account_presentation
+            .active_business_tab
+            .as_ref()
+            .and_then(|id| state.tag_counts_by_tab.get(id))
+            .cloned()
+            .unwrap_or_default();
         let (company_rows, company_mailboxes) = make_company_sidebar_rows(
             mailboxes,
             unified_rows,
@@ -373,6 +380,7 @@ pub(super) fn refresh_sidebar_with_motion(state: &Rc<RefCell<InboxState>>, anima
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
             filtering,
+            &tag_counts,
         );
         state.company_mailboxes = company_mailboxes;
         if filtering {
@@ -815,9 +823,19 @@ fn company_tag_copies(
         .collect()
 }
 
+fn tag_count_badge(tag_counts: &HashMap<String, i64>, keyword: &str) -> slint::SharedString {
+    let key = flectar_mail_core::company_view::tag_key(keyword);
+    tag_counts
+        .iter()
+        .find(|(stored, _)| flectar_mail_core::company_view::tag_key(stored) == key)
+        .and_then(|(_, count)| (*count > 0).then(|| count.to_string().into()))
+        .unwrap_or_default()
+}
+
 fn pinned_tag_rows(
     tags: &[flectar_mail_core::company_view::MergedTag],
     pinned: &[String],
+    tag_counts: &HashMap<String, i64>,
 ) -> Vec<SidebarRow> {
     use SidebarRowKind as Kind;
     let mut rows = Vec::new();
@@ -848,6 +866,7 @@ fn pinned_tag_rows(
                 scope: Scope::TabTag(tag.id).to_string().into(),
                 context: "Company".into(),
                 detail: "folder-pin".into(),
+                count: tag_count_badge(tag_counts, &tag.keyword),
                 ..Default::default()
             },
             label: MailLabelRow {
@@ -885,6 +904,7 @@ fn make_company_sidebar_rows(
     folder_color: Option<slint::Color>,
     pinned_tags: &[String],
     show_empty_folders: bool,
+    tag_counts: &HashMap<String, i64>,
 ) -> (Vec<SidebarRow>, Vec<MailboxEntry>) {
     use SidebarRowKind as Kind;
     use flectar_mail_core::company_view::{FolderLeaf, merge_folders, merge_tags, prune_empty_folders};
@@ -914,7 +934,7 @@ fn make_company_sidebar_rows(
     }));
     let tag_copies = company_tag_copies(source_labels, &company);
     let merged_tags = merge_tags(&tag_copies);
-    rows.extend(pinned_tag_rows(&merged_tags, pinned_tags));
+    rows.extend(pinned_tag_rows(&merged_tags, pinned_tags, tag_counts));
     rows.push(section(Kind::AccountsHeading, "company-folders", collapsed));
     let folders_open = !collapsed.contains("company-folders");
     // Collapsed company folders skip merge over thousands of empty hub paths.
@@ -1057,6 +1077,7 @@ fn make_company_sidebar_rows(
                     } else {
                         Default::default()
                     },
+                    count: tag_count_badge(tag_counts, &tag.keyword),
                     ..Default::default()
                 },
                 label: MailLabelRow {
@@ -1623,6 +1644,7 @@ mod tests {
             None,
             &[],
             true,
+            &HashMap::new(),
         );
         assert!(
             rows.iter()
@@ -1660,6 +1682,7 @@ mod tests {
             None,
             &[],
             true,
+            &HashMap::new(),
         );
         assert!(
             collapsed_rows
@@ -1732,6 +1755,7 @@ mod tests {
             Some(tint),
             &[],
             true,
+            &HashMap::new(),
         );
         assert_eq!(
             rows.iter()
@@ -2181,6 +2205,7 @@ mod tests {
             None,
             &["needs-action".into()],
             true,
+            &HashMap::new(),
         );
         let keys = rows
             .iter()

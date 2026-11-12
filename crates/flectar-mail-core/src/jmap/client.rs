@@ -208,6 +208,7 @@ impl ConnectedClient {
         &self,
         request: Request<'_>,
     ) -> jmap_client::Result<T> {
+        crate::network_guard::record("jmap_send_single");
         let api_url = self.client.session().api_url().to_owned();
         let response = self
             .http

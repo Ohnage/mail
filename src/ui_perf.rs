@@ -66,10 +66,36 @@ fn stamp_ms() -> u128 {
         .as_millis()
 }
 
-pub fn log_tab_switch(
+pub fn log_startup_step(step: &str, ms: u128) {
+    let step = step
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .take(64)
+        .collect::<String>();
+    with_log(|file| {
+        let _ = writeln!(
+            file,
+            "ts_ms={} startup_step step={step} ms={ms}",
+            stamp_ms()
+        );
+    });
+}
+
+pub fn log_startup_first_paint(ms: u128) {
+    with_log(|file| {
+        let _ = writeln!(
+            file,
+            "ts_ms={} startup_first_paint_ms={ms}",
+            stamp_ms()
+        );
+    });
+}
+
+pub fn log_tab_switch_timed(
     tab_id: &str,
     ui_callback_ms: u128,
     first_rows_ms: Option<u128>,
+    folder_tree_ms: Option<u128>,
     metadata_ms: Option<u128>,
 ) {
     let tab = tab_id
@@ -80,9 +106,12 @@ pub fn log_tab_switch(
     with_log(|file| {
         let _ = writeln!(
             file,
-            "ts_ms={} tab_switch tab={tab} ui_callback_ms={ui_callback_ms} first_rows_ms={} metadata_ms={}",
+            "ts_ms={} tab_switch tab={tab} ui_callback_ms={ui_callback_ms} first_rows_ms={} folder_tree_ms={} metadata_ms={}",
             stamp_ms(),
             first_rows_ms
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into()),
+            folder_tree_ms
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "-".into()),
             metadata_ms
@@ -127,5 +156,20 @@ mod tests {
             assert!(STALL_MS == 100);
             assert!(STALL_MS < 1_000);
         }
+    }
+
+    #[test]
+    fn startup_overlay_keeps_pulse_without_determinate_top_bar() {
+        // BRIEF-STARTUP: honest % wasn't available for bursty local steps, so
+        // the determinate width binding was removed; the pulse skeleton stays.
+        let source = include_str!("../ui/app.slint");
+        assert!(
+            source.contains("LoadingSkeletonBlock"),
+            "pulsing skeleton must remain"
+        );
+        assert!(
+            !source.contains("parent.width * root.startup_progress"),
+            "determinate top bar binding must stay removed"
+        );
     }
 }

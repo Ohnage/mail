@@ -632,36 +632,44 @@ pub(crate) async fn load_startup_snapshot(
     metrics: &StartupMetrics,
     preferences: &crate::UiSender<StartupUpdate>,
 ) -> Result<StartupSnapshot, String> {
+    let step = |name: &str, started: std::time::Instant| {
+        let ms = started.elapsed().as_millis();
+        metrics.emit(
+            "startup_step",
+            serde_json::json!({ "step": name, "ms": ms }),
+        );
+        crate::ui_perf::log_startup_step(name, ms);
+        ms
+    };
+
+    let opened = std::time::Instant::now();
     let core = CoreMailSource::start(paths, credentials, oauth_redirects).await?;
+    let _ = step("core_opened", opened);
     metrics.emit("core_opened", serde_json::Value::Null);
-    // Company tabs live in this document, beside the receiving catalog. Paint
-    // them before that catalog is merged so a restart does not wait on it.
-    if let Ok(saved) = core.load_settings().await {
+
+    // Paint from the saved settings document only. Catalog refresh, brand
+    // import and HostedAddressIndex rebuild run after Ready so first paint
+    // stays on local SQLite.
+    let settings_started = std::time::Instant::now();
+    let settings = core.load_settings().await.ok();
+    let _ = step("load_settings", settings_started);
+    if let Some(saved) = settings.as_ref() {
         let _ = preferences
-            .send(StartupUpdate::Preferences(Box::new(saved)))
+            .send(StartupUpdate::Preferences(Box::new(saved.clone())))
             .await;
     }
-    // The first page shows only the active profile's accounts.
-    let mut settings = match core.refresh_inbox_catalog().await {
-        Ok(settings) => Some(settings),
-        Err(error) => {
-            tracing::warn!(%error, "Receiving address discovery failed; retaining saved settings");
-            core.load_settings().await.ok()
-        }
-    };
-    if let Ok(Some(updated)) = core.import_brand_registry_if_changed().await {
-        settings = Some(updated);
-    }
-    // The first page is listed the way the saved preference groups mail.
+
+    let grouping_started = std::time::Instant::now();
     let _ = core.set_grouping(
         settings
             .as_ref()
             .map_or(MailGrouping::Conversations, Settings::mail_grouping),
     );
-    if let Some(settings) = settings.as_ref() {
+    if let Some(settings_ref) = settings.as_ref() {
         let address_accounts = core.load_accounts().await.unwrap_or_default();
-        let mut presentation = AccountPresentationSettings::from_settings(settings);
+        let mut presentation = AccountPresentationSettings::from_settings(settings_ref);
         presentation.bind_accounts(&address_accounts);
+        // Don't wait for the hosted index; peek/stale is enough for first page.
         let (sidebar, query, scope) = presentation.view_scope();
         let company = presentation
             .active_business()
@@ -674,14 +682,16 @@ pub(crate) async fn load_startup_snapshot(
             company,
         );
     }
-    let (mail, configs, local_mail) = tokio::join!(
-        // Counts walk every mailbox and can dominate startup on a large local
-        // store. The first useful frame only needs one bounded page; sidebar
-        // totals arrive as a separate progressive update.
+    let _ = step("view_scope", grouping_started);
+
+    let queries_started = std::time::Instant::now();
+    let (mail, configs) = tokio::join!(
+        // First useful frame: one bounded page + account configs. Local-mail
+        // store counts and catalog refresh follow after Ready.
         core.load_startup_page(preferred_scope, PAGE_SIZE as i64),
         core.load_account_configs(),
-        core.load_local_mail(),
     );
+    let _ = step("startup_queries", queries_started);
 
     let (accounts, scope, page) = mail.unwrap_or_else(|_| (Vec::new(), Scope::UNIFIED_INBOX, None));
     metrics.emit(
@@ -701,9 +711,26 @@ pub(crate) async fn load_startup_snapshot(
             .is_some_and(|settings| settings.load_remote_images),
         accounts,
         account_configs: configs.unwrap_or_default(),
-        local_mail: local_mail.ok().flatten(),
+        local_mail: None,
         settings,
     })
+}
+
+/// Catalog merge + brand import after first paint. Never on the click path.
+pub(crate) async fn refresh_startup_catalog_background(
+    core: &CoreMailSource,
+) -> Result<Settings, String> {
+    let mut settings = match core.refresh_inbox_catalog().await {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(%error, "Receiving address discovery failed; retaining saved settings");
+            core.load_settings().await?
+        }
+    };
+    if let Ok(Some(updated)) = core.import_brand_registry_if_changed().await {
+        settings = updated;
+    }
+    Ok(settings)
 }
 
 pub(crate) async fn load_startup_mail_metadata(

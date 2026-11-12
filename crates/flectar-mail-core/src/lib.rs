@@ -32,6 +32,7 @@ pub mod migration;
 pub mod mime;
 pub mod models;
 pub mod net;
+pub mod network_guard;
 pub mod oauth;
 pub mod pixelated_hub;
 pub mod pop3;
@@ -799,156 +800,12 @@ impl Core {
             settings_mirror_applied: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
-        // Finish any destructive operation interrupted between the mail and
-        // calendar stores, then remove calendar rows that predate the durable
-        // operation journal and no longer have a mail account owner.
-        core.recover_cross_store_state().await?;
-        if core.paths.files_db_file().exists()
-            || core
-                .db
-                .read(|conn| {
-                    Ok(conn.query_row(
-                        "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key LIKE 'files:%')",
-                        [],
-                        |r| r.get::<_, bool>(0),
-                    )?)
-                })
-                .await?
-        {
-            core.recover_files().await?;
-            core.files_db.release_idle_connections().await?;
-        }
-        let removed_staged_files = core.cleanup_orphaned_draft_files().await?;
-        if removed_staged_files > 0 {
-            tracing::info!(removed_staged_files, "removed orphaned draft staging files");
-        }
-        let removed_mail_files = core.remove_interrupted_mail_files().await?;
-        if removed_mail_files > 0 {
-            tracing::info!(
-                removed_mail_files,
-                "removed files of interrupted mail writes"
-            );
-        }
-
-        // Make saved OAuth app registrations available before any actor
-        // needs a token refresh. A newer mirror file overlays its keys and
-        // keeps secrets stored here. A file that still has the customized
-        // company tabs restores them when the database copy lost that list.
-        let mut settings = core.db.read(|conn| repo::settings::get(conn)).await?;
-        let db_file = core.paths.db_file();
-        if let Some(merged) = settings_mirror::merged_if_newer(&db_file, &settings) {
-            core.settings_mirror_applied
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            core.db
-                .write(move |conn| repo::settings::set(conn, &merged))
-                .await?;
-            settings = core.db.read(|conn| repo::settings::get(conn)).await?;
-        }
-        if let Some(restored) = settings_mirror::restore_dropped_customizations(&db_file, &settings)
-        {
-            tracing::warn!("restored company tabs from the settings mirror");
-            core.db
-                .write(move |conn| repo::settings::set(conn, &restored))
-                .await?;
-            settings = core.db.read(|conn| repo::settings::get(conn)).await?;
-        }
+        // OAuth keys only — keep first paint on a cheap settings read. Mirror
+        // merge, Pixelated migrations, recover_*, and file cleanup run after
+        // UI ready so a multi-GB mailbox is usable in seconds (BRIEF-STARTUP).
+        let settings = core.db.read(|conn| repo::settings::get(conn)).await?;
         apply_oauth_settings(&settings);
 
-        // Pixelated Cities: show/sync hub@ only; city hubs become send-only;
-        // then rename leftover hub@<city> logins/addresses to contact@<city>.
-        // Settings backup runs inside repo::settings::set. Mirror-safe: the
-        // catalog version and account syncMail flag round-trip in JSON.
-        {
-            let applied = core
-                .db
-                .write(|conn| {
-                    let mut settings = repo::settings::get(conn)?;
-                    let accounts = repo::accounts::list(conn)?;
-                    let pairs = accounts
-                        .iter()
-                        .map(|account| (account.id, account.email.clone()))
-                        .collect::<Vec<_>>();
-                    let mut settings_changed =
-                        crate::brand_registry::migrate_pixelated_cities_hub_only(
-                            &mut settings,
-                            &pairs,
-                        );
-                    settings_changed |=
-                        crate::brand_registry::migrate_pixelated_city_contact_addresses(
-                            &mut settings,
-                        );
-                    if settings_changed {
-                        repo::settings::set(conn, &settings)?;
-                    }
-                    let renamed = crate::brand_registry::migrate_city_hub_login_rows(conn)?;
-                    let send_only = crate::brand_registry::pixelated_cities_send_only_account_ids(
-                        &settings, &pairs,
-                    );
-                    for account_id in send_only {
-                        let Some(mut config) = repo::accounts::get_config(conn, account_id)? else {
-                            continue;
-                        };
-                        if !config.settings.sync_mail {
-                            continue;
-                        }
-                        config.settings.sync_mail = false;
-                        repo::accounts::set_settings(conn, account_id, &config.settings)?;
-                    }
-                    Ok((settings_changed, renamed))
-                })
-                .await?;
-            if applied.0 {
-                tracing::info!(
-                    "migrated Pixelated Cities tab to hub@ sync scope / contact@ cities"
-                );
-            }
-            if applied.1 > 0 {
-                tracing::info!(
-                    renamed = applied.1,
-                    "renamed hub@ city logins/identities to contact@"
-                );
-            }
-        }
-
-        // Recover any actions orphaned mid-flight by a previous crash/kill, so a
-        // send that was executing when the app died retries instead of sticking
-        // on "Sending…" forever.
-        match core
-            .db
-            .write(|conn| repo::actions::recover_inflight(conn))
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!("recovered {n} orphaned in-flight action(s)"),
-            _ => {}
-        }
-        if core.calendar_db.is_open() {
-            match core
-                .calendar_db
-                .write(|conn| repo::actions::recover_inflight(conn))
-                .await
-            {
-                Ok(n) if n > 0 => tracing::info!("recovered {n} calendar action(s)"),
-                _ => {}
-            }
-            core.calendar_db.release_idle_connections().await?;
-        }
-        match core
-            .db
-            .write(|conn| {
-                Ok(conn.execute(
-                    "UPDATE messages SET body_state = 'none' WHERE body_state = 'fetching'",
-                    [],
-                )?)
-            })
-            .await
-        {
-            Ok(n) if n > 0 => tracing::info!("recovered {n} orphaned content fetch(es)"),
-            _ => {}
-        }
-        // A fresh profile has no snoozes, queued actions, mail actors or
-        // calendar store to poll. Preserve startup work for existing profiles,
-        // and let the scheduler activate after account setup or the first
-        // calendar operation on a new profile.
         let scheduler_has_existing_work = core.paths.calendar_db_file().exists()
             || core
                 .db
@@ -963,12 +820,6 @@ impl Core {
                 })
                 .await?;
 
-        // Recovery and migration can leave both SQLite page caches warm after
-        // scanning a large mailbox. Foreground startup needs only a small page
-        // and badges; close these idle connections before spawning workers so
-        // their recovery working set is not retained throughout the session.
-        // The next read/write reopens its connection with the normal profile.
-        core.db.release_idle_connections().await?;
         // Spawn actors for existing accounts - but only after the Slint UI
         // reports ready (notify_ui_ready). Actors immediately load OAuth
         // tokens from the OS keyring, and on a launch that plays the intro
@@ -982,6 +833,9 @@ impl Core {
                 tokio::select! {
                     _ = core.ui_ready.notified() => {}
                     _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+                }
+                if let Err(error) = core.run_deferred_startup_maintenance().await {
+                    tracing::warn!(%error, "deferred startup maintenance failed");
                 }
                 events::sync_diagnostic("startup_accounts", None, "loading");
                 let configs = match core
@@ -1982,6 +1836,145 @@ impl Core {
     /// deferred account-actor spawn in [`Core::start`], which is what first
     /// touches the OS keyring. `notify_one` stores a permit, so the order of
     /// caller vs. waiter never matters.
+    /// Mirror merge, Pixelated migrations, recover_*, and orphan cleanup.
+    /// Runs after first paint so local SQLite pages are not competing with it.
+    async fn run_deferred_startup_maintenance(&self) -> Result<()> {
+        self.recover_cross_store_state().await?;
+        if self.paths.files_db_file().exists()
+            || self
+                .db
+                .read(|conn| {
+                    Ok(conn.query_row(
+                        "SELECT EXISTS(SELECT 1 FROM app_settings WHERE key LIKE 'files:%')",
+                        [],
+                        |r| r.get::<_, bool>(0),
+                    )?)
+                })
+                .await?
+        {
+            self.recover_files().await?;
+            self.files_db.release_idle_connections().await?;
+        }
+        let removed_staged_files = self.cleanup_orphaned_draft_files().await?;
+        if removed_staged_files > 0 {
+            tracing::info!(removed_staged_files, "removed orphaned draft staging files");
+        }
+        let removed_mail_files = self.remove_interrupted_mail_files().await?;
+        if removed_mail_files > 0 {
+            tracing::info!(
+                removed_mail_files,
+                "removed files of interrupted mail writes"
+            );
+        }
+
+        let mut settings = self.db.read(|conn| repo::settings::get(conn)).await?;
+        let db_file = self.paths.db_file();
+        if let Some(merged) = settings_mirror::merged_if_newer(&db_file, &settings) {
+            self.settings_mirror_applied
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.db
+                .write(move |conn| repo::settings::set(conn, &merged))
+                .await?;
+            settings = self.db.read(|conn| repo::settings::get(conn)).await?;
+        }
+        if let Some(restored) = settings_mirror::restore_dropped_customizations(&db_file, &settings)
+        {
+            tracing::warn!("restored company tabs from the settings mirror");
+            self.db
+                .write(move |conn| repo::settings::set(conn, &restored))
+                .await?;
+            settings = self.db.read(|conn| repo::settings::get(conn)).await?;
+        }
+        apply_oauth_settings(&settings);
+
+        {
+            let applied = self
+                .db
+                .write(|conn| {
+                    let mut settings = repo::settings::get(conn)?;
+                    let accounts = repo::accounts::list(conn)?;
+                    let pairs = accounts
+                        .iter()
+                        .map(|account| (account.id, account.email.clone()))
+                        .collect::<Vec<_>>();
+                    let mut settings_changed =
+                        crate::brand_registry::migrate_pixelated_cities_hub_only(
+                            &mut settings,
+                            &pairs,
+                        );
+                    settings_changed |=
+                        crate::brand_registry::migrate_pixelated_city_contact_addresses(
+                            &mut settings,
+                        );
+                    if settings_changed {
+                        repo::settings::set(conn, &settings)?;
+                    }
+                    let renamed = crate::brand_registry::migrate_city_hub_login_rows(conn)?;
+                    let send_only = crate::brand_registry::pixelated_cities_send_only_account_ids(
+                        &settings, &pairs,
+                    );
+                    for account_id in send_only {
+                        let Some(mut config) = repo::accounts::get_config(conn, account_id)? else {
+                            continue;
+                        };
+                        if !config.settings.sync_mail {
+                            continue;
+                        }
+                        config.settings.sync_mail = false;
+                        repo::accounts::set_settings(conn, account_id, &config.settings)?;
+                    }
+                    Ok((settings_changed, renamed))
+                })
+                .await?;
+            if applied.0 {
+                tracing::info!(
+                    "migrated Pixelated Cities tab to hub@ sync scope / contact@ cities"
+                );
+            }
+            if applied.1 > 0 {
+                tracing::info!(
+                    renamed = applied.1,
+                    "renamed hub@ city logins/identities to contact@"
+                );
+            }
+        }
+
+        match self
+            .db
+            .write(|conn| repo::actions::recover_inflight(conn))
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!("recovered {n} orphaned in-flight action(s)"),
+            _ => {}
+        }
+        if self.calendar_db.is_open() {
+            match self
+                .calendar_db
+                .write(|conn| repo::actions::recover_inflight(conn))
+                .await
+            {
+                Ok(n) if n > 0 => tracing::info!("recovered {n} calendar action(s)"),
+                _ => {}
+            }
+            self.calendar_db.release_idle_connections().await?;
+        }
+        match self
+            .db
+            .write(|conn| {
+                Ok(conn.execute(
+                    "UPDATE messages SET body_state = 'none' WHERE body_state = 'fetching'",
+                    [],
+                )?)
+            })
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!("recovered {n} orphaned content fetch(es)"),
+            _ => {}
+        }
+        self.db.release_idle_connections().await?;
+        Ok(())
+    }
+
     pub fn notify_ui_ready(&self) {
         events::sync_diagnostic("ui_ready", None, "notified");
         self.ui_ready.notify_one();
@@ -9116,6 +9109,16 @@ impl Core {
 
     pub async fn folder_unread_counts(&self) -> Result<std::collections::HashMap<i64, i64>> {
         self.folder_unread_counts_for(None, None).await
+    }
+
+    /// Per-keyword message counts inside a company tab's accounts.
+    pub async fn tag_message_counts_for(
+        &self,
+        account_ids: Vec<i64>,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        self.db
+            .read(move |conn| repo::counts::tag_message_counts_for(conn, &account_ids))
+            .await
     }
 
     /// [`Self::folder_unread_counts`] for one set of accounts. One grouped query.

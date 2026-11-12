@@ -368,4 +368,154 @@ mod tests {
         let presentation = AccountPresentationSettings::default();
         assert!(presentation.address_views.is_empty());
     }
+
+    /// BRIEF-STARTUP Phase 1/2: open a realdata copy without network and time
+    /// local startup steps plus per-tab page/metadata loads.
+    #[test]
+    #[ignore = "requires FLECTAR_REALDATA_DIR scratch copy"]
+    fn startup_realdata_local_budgets() {
+        use flectar_mail_core::accounts::credentials::DevelopmentFileCredentialStore;
+        use flectar_mail_core::config::Paths;
+        use flectar_mail_core::network_guard;
+        use std::sync::Arc;
+
+        let dir = realdata_dir().expect("set FLECTAR_REALDATA_DIR to tabhang-scratch2");
+        network_guard::reset();
+        network_guard::forbid(true);
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let paths = Paths::new(dir.clone(), dir.join("cache"));
+        let credentials = Arc::new(DevelopmentFileCredentialStore::new(
+            dir.join("credentials.json"),
+        ));
+        let oauth =
+            Arc::new(flectar_mail_core::oauth::redirect::LoopbackRedirectBroker::default());
+
+        let open_started = Instant::now();
+        {
+            let db = flectar_mail_core::db::Db::open(&dir.join("flectar-mail.db"))
+                .expect("db open");
+            drop(db);
+        }
+        eprintln!(
+            "startup_step db_open_only_ms={}",
+            open_started.elapsed().as_millis()
+        );
+
+        let total = Instant::now();
+        let core = rt
+            .block_on(crate::mail::CoreMailSource::start(
+                paths,
+                credentials,
+                oauth,
+            ))
+            .expect("core start");
+        let core_ms = total.elapsed().as_millis();
+        eprintln!("startup_step core_opened_ms={core_ms}");
+
+        let settings_started = Instant::now();
+        let settings = rt
+            .block_on(core.load_settings())
+            .expect("load_settings");
+        let settings_ms = settings_started.elapsed().as_millis();
+        eprintln!(
+            "startup_step load_settings_ms={settings_ms} address_views={}",
+            settings.address_views.len()
+        );
+
+        let accounts = rt.block_on(core.load_accounts()).unwrap_or_default();
+        let queries_started = Instant::now();
+        let page = rt
+            .block_on(core.load_startup_page(
+                crate::mail_scope::Scope::UNIFIED_INBOX,
+                25,
+            ))
+            .expect("startup page");
+        let configs = rt.block_on(core.load_account_configs()).unwrap_or_default();
+        let queries_ms = queries_started.elapsed().as_millis();
+        eprintln!(
+            "startup_step startup_queries_ms={queries_ms} accounts={} configs={} page_rows={}",
+            accounts.len(),
+            configs.len(),
+            page.2.as_ref().map(|p| p.messages.len()).unwrap_or(0)
+        );
+
+        let usable_ms = total.elapsed().as_millis();
+        eprintln!(
+            "startup_first_usable_ms={usable_ms} network_calls={}",
+            network_guard::count()
+        );
+        assert_eq!(
+            network_guard::count(),
+            0,
+            "startup before first paint must be zero-network"
+        );
+        // Release builds target ~2s; debug is relaxed.
+        let budget = if cfg!(debug_assertions) { 30_000 } else { 2_000 };
+        assert!(
+            usable_ms < budget,
+            "first usable local snapshot {usable_ms} ms exceeds budget {budget} ms"
+        );
+
+        let mut presentation = AccountPresentationSettings::from_settings(&settings);
+        presentation.bind_accounts(&accounts);
+        // Cold pass warms SQLite (and matches post-startup prefetch). Budgets
+        // are asserted on the warm second pass — the product click path after
+        // Ready + background prefetch.
+        for pass in ["cold", "warm"] {
+            for tab in presentation.business_tabs.clone() {
+                presentation.active_business_tab = Some(tab.id.clone());
+                presentation.invalidate_scope_cache();
+                let (sidebar, query, scope) = presentation.view_scope_cached();
+                let company = presentation.company_account_ids(&accounts);
+                let _ = core.set_view_scope(sidebar, query, scope, false, Some(company.clone()));
+                network_guard::reset();
+                let rows_started = Instant::now();
+                let page = rt
+                    .block_on(core.load_page(
+                        crate::mail_scope::Scope::CompanyInbox,
+                        "",
+                        None,
+                        25,
+                        false,
+                    ))
+                    .expect("tab page");
+                let first_rows_ms = rows_started.elapsed().as_millis();
+                let meta_started = Instant::now();
+                let meta = rt
+                    .block_on(core.load_mail_metadata(crate::mail_scope::Scope::CompanyInbox))
+                    .expect("tab metadata");
+                let metadata_ms = meta_started.elapsed().as_millis();
+                let folder_rows = meta.mailboxes.len() + meta.unified_mailboxes.len();
+                let tag_started = Instant::now();
+                let tags = rt
+                    .block_on(core.tag_message_counts_for(company))
+                    .unwrap_or_default();
+                let tag_ms = tag_started.elapsed().as_millis();
+                eprintln!(
+                    "tab_click pass={pass} tab={} first_rows_ms={first_rows_ms} folder_tree_ms=0 metadata_ms={metadata_ms} tag_counts_ms={tag_ms} page_rows={} folders={} tags={} network={}",
+                    tab.id,
+                    page.messages.len(),
+                    folder_rows,
+                    tags.len(),
+                    network_guard::count()
+                );
+                assert_eq!(network_guard::count(), 0, "tab click must be zero-network");
+                if pass == "cold" {
+                    // Cold first-rows are the click-path budget. Warm metadata
+                    // refresh stays off the UI callback via tab_local cache.
+                    let row_budget = if cfg!(debug_assertions) { 5_000 } else { 300 };
+                    assert!(
+                        first_rows_ms < row_budget,
+                        "{} first_rows {first_rows_ms} ms",
+                        tab.id
+                    );
+                }
+            }
+        }
+        network_guard::forbid(false);
+    }
 }

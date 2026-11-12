@@ -1519,20 +1519,9 @@ export component AppWindow inherits Window {
                 font-size: TypeScale.secondary;
                 horizontal-alignment: center;
             }
-            Rectangle {
-                height: 6px;
-                border-radius: 3px;
-                background: root.border;
-                Rectangle {
-                    x: 0px;
-                    y: 0px;
-                    height: parent.height;
-                    width: max(8px, parent.width * root.startup_progress);
-                    border-radius: 3px;
-                    background: root.accent;
-                    animate width { duration: 280ms; easing: ease-out; }
-                }
-            }
+            // Determinate top bar removed: remaining startup steps finish in
+            // bursts that cannot be mapped to an honest percent. Keep only
+            // the pulsing skeleton (BRIEF-STARTUP).
             LoadingSkeletonBlock {
                 height: 4px;
                 radius: 2px;

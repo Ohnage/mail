@@ -137,7 +137,8 @@ use startup::{
     WarmStartCacheWriter, WarmStartCursor, WarmStartProjection, WarmStartSnapshot, apply_settings,
     apply_warm_start_snapshot, load_startup_calendar_snapshot, load_startup_mail_metadata,
     publish_saved_preferences,
-    load_startup_snapshot, load_warm_start_snapshot, spawn_core_event_listener,
+    load_startup_snapshot, load_warm_start_snapshot, refresh_startup_catalog_background,
+    spawn_core_event_listener,
 };
 use startup_metrics::StartupMetrics;
 use std::{
@@ -415,6 +416,7 @@ enum MailListUpdateKind {
 
 struct MailMetadataUpdate {
     result: Result<mail::MailMetadata, String>,
+    tag_counts: Option<(String, HashMap<String, i64>)>,
 }
 
 struct FolderMutationUpdate {
@@ -598,10 +600,9 @@ impl AccountPresentationSettings {
             hosted_index: std::sync::Arc::new(std::sync::RwLock::new(None)),
         };
         presentation.rebuild_view_indexes();
+        // Schedule off-thread; never block the UI/startup paint path. Ready and
+        // tab clicks peek a stale-or-fresh generation — wait only on workers.
         presentation.schedule_hosted_index_rebuild();
-        // Settings/startup can wait here so the first tab click already has a
-        // generation. Tab clicks never rebuild or wait.
-        let _ = presentation.wait_hosted_index(std::time::Duration::from_secs(120));
         presentation
     }
 
@@ -682,6 +683,7 @@ impl AccountPresentationSettings {
 
     /// Block a worker (never the UI click path) until the current generation
     /// is ready, or return the best available index.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn wait_hosted_index(
         &self,
         timeout: std::time::Duration,
@@ -1485,6 +1487,77 @@ struct InboxState {
     /// Whether the mail list shows conversations or each message on its own.
     grouping: MailGrouping,
     warm_start_cache: WarmStartCacheWriter,
+    /// Cached first page + folder totals per business tab (zero-network clicks).
+    tab_local: HashMap<String, TabLocalSnapshot>,
+    /// Cached per-tab tag→message counts from local SQLite.
+    tag_counts_by_tab: HashMap<String, HashMap<String, i64>>,
+    /// In-flight company-tab click timings for perf.log.
+    pending_tab_perf: Option<PendingTabPerf>,
+}
+
+/// Local snapshot painted on a company-tab click before any background refresh.
+#[derive(Clone)]
+struct TabLocalSnapshot {
+    messages: Vec<MailMessage>,
+    labels: Vec<Label>,
+    mailboxes: Vec<MailboxEntry>,
+    unified_mailboxes: Vec<MailboxEntry>,
+    folder_unreads: HashMap<i64, i64>,
+    folders_with_mail: HashSet<i64>,
+    inbox_count: usize,
+    next_cursor: Option<MailCursor>,
+    scope: Scope,
+}
+
+struct PendingTabPerf {
+    tab_id: String,
+    started: std::time::Instant,
+    ui_callback_ms: Option<u128>,
+    folder_tree_ms: Option<u128>,
+    first_rows_ms: Option<u128>,
+    metadata_ms: Option<u128>,
+}
+
+impl PendingTabPerf {
+    /// Logs once when every stage is known. Returns true when complete.
+    fn finish_if_ready(&self) -> bool {
+        let (Some(ui), Some(rows), Some(tree), Some(meta)) = (
+            self.ui_callback_ms,
+            self.first_rows_ms,
+            self.folder_tree_ms,
+            self.metadata_ms,
+        ) else {
+            return false;
+        };
+        crate::ui_perf::log_tab_switch_timed(&self.tab_id, ui, Some(rows), Some(tree), Some(meta));
+        true
+    }
+}
+
+fn capture_tab_local(state: &InboxState) -> TabLocalSnapshot {
+    TabLocalSnapshot {
+        messages: state.messages.clone(),
+        labels: state.labels.clone(),
+        mailboxes: state.mailboxes.clone(),
+        unified_mailboxes: state.unified_mailboxes.clone(),
+        folder_unreads: state.folder_unreads.clone(),
+        folders_with_mail: state.folders_with_mail.clone(),
+        inbox_count: state.inbox_count,
+        next_cursor: state.next_cursor,
+        scope: state.scope,
+    }
+}
+
+fn apply_tab_local(state: &mut InboxState, snapshot: TabLocalSnapshot) {
+    state.messages = snapshot.messages;
+    state.labels = snapshot.labels;
+    state.mailboxes = snapshot.mailboxes;
+    state.unified_mailboxes = snapshot.unified_mailboxes;
+    state.folder_unreads = snapshot.folder_unreads;
+    state.folders_with_mail = snapshot.folders_with_mail;
+    state.inbox_count = snapshot.inbox_count;
+    state.next_cursor = snapshot.next_cursor;
+    state.set_scope(snapshot.scope);
 }
 
 #[derive(Debug)]
@@ -2268,6 +2341,9 @@ impl InboxState {
             remote_images_override_id: None,
             mark_read_on_open: true,
             grouping: MailGrouping::Conversations,
+            tab_local: HashMap::new(),
+            tag_counts_by_tab: HashMap::new(),
+            pending_tab_perf: None,
             warm_start_cache,
         }
     }
@@ -2743,6 +2819,66 @@ fn spawn_startup_load(
         tokio::spawn(async move {
             let result = load_startup_mail_metadata(&metadata_core, scope).await;
             let _ = metadata_tx.send(StartupUpdate::MailMetadata(result)).await;
+        });
+
+        // Catalog, brand import, and local-mail counts after first paint.
+        let catalog_tx = startup_tx.clone();
+        let catalog_core = core.clone();
+        tokio::spawn(async move {
+            match refresh_startup_catalog_background(&catalog_core).await {
+                Ok(settings) => {
+                    let _ = catalog_tx
+                        .send(StartupUpdate::Preferences(Box::new(settings)))
+                        .await;
+                }
+                Err(error) => tracing::warn!(%error, "background catalog refresh failed"),
+            }
+            match catalog_core.load_local_mail().await {
+                Ok(local) => {
+                    // Reuse MailMetadata path indirectly via Preferences; local
+                    // mail section refreshes from the next metadata pass.
+                    let _ = local;
+                }
+                Err(error) => tracing::warn!(%error, "background local-mail count failed"),
+            }
+        });
+
+        // Prefetch every business tab's first page + metadata + tag counts.
+        let prefetch_core = core.clone();
+        tokio::spawn(async move {
+            let Ok(settings) = prefetch_core.load_settings().await else {
+                return;
+            };
+            let accounts = prefetch_core.load_accounts().await.unwrap_or_default();
+            let tabs = settings.business_tabs.clone();
+            // Collect Send-only scope inputs before any await — presentation
+            // holds Slint images and is not Send.
+            let scopes = tabs
+                .into_iter()
+                .map(|tab| {
+                    let mut presentation = AccountPresentationSettings::from_settings(&settings);
+                    presentation.active_business_tab = Some(tab.id);
+                    presentation.bind_accounts(&accounts);
+                    presentation.invalidate_scope_cache();
+                    let (sidebar, query, scope_filter) = presentation.view_scope_cached();
+                    let company = presentation.company_account_ids(&accounts);
+                    (sidebar, query, scope_filter, company)
+                })
+                .collect::<Vec<_>>();
+            for (sidebar, query, scope_filter, company) in scopes {
+                let _ = prefetch_core.set_view_scope(
+                    sidebar,
+                    query,
+                    scope_filter,
+                    false,
+                    Some(company.clone()),
+                );
+                let _ = prefetch_core
+                    .load_page(Scope::CompanyInbox, "", None, PAGE_SIZE as i64, false)
+                    .await;
+                let _ = prefetch_core.load_mail_metadata(Scope::CompanyInbox).await;
+                let _ = prefetch_core.tag_message_counts_for(company).await;
+            }
         });
     });
 }
@@ -5111,13 +5247,33 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     }
                     if accepted {
                         match update.result {
-                            Ok(page) => apply_background_mail_page(
-                                &app,
-                                &mail_update_state,
-                                &mail_update_runtime,
-                                page,
-                                &[],
-                            ),
+                            Ok(page) => {
+                                apply_background_mail_page(
+                                    &app,
+                                    &mail_update_state,
+                                    &mail_update_runtime,
+                                    page,
+                                    &[],
+                                );
+                                {
+                                    let mut state = mail_update_state.borrow_mut();
+                                    if let Some(tab_id) =
+                                        state.account_presentation.active_business_tab.clone()
+                                    {
+                                        let snapshot = capture_tab_local(&state);
+                                        state.tab_local.insert(tab_id, snapshot);
+                                    }
+                                    if let Some(perf) = state.pending_tab_perf.as_mut() {
+                                        if perf.first_rows_ms.is_none() {
+                                            perf.first_rows_ms =
+                                                Some(perf.started.elapsed().as_millis());
+                                        }
+                                        if perf.finish_if_ready() {
+                                            state.pending_tab_perf = None;
+                                        }
+                                    }
+                                }
+                            }
                             Err(error) => app.set_render_status(UiMessage::detail(
                                 "Background mail refresh failed: {}",
                                 error,
@@ -5188,6 +5344,12 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             let Some(app) = mail_metadata_app.upgrade() else {
                 return;
             };
+            if let Some((tab_id, counts)) = update.tag_counts {
+                mail_metadata_state
+                    .borrow_mut()
+                    .tag_counts_by_tab
+                    .insert(tab_id, counts);
+            }
             match update.result {
                 Ok(metadata) => {
                     if !snapshot_is_current(&mail_metadata_state, metadata.account_revision) {
@@ -5202,7 +5364,22 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     state.unified_mailboxes = metadata.unified_mailboxes;
                     state.inbox_count = metadata.inbox_count;
                     state.folder_unreads = metadata.folder_unreads.clone();
-                state.folders_with_mail = metadata.folders_with_mail.clone();
+                    state.folders_with_mail = metadata.folders_with_mail.clone();
+                    if let Some(tab_id) = state.account_presentation.active_business_tab.clone() {
+                        let snapshot = capture_tab_local(&state);
+                        state.tab_local.insert(tab_id, snapshot);
+                    }
+                    if let Some(perf) = state.pending_tab_perf.as_mut() {
+                        if perf.metadata_ms.is_none() {
+                            perf.metadata_ms = Some(perf.started.elapsed().as_millis());
+                        }
+                        if perf.folder_tree_ms.is_none() {
+                            perf.folder_tree_ms = Some(perf.started.elapsed().as_millis());
+                        }
+                        if perf.finish_if_ready() {
+                            state.pending_tab_perf = None;
+                        }
+                    }
                     drop(state);
                     if local_mail_changed {
                         // Its section is named at once; its size follows.
@@ -5292,9 +5469,25 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                 mail_metadata_refresh_in_progress_for_core.set(true);
                 metadata_last_started.set(Some(std::time::Instant::now()));
                 let updates = mail_metadata_tx.clone();
+                let tab_id = mail_update_state
+                    .borrow()
+                    .account_presentation
+                    .active_business_tab
+                    .clone();
+                let company_ids = mail_update_state.borrow().company_account_ids.clone();
                 mail_update_runtime.spawn(async move {
                     let result = core.load_mail_metadata(scope).await;
-                    let _ = updates.send(MailMetadataUpdate { result }).await;
+                    let tag_counts = match (tab_id, company_ids) {
+                        (Some(tab_id), Some(ids)) => core
+                            .tag_message_counts_for(ids)
+                            .await
+                            .ok()
+                            .map(|counts| (tab_id, counts)),
+                        _ => None,
+                    };
+                    let _ = updates
+                        .send(MailMetadataUpdate { result, tag_counts })
+                        .await;
                 });
             }
         }
@@ -5927,6 +6120,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
 
                     app.set_startup_stage("Loading local mail…".into());
                     app.set_startup_progress(0.85);
+                    let ready_ui_started = std::time::Instant::now();
                     apply_local_mail(&app, &startup_state, local_mail);
                     refresh_rows_only(&app, &startup_state, &startup_runtime);
                     refresh_list_metadata(&app, &startup_state);
@@ -5934,6 +6128,9 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     app.set_startup_progress(1.0);
                     app.set_startup_hydrated(true);
                     app.set_startup_ready(true);
+                    crate::ui_perf::log_startup_first_paint(
+                        ready_ui_started.elapsed().as_millis(),
+                    );
                     app.invoke_product_changed(app.get_active_view());
                     app.global::<TabsUi>().invoke_restore_active();
                     app.set_startup_failed(false);
@@ -9594,18 +9791,62 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
                     .as_ref()
                     .is_none_or(|accounts| accounts.binary_search(&mailbox.account_id).is_ok())
             });
+            // Paint immediately from a prior visit's local cache when present.
+            let tab_key = state
+                .account_presentation
+                .active_business_tab
+                .clone()
+                .unwrap_or_default();
+            let cached = (!tab_key.is_empty())
+                .then(|| state.tab_local.get(&tab_key).cloned())
+                .flatten();
+            if let Some(snapshot) = cached {
+                apply_tab_local(&mut state, snapshot);
+            }
             prefer_shown_compose_account(&app, &state);
         }
         mail_pagination_generation_for_profile
             .set(mail_pagination_generation_for_profile.get().wrapping_add(1));
         mail_pagination_in_progress_for_profile.set(false);
         app.set_mail_loading_more(false);
-        if let Err(error) =
+        let had_cache = {
+            let state = state_for_profile.borrow();
+            state
+                .account_presentation
+                .active_business_tab
+                .as_ref()
+                .is_some_and(|id| state.tab_local.contains_key(id))
+                && !state.messages.is_empty()
+        };
+        if had_cache {
+            // Cached rows already painted; still refresh local SQLite in the
+            // background without blocking the click.
+            refresh_rows_only(&app, &state_for_profile, &runtime_for_profile);
+            if let Err(error) =
+                refresh_from_source(&app, &state_for_profile, &runtime_for_profile, true, &[])
+            {
+                app.set_render_status(UiMessage::detail("Mail refresh failed: {}", error));
+            }
+        } else if let Err(error) =
             refresh_from_source(&app, &state_for_profile, &runtime_for_profile, false, &[])
         {
             app.set_render_status(UiMessage::detail("Mail refresh failed: {}", error));
         }
+        let tree_started = std::time::Instant::now();
         refresh_sidebar(&state_for_profile);
+        let tree_ms = tree_started.elapsed().as_millis();
+        {
+            let mut state = state_for_profile.borrow_mut();
+            if let Some(perf) = state.pending_tab_perf.as_mut() {
+                perf.folder_tree_ms = Some(perf.started.elapsed().as_millis().max(tree_ms));
+                if had_cache {
+                    perf.first_rows_ms = Some(perf.started.elapsed().as_millis());
+                }
+                if perf.finish_if_ready() {
+                    state.pending_tab_perf = None;
+                }
+            }
+        }
         mail_metadata_refresh_requested_for_profile.set(true);
         app.invoke_drain_core_updates();
     });

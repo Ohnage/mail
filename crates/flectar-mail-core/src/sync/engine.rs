@@ -1578,6 +1578,7 @@ pub(super) async fn emit_sync_status(ctx: &SyncCtx, account_id: i64) {
 }
 
 pub(crate) async fn connect(ctx: &SyncCtx, config: &AccountConfig) -> Result<Session> {
+    crate::network_guard::record("imap_connect");
     crate::events::sync_diagnostic("imap_credentials", Some(config.id), "loading");
     let creds = imap_credentials(ctx, config).await?;
     crate::events::sync_diagnostic("imap_connect", Some(config.id), "connecting");

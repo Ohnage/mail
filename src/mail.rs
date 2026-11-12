@@ -727,6 +727,16 @@ impl CoreMailSource {
             .map_err(|error| error.to_string())
     }
 
+    pub async fn tag_message_counts_for(
+        &self,
+        account_ids: Vec<i64>,
+    ) -> Result<std::collections::HashMap<String, i64>, String> {
+        self.core
+            .tag_message_counts_for(account_ids)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
     async fn load_local_mail_account(&self) -> Result<Option<i64>, String> {
         self.core
             .local_mail_account()

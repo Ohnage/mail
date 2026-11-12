@@ -292,23 +292,23 @@ fn prepare_store(
     store: &str,
     migrate: impl FnOnce(&mut Connection) -> Result<()>,
 ) -> Result<()> {
-    // A clean final SQLite close removes WAL/journal sidecars. Their presence
-    // before opening is therefore a cheap dirty-shutdown signal. Do the O(n)
-    // scan only then, or after a schema change, never on every normal launch.
-    let recovered_dirty_state =
-        sqlite_sidecar(path, "-wal").exists() || sqlite_sidecar(path, "-journal").exists();
+    // Rollback `-journal` means an interrupted transaction (true dirty
+    // shutdown). A `-wal` sidecar is normal under journal_mode=WAL and must
+    // not trigger an O(n) quick_check — that alone costs ~minutes on a 5 GB
+    // mailbox and blocked first paint (BRIEF-STARTUP).
+    let recovered_dirty_state = sqlite_sidecar(path, "-journal").exists();
     let mut conn = open_connection(path, kind)?;
     let version_before: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if recovered_dirty_state {
         quick_check(&conn, store)?;
     }
     migrate(&mut conn)?;
-    // SQLite 3.46+ bounds the ANALYZE work performed by optimize. The 0x10000
-    // bit also considers tables that this short-lived preparation connection
-    // has not queried, keeping statistics useful after large syncs/imports.
-    conn.execute_batch("PRAGMA optimize=0x10002;")?;
     let version_after: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version_after != version_before {
+        // SQLite 3.46+ bounds ANALYZE. Only pay this after a schema change —
+        // running optimize on every warm open of a multi-GB mailbox blocked
+        // first paint for tens of seconds (BRIEF-STARTUP).
+        conn.execute_batch("PRAGMA optimize=0x10002;")?;
         quick_check(&conn, store)?;
     }
     Ok(())
@@ -647,6 +647,40 @@ pub(crate) mod testutil {
 mod connection_profile_tests {
     use super::Db;
     use rusqlite::config::DbConfig;
+    use std::time::Instant;
+
+    #[test]
+    fn wal_sidecar_does_not_force_full_quick_check_on_open() {
+        // journal_mode=WAL leaves a -wal file after a normal close. That must
+        // not run PRAGMA quick_check (O(n) over the whole store).
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mail.db");
+        {
+            let db = Db::open(&path).unwrap();
+            drop(db);
+        }
+        let wal = path.with_extension("db-wal");
+        // Ensure a wal sidecar exists even if SQLite checkpointed it away.
+        if !wal.exists() {
+            std::fs::write(&wal, []).unwrap();
+        }
+        // Also cover the common `flectar-mail.db-wal` naming.
+        let wal_sidecar = {
+            let mut value = path.as_os_str().to_os_string();
+            value.push("-wal");
+            std::path::PathBuf::from(value)
+        };
+        if !wal_sidecar.exists() {
+            std::fs::write(&wal_sidecar, [0u8; 32]).unwrap();
+        }
+        let started = Instant::now();
+        let db = Db::open(&path).unwrap();
+        drop(db);
+        assert!(
+            started.elapsed().as_millis() < 5_000,
+            "WAL presence must not trigger a multi-second quick_check"
+        );
+    }
 
     #[tokio::test]
     async fn cache_diagnostic_tracks_live_connections_without_reopening_them() {

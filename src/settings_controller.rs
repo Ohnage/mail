@@ -1276,11 +1276,23 @@ pub(super) fn register_settings_preference_callbacks(
         let switch_started = std::time::Instant::now();
         {
             let mut state = state_for_tab.borrow_mut();
+            if let Some(previous) = state.account_presentation.active_business_tab.clone() {
+                let snapshot = capture_tab_local(&state);
+                state.tab_local.insert(previous, snapshot);
+            }
             state.account_presentation.active_business_tab = requested.clone();
             if requested.is_some() {
                 state.account_presentation.active_profile = None;
             }
             state.account_presentation.invalidate_scope_cache();
+            state.pending_tab_perf = Some(PendingTabPerf {
+                tab_id: requested.clone().unwrap_or_default(),
+                started: switch_started,
+                ui_callback_ms: None,
+                folder_tree_ms: None,
+                first_rows_ms: None,
+                metadata_ms: None,
+            });
         }
         // Never rebuild accounts / 28k aliases / preferences on a tab click.
         // Only the five tab chips need an active-flag paint before the mail
@@ -1291,12 +1303,18 @@ pub(super) fn register_settings_preference_callbacks(
         }
         app.invoke_mail_profile_changed();
         let ui_ms = switch_started.elapsed().as_millis();
-        crate::ui_perf::log_tab_switch(
-            requested.as_deref().unwrap_or(""),
-            ui_ms,
-            None,
-            None,
-        );
+        {
+            let mut state = state_for_tab.borrow_mut();
+            if let Some(perf) = state.pending_tab_perf.as_mut() {
+                perf.ui_callback_ms = Some(ui_ms);
+                if perf.folder_tree_ms.is_none() {
+                    perf.folder_tree_ms = Some(ui_ms);
+                }
+                if perf.finish_if_ready() {
+                    state.pending_tab_perf = None;
+                }
+            }
+        }
         runtime_for_tab.spawn(async move {
             if let Err(error) = core.set_active_business_tab(requested).await {
                 tracing::warn!(%error, "could not save the open business tab");

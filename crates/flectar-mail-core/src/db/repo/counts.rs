@@ -441,6 +441,45 @@ pub fn folder_unread_counts(conn: &Connection) -> Result<HashMap<i64, i64>> {
     folder_unread_counts_for(conn, None, None)
 }
 
+/// Message counts per tag keyword within `account_ids` (company-tab scope).
+/// One grouped local query; never called on the UI thread.
+pub fn tag_message_counts_for(
+    conn: &Connection,
+    account_ids: &[i64],
+) -> Result<HashMap<String, i64>> {
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = account_ids
+        .iter()
+        .enumerate()
+        .map(|(index, _)| format!("?{}", index + 1))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT l.keyword, COUNT(DISTINCT ml.message_id)
+         FROM message_labels ml
+         JOIN labels l ON l.id = ml.label_id
+         JOIN messages m ON m.id = ml.message_id
+         WHERE m.account_id IN ({placeholders})
+           AND COALESCE(l.is_auto, 0) = 0
+           AND l.keyword IS NOT NULL
+           AND l.keyword != ''
+         GROUP BY l.keyword"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = account_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let rows = stmt
+        .query_map(params.as_slice(), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -844,5 +883,31 @@ mod tests {
             .map(|counts| (counts.account_id, counts.inbox))
             .collect::<Vec<_>>();
         assert_eq!(inbox, vec![(1, 1), (2, 0)]);
+    }
+
+    #[test]
+    fn tag_message_counts_scope_to_accounts_and_match_fresh_count() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO labels (
+               id, name, color, keyword, position, is_auto, scope, owner_account_id, origin
+             ) VALUES (5, 'Lead', '#000000', '$label:lead', 1, 0, 'account', 1, 'user')",
+            [],
+        )
+        .unwrap();
+        seed_thread(&conn, 1, 0, false);
+        let message_id: i64 = conn
+            .query_row("SELECT id FROM messages WHERE thread_id = 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO message_labels (message_id, label_id) VALUES (?1, 5)",
+            [message_id],
+        )
+        .unwrap();
+        let counts = tag_message_counts_for(&conn, &[1]).unwrap();
+        assert_eq!(counts.get("$label:lead").copied(), Some(1));
+        assert!(tag_message_counts_for(&conn, &[99]).unwrap().is_empty());
     }
 }

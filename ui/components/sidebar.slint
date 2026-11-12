@@ -718,6 +718,7 @@ export component MailSidebar inherits CollapsibleWorkspaceSidebar {
                         label-tree-node: true;
                         editable-color: entry.label.color;
                         scope: self.label-scope;
+                        count: entry.mailbox.count;
                         account-id: entry.label.account_id;
                         label-manageable: entry.mailbox.detail != "folder-pin";
                         tag-pin-menu: entry.label.account_id == -2;

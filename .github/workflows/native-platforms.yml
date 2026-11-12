@@ -31,23 +31,6 @@ on:
         description: Build the unsigned iOS app
         type: boolean
         default: true
-  pull_request:
-    paths:
-      - ".github/workflows/native-platforms.yml"
-      - "Cargo.lock"
-      - "Cargo.toml"
-      - "build.rs"
-      - "packaging/**"
-      - "platform/windows/**"
-      - "resources/**"
-      - "scripts/**"
-  # This fork builds Windows only, including PRs and manual/tag events.
-  # Upstream repositories retain their original release channels.
-  push:
-    branches:
-      - main
-    tags:
-      - "v*.*.*"
 
 permissions:
   contents: read

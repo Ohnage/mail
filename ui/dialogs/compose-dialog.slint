@@ -94,11 +94,22 @@ export component ComposeDialog inherits Rectangle {
     // The desktop panel stays below integrated window controls.
     private property <length> controls-inset: WindowChrome.controls-visible ? WindowChrome.band-height : 0px;
 
+    // C3: desktop compose opens at ~75% of the work area so the editor can
+    // grow; headers/toolbar stay at their fixed compact heights.
     composer := EmailComposer {
         x: root.compact ? 0px : (parent.width - self.width) / 2;
-        y: root.compact ? 0px : root.controls-inset + (parent.height - root.controls-inset - self.height) / 2;
-        width: root.compact ? parent.width : min(820px, parent.width - 64px);
-        height: root.compact ? parent.height : min(700px, parent.height - root.controls-inset - 64px);
+        y: root.compact
+            ? 0px
+            : root.controls-inset + (max(1px, parent.height - root.controls-inset) - self.height) / 2;
+        width: root.compact
+            ? parent.width
+            : min(max(640px, parent.width * 0.75), parent.width - 32px);
+        height: root.compact
+            ? parent.height
+            : min(
+                max(480px, max(1px, parent.height - root.controls-inset) * 0.75),
+                max(1px, parent.height - root.controls-inset) - 32px,
+            );
         compact: root.compact;
         attachment-picker-supported: root.attachment-picker-supported;
         open: root.compose_open;

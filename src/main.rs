@@ -48,6 +48,8 @@ mod oauth_browser;
 #[cfg(test)]
 mod compose_caret_reveal_tests;
 #[cfg(test)]
+mod compose_window_size_tests;
+#[cfg(test)]
 mod on_screen_surface_tests;
 pub mod pdf_preview;
 pub mod platform;

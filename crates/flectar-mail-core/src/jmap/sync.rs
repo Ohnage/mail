@@ -17,8 +17,7 @@ use futures::{FutureExt, Stream, StreamExt};
 use jmap_client::core::error::MethodErrorType;
 use jmap_client::core::query::QueryResponse;
 use jmap_client::core::response::{
-    EmailGetResponse, EmailSetResponse, EmailSubmissionSetResponse, IdentityGetResponse,
-    MailboxGetResponse,
+    EmailGetResponse, EmailSetResponse, IdentityGetResponse, MailboxGetResponse,
 };
 use jmap_client::core::set::{SetErrorType, SetObject};
 use jmap_client::email::import::EmailImportResponse;
@@ -2640,16 +2639,24 @@ async fn send_action(
     let sent_mailbox =
         ensure_role_mailbox(ctx, config.id, c, roles::SENT, "Sent", Role::Sent).await?;
 
-    // A lost response must not cause a duplicate submission on retry.
+    // Never submit twice: EmailSubmission/query, Sent mailbox placement, and
+    // a stable Message-ID all count as already sent (C1 Message-ID guard).
+    let message_id_header = ctx
+        .db
+        .read(move |conn| {
+            Ok(repo::messages::get_row(conn, draft_id)?
+                .and_then(|row| row.message_id)
+                .filter(|id| !id.is_empty()))
+        })
+        .await?;
     let already_submitted = submission_accepted
-        || !c
-            .email_submission_query(jmap_client::email_submission::query::Filter::email_ids([
-                remote_email.clone(),
-            ]))
-            .await
-            .map_err(client::map_error)?
-            .ids()
-            .is_empty();
+        || remote_already_sent(
+            c,
+            &remote_email,
+            &sent_mailbox,
+            message_id_header.as_deref(),
+        )
+        .await?;
     if !already_submitted {
         let mut identity_request = c.request();
         identity_request.get_identity().account_id(&c.account_id);
@@ -2681,8 +2688,11 @@ async fn send_action(
             .to_owned();
         let (request, create_id) =
             submission_request(c, &remote_email, identity_id, sent_mailbox.clone());
+        // RFC 8621 §7.5: onSuccessUpdateEmail appends an implicit Email/set.
+        // send_email_submission selects EmailSubmission/set; send_single would
+        // pop the Email/set and misread created as "Id c0 not found".
         let mut response = c
-            .send_single::<EmailSubmissionSetResponse>(request)
+            .send_email_submission(request)
             .await
             .map_err(map_submission_error)?;
         let created = response.created(&create_id);
@@ -2695,7 +2705,11 @@ async fn send_action(
                         | jmap_client::core::set::SetErrorType::ForbiddenMailFrom
                 )
         );
-        let delivery = if created.is_ok() {
+        let confirmed = match &created {
+            Ok(submission) => submission_counts_as_sent(submission),
+            Err(_) => false,
+        };
+        let delivery = if confirmed {
             SenderDeliveryStatus::Confirmed
         } else if sender_refused {
             SenderDeliveryStatus::Rejected
@@ -2728,7 +2742,13 @@ async fn send_action(
                 "the server refused to send as {sender_email}; add the address as a sending identity on the server, then refresh sender identities"
             )));
         }
-        created.map_err(map_submission_error)?;
+        let submission = created.map_err(map_not_created_submission)?;
+        if !submission_counts_as_sent(&submission) {
+            return Err(CoreError::SendUncertain(
+                "the server created an EmailSubmission but did not confirm delivery; check Sent before retrying"
+                    .into(),
+            ));
+        }
     }
     if !submission_accepted {
         mark_submission_accepted(ctx, action).await?;
@@ -2959,6 +2979,110 @@ fn identity_matches(identity: &str, from: &str) -> bool {
         return false;
     };
     identity_local == "*" && identity_domain.eq_ignore_ascii_case(from_domain)
+}
+
+/// created, undoStatus final/pending, or any 2xx smtpReply → treat as sent (C1).
+fn submission_counts_as_sent(submission: &jmap_client::email_submission::EmailSubmission) -> bool {
+    use jmap_client::email_submission::UndoStatus;
+    match submission.undo_status() {
+        Some(UndoStatus::Canceled) => false,
+        Some(UndoStatus::Final) | Some(UndoStatus::Pending) | None => {
+            match submission.delivery_status() {
+                None => true,
+                Some(statuses) if statuses.is_empty() => true,
+                Some(statuses) => statuses
+                    .values()
+                    .any(|status| smtp_reply_is_2xx(status.smtp_reply())),
+            }
+        }
+    }
+}
+
+fn smtp_reply_is_2xx(reply: &str) -> bool {
+    reply
+        .trim()
+        .chars()
+        .take(3)
+        .collect::<String>()
+        .parse::<u16>()
+        .is_ok_and(|code| (200..300).contains(&code))
+}
+
+async fn remote_already_sent(
+    c: &ConnectedClient,
+    remote_email: &str,
+    sent_mailbox: &str,
+    message_id: Option<&str>,
+) -> Result<bool> {
+    if !c
+        .email_submission_query(jmap_client::email_submission::query::Filter::email_ids([
+            remote_email.to_owned(),
+        ]))
+        .await
+        .map_err(client::map_error)?
+        .ids()
+        .is_empty()
+    {
+        return Ok(true);
+    }
+    if prepared_email_is_sent(c, remote_email, sent_mailbox).await? {
+        return Ok(true);
+    }
+    if let Some(message_id) = message_id
+        && query_sent_by_message_id(c, sent_mailbox, message_id)
+            .await?
+            .is_some()
+    {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+async fn prepared_email_is_sent(
+    c: &ConnectedClient,
+    remote_email: &str,
+    sent_mailbox: &str,
+) -> Result<bool> {
+    let mut request = c.request();
+    request
+        .get_email()
+        .account_id(&c.account_id)
+        .ids([remote_email.to_owned()])
+        .properties([
+            EmailProperty::Id,
+            EmailProperty::MailboxIds,
+            EmailProperty::Keywords,
+        ]);
+    let mut response: EmailGetResponse = c.send_single(request).await.map_err(client::map_error)?;
+    let Some(email) = response.take_list().into_iter().next() else {
+        return Ok(false);
+    };
+    let in_sent = email.mailbox_ids().contains(&sent_mailbox);
+    let is_draft = email.keywords().contains(&"$draft");
+    Ok(in_sent && !is_draft)
+}
+
+async fn query_sent_by_message_id(
+    c: &ConnectedClient,
+    sent_mailbox: &str,
+    message_id: &str,
+) -> Result<Option<String>> {
+    let filter = jmap_client::core::query::Filter::and([
+        jmap_client::email::query::Filter::in_mailbox(sent_mailbox),
+        jmap_client::email::query::Filter::header("Message-ID", Some(format!("<{message_id}>"))),
+    ]);
+    let matches = c.email_query(filter).await.map_err(client::map_error)?;
+    Ok(matches.ids().first().cloned())
+}
+
+fn map_not_created_submission(error: jmap_client::Error) -> CoreError {
+    match &error {
+        jmap_client::Error::Set(set) => CoreError::Jmap(format!(
+            "the server refused the EmailSubmission ({:?}): {set}",
+            set.error()
+        )),
+        _ => map_submission_error(error),
+    }
 }
 
 fn map_submission_error(error: jmap_client::Error) -> CoreError {
@@ -3611,6 +3735,14 @@ mod tests {
             map_submission_error(jmap_client::Error::Server("rejected".into())),
             CoreError::Jmap(_)
         ));
+    }
+
+    #[test]
+    fn smtp_reply_2xx_and_final_undo_count_as_sent() {
+        assert!(smtp_reply_is_2xx("250 Queued"));
+        assert!(smtp_reply_is_2xx("200 OK"));
+        assert!(!smtp_reply_is_2xx("550 rejected"));
+        assert!(!smtp_reply_is_2xx(""));
     }
 
     #[tokio::test]

@@ -7,7 +7,8 @@ use jmap_client::core::changes::ChangesResponse;
 use jmap_client::core::query::{Filter, QueryResponse};
 use jmap_client::core::request::Request;
 use jmap_client::core::response::{
-    EmailSetResponse, MailboxSetResponse, Response, SingleMethodResponse,
+    EmailSetResponse, EmailSubmissionSetResponse, MailboxSetResponse, MethodResponse, Response,
+    SingleMethodResponse, TaggedMethodResponse,
 };
 use jmap_client::core::session::{Capabilities, Session, URLPart};
 use jmap_client::core::set::SetObject;
@@ -231,6 +232,65 @@ impl ConnectedClient {
             SingleMethodResponse::Ok((_, response, _)) => Ok(response),
             SingleMethodResponse::Error((_, error, _)) => Err(error.into()),
         }
+    }
+
+    /// Full multi-method response (RFC 8620). Prefer over [`Self::send_single`]
+    /// when a call can produce implicit follow-up methods (e.g. EmailSubmission/set
+    /// with onSuccessUpdateEmail also returns Email/set).
+    pub async fn send_tagged(
+        &self,
+        request: Request<'_>,
+    ) -> jmap_client::Result<Response<TaggedMethodResponse>> {
+        crate::network_guard::record("jmap_send_tagged");
+        let api_url = self.client.session().api_url().to_owned();
+        let response = self
+            .http
+            .post(api_url)
+            .timeout(self.timeout)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::to_string(&request)?)
+            .send()
+            .await?;
+        let body = Client::handle_error(response).await?.bytes().await?;
+        let response: Response<TaggedMethodResponse> = serde_json::from_slice(&body)?;
+        if response.session_state() != self.client.session().state() {
+            self.session_changed.store(true, Ordering::Relaxed);
+        }
+        Ok(response)
+    }
+
+    /// EmailSubmission/set, selecting that method even when an implicit Email/set
+    /// follows (RFC 8621 §7.5). `send_single` would pop the Email/set and misread
+    /// the submission as missing.
+    pub async fn send_email_submission(
+        &self,
+        request: Request<'_>,
+    ) -> jmap_client::Result<EmailSubmissionSetResponse> {
+        let response = self.send_tagged(request).await?;
+        let mut submission = None;
+        for tagged in response.unwrap_method_responses() {
+            match tagged.unwrap_method_response() {
+                MethodResponse::SetEmailSubmission(set) => submission = Some(Ok(set)),
+                MethodResponse::SetEmail(_) => {
+                    // Implicit onSuccessUpdateEmail confirmation — ignore body.
+                }
+                MethodResponse::Error(error) if submission.is_none() => {
+                    submission = Some(Err(error.into()));
+                }
+                MethodResponse::Error(_) => {}
+                other if submission.is_none() => {
+                    submission = Some(Err(jmap_client::Error::Internal(format!(
+                        "unexpected JMAP response while waiting for EmailSubmission/set: {other:?}"
+                    ))));
+                }
+                _ => {}
+            }
+        }
+        submission.unwrap_or_else(|| {
+            Err(jmap_client::Error::Internal(
+                "Server returned no EmailSubmission/set response".into(),
+            ))
+        })
     }
 
     /// Uploads a blob into the selected account.

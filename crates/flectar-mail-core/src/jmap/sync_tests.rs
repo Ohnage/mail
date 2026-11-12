@@ -104,6 +104,24 @@ async fn snoozed_thread(ctx: &SyncCtx) -> (Option<i64>, Option<i64>) {
         .unwrap()
 }
 
+/// How EmailSubmission/set answers (C1). A successful create also emits the
+/// implicit Email/set that RFC 8621 §7.5 requires after onSuccessUpdateEmail.
+#[derive(Clone)]
+enum SubmissionAnswer {
+    /// created + optional implicit Email/set (default Stalwart shape).
+    Created {
+        undo_status: &'static str,
+        smtp_reply: &'static str,
+        with_email_set: bool,
+    },
+    NotCreated {
+        type_: &'static str,
+        description: &'static str,
+    },
+    /// Drop the TCP connection with no body (transport loss → uncertain).
+    Drop,
+}
+
 /// A JMAP server answering from fixed data. Every connection is served on its
 /// own task, and every method call is recorded.
 struct MockJmap {
@@ -118,6 +136,10 @@ struct MockJmap {
     max_objects_in_get: usize,
     /// How long to hold back the answer to a method call.
     delay: Option<fn(&str, &Value) -> Option<Duration>>,
+    identities: Vec<Value>,
+    submission: SubmissionAnswer,
+    /// Email ids that already have an EmailSubmission (retry guard).
+    submitted_email_ids: Vec<String>,
 }
 
 impl Default for MockJmap {
@@ -131,6 +153,17 @@ impl Default for MockJmap {
             // One Email/get object per page.
             max_objects_in_get: 1,
             delay: None,
+            identities: vec![json!({
+                "id": "ident-1",
+                "email": "reader@mail.example",
+                "name": "Reader"
+            })],
+            submission: SubmissionAnswer::Created {
+                undo_status: "final",
+                smtp_reply: "250 Queued",
+                with_email_set: true,
+            },
+            submitted_email_ids: Vec::new(),
         }
     }
 }
@@ -295,6 +328,7 @@ impl MockJmap {
                     .to_string()
                 } else {
                     let mut responses = Vec::new();
+                    let mut drop_connection = false;
                     for call in request["methodCalls"].as_array().unwrap() {
                         let method = call[0].as_str().unwrap();
                         let call_id = &call[2];
@@ -305,10 +339,19 @@ impl MockJmap {
                         if let Some(delay) = self.delay.and_then(|delay| delay(method, &call[1])) {
                             hold = hold.max(delay);
                         }
-                        match self.answer(method, &call[1]) {
-                            Ok(payload) => responses.push(json!([method, payload, call_id])),
-                            Err(error) => responses.push(json!(["error", error, call_id])),
+                        match self.answer_methods(method, &call[1], call_id) {
+                            Ok(extra) => responses.extend(extra),
+                            Err(SubmissionServeError::Drop) => {
+                                drop_connection = true;
+                                break;
+                            }
+                            Err(SubmissionServeError::Method(error)) => {
+                                responses.push(json!(["error", error, call_id]));
+                            }
                         }
+                    }
+                    if drop_connection {
+                        return;
                     }
                     json!({"methodResponses": responses, "sessionState": "session-0"}).to_string()
                 }
@@ -331,8 +374,148 @@ impl MockJmap {
         }
     }
 
+    fn answer_methods(
+        &self,
+        method: &str,
+        args: &Value,
+        call_id: &Value,
+    ) -> std::result::Result<Vec<Value>, SubmissionServeError> {
+        if method == "EmailSubmission/set" {
+            return self.answer_submission(args, call_id);
+        }
+        match self.answer(method, args) {
+            Ok(payload) => Ok(vec![json!([method, payload, call_id])]),
+            Err(error) => Err(SubmissionServeError::Method(error)),
+        }
+    }
+
+    fn answer_submission(
+        &self,
+        args: &Value,
+        call_id: &Value,
+    ) -> std::result::Result<Vec<Value>, SubmissionServeError> {
+        match &self.submission {
+            SubmissionAnswer::Drop => Err(SubmissionServeError::Drop),
+            SubmissionAnswer::NotCreated { type_, description } => {
+                let create = args["create"].as_object().cloned().unwrap_or_default();
+                let mut not_created = serde_json::Map::new();
+                for create_id in create.keys() {
+                    not_created.insert(
+                        create_id.clone(),
+                        json!({"type": type_, "description": description}),
+                    );
+                }
+                Ok(vec![json!([
+                    "EmailSubmission/set",
+                    {
+                        "accountId": "mail-account",
+                        "oldState": null,
+                        "newState": "sub-1",
+                        "notCreated": not_created
+                    },
+                    call_id
+                ])])
+            }
+            SubmissionAnswer::Created {
+                undo_status,
+                smtp_reply,
+                with_email_set,
+            } => {
+                let create = args["create"].as_object().cloned().unwrap_or_default();
+                let mut created = serde_json::Map::new();
+                let mut email_id = None;
+                for (create_id, submission) in &create {
+                    email_id = submission["emailId"].as_str().map(str::to_owned);
+                    created.insert(
+                        create_id.clone(),
+                        json!({
+                            "id": format!("sub-{create_id}"),
+                            "emailId": submission["emailId"],
+                            "identityId": submission["identityId"],
+                            "undoStatus": undo_status,
+                            "deliveryStatus": {
+                                "recipient@mail.example": {
+                                    "smtpReply": smtp_reply,
+                                    "delivered": "queued",
+                                    "displayed": "unknown"
+                                }
+                            }
+                        }),
+                    );
+                }
+                let mut responses = vec![json!([
+                    "EmailSubmission/set",
+                    {
+                        "accountId": "mail-account",
+                        "oldState": null,
+                        "newState": "sub-1",
+                        "created": created
+                    },
+                    call_id
+                ])];
+                if *with_email_set {
+                    let updated = email_id
+                        .map(|id| json!({ id: null }))
+                        .unwrap_or_else(|| json!({}));
+                    // Implicit follow-up; call id is server-chosen (RFC 8621 §7.5).
+                    responses.push(json!([
+                        "Email/set",
+                        {
+                            "accountId": "mail-account",
+                            "oldState": "state-0",
+                            "newState": "state-1",
+                            "updated": updated
+                        },
+                        "implicit-1"
+                    ]));
+                }
+                Ok(responses)
+            }
+        }
+    }
+
     fn answer(&self, method: &str, args: &Value) -> std::result::Result<Value, Value> {
         Ok(match method {
+            "Identity/get" => json!({
+                "accountId": "mail-account",
+                "state": "ident-0",
+                "list": self.identities,
+                "notFound": []
+            }),
+            "EmailSubmission/query" => {
+                let email_ids = args["filter"]
+                    .get("emailIds")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let ids: Vec<String> = email_ids
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|id| self.submitted_email_ids.iter().any(|known| known == id))
+                    .map(|id| format!("sub-for-{id}"))
+                    .collect();
+                json!({
+                    "accountId": "mail-account",
+                    "queryState": "sub-query-0",
+                    "canCalculateChanges": false,
+                    "position": 0,
+                    "total": ids.len(),
+                    "ids": ids
+                })
+            }
+            "Email/set" => {
+                let update = args["update"].as_object().cloned().unwrap_or_default();
+                let mut updated = serde_json::Map::new();
+                for id in update.keys() {
+                    updated.insert(id.clone(), Value::Null);
+                }
+                json!({
+                    "accountId": "mail-account",
+                    "oldState": "state-0",
+                    "newState": "state-1",
+                    "updated": updated
+                })
+            }
             "Email/changes" => {
                 let changes = self.changes.as_ref().unwrap();
                 json!({
@@ -343,16 +526,10 @@ impl MockJmap {
                 })
             }
             "Email/query" => {
-                let received = |value: &Value| {
-                    chrono::DateTime::parse_from_rfc3339(value.as_str().unwrap()).unwrap()
-                };
-                let after = args["filter"].get("after").map(received);
                 let ids = self
                     .emails
                     .iter()
-                    .filter(|email| {
-                        after.is_none_or(|after| received(&email["receivedAt"]) > after)
-                    })
+                    .filter(|email| email_matches_filter(email, &args["filter"]))
                     .map(|email| &email["id"])
                     .collect::<Vec<_>>();
                 json!({
@@ -472,6 +649,11 @@ impl MockJmap {
             other => panic!("unexpected method {other}"),
         })
     }
+}
+
+enum SubmissionServeError {
+    Drop,
+    Method(Value),
 }
 
 /// The original fixed server: one Email/get object per page, with an
@@ -1553,6 +1735,65 @@ fn mailbox_filter_role(filter: &Value) -> Option<&str> {
         .find_map(mailbox_filter_role)
 }
 
+fn email_matches_filter(email: &Value, filter: &Value) -> bool {
+    if filter.is_null() {
+        return true;
+    }
+    if let Some(conditions) = filter.get("conditions").and_then(Value::as_array) {
+        let op = filter
+            .get("operator")
+            .and_then(Value::as_str)
+            .unwrap_or("AND");
+        return match op {
+            "OR" => conditions
+                .iter()
+                .any(|condition| email_matches_filter(email, condition)),
+            "NOT" => !conditions
+                .iter()
+                .any(|condition| email_matches_filter(email, condition)),
+            _ => conditions
+                .iter()
+                .all(|condition| email_matches_filter(email, condition)),
+        };
+    }
+    if let Some(after) = filter.get("after") {
+        let received = chrono::DateTime::parse_from_rfc3339(
+            email["receivedAt"]
+                .as_str()
+                .unwrap_or("1970-01-01T00:00:00Z"),
+        )
+        .unwrap();
+        let after = chrono::DateTime::parse_from_rfc3339(after.as_str().unwrap()).unwrap();
+        if received <= after {
+            return false;
+        }
+    }
+    if let Some(mailbox) = filter.get("inMailbox").and_then(Value::as_str)
+        && !email["mailboxIds"]
+            .as_object()
+            .is_some_and(|ids| ids.contains_key(mailbox))
+    {
+        return false;
+    }
+    if let Some(header) = filter.get("header").and_then(Value::as_array) {
+        let name = header.first().and_then(Value::as_str).unwrap_or("");
+        let value = header.get(1).and_then(Value::as_str).unwrap_or("");
+        if name.eq_ignore_ascii_case("Message-ID") {
+            let needle = value.trim_matches(|c| c == '<' || c == '>');
+            let ok = email["messageId"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|id| id.trim_matches(|c| c == '<' || c == '>') == needle);
+            if !ok {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 #[tokio::test]
 async fn submission_uses_the_server_sent_role_and_creates_a_missing_drafts_mailbox() {
     let (_dir, ctx, _config) = fixture().await;
@@ -1824,5 +2065,281 @@ async fn existing_id_relabel_fetches_placement_only_not_bodies() {
         })
         .await
         .unwrap();
+    mock.task.abort();
+}
+
+/// Local draft already pinned to a remote Email id, ready for EmailSubmission.
+async fn seed_prepared_send(
+    ctx: &SyncCtx,
+    remote_email: &str,
+    message_id: &str,
+) -> repo::actions::PendingAction {
+    let remote_email = remote_email.to_owned();
+    let message_id = message_id.to_owned();
+    ctx.db
+        .write(move |conn| {
+            let (thread, draft) =
+                crate::db::testutil::seed_message(conn, "reader@mail.example", "Outbound", false);
+            conn.execute(
+                "UPDATE messages SET is_draft=1, is_outgoing=1, from_addr='reader@mail.example',
+                 from_name='Reader', message_id=?2, to_json=?3 WHERE id=?1",
+                params![
+                    draft,
+                    message_id,
+                    r#"[{"name":null,"email":"recipient@mail.example"}]"#
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO drafts_meta (message_id) VALUES (?1)",
+                params![draft],
+            )?;
+            repo::messages::set_jmap_remote(conn, draft, &remote_email, Some("blob-prepared"))?;
+            let action_id = repo::actions::enqueue(
+                conn,
+                1,
+                "send",
+                Some(draft),
+                Some(thread),
+                &json!({
+                    "draftId": draft,
+                    "jmapPreparedEmailId": remote_email
+                }),
+                None,
+            )?;
+            Ok(repo::actions::get(conn, action_id)?.unwrap())
+        })
+        .await
+        .unwrap()
+}
+
+fn send_mailboxes() -> Vec<Value> {
+    vec![
+        json!({"id": "inbox-remote", "name": "Inbox", "role": "inbox"}),
+        json!({"id": "sent-mail", "name": "Sent Mail", "role": "sent"}),
+        json!({"id": "drafts-mail", "name": "Drafts", "role": "drafts"}),
+    ]
+}
+
+#[tokio::test]
+async fn send_email_submission_selects_submission_when_email_set_follows() {
+    let mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"drafts-mail": true}, "keywords": {"$draft": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        submission: SubmissionAnswer::Created {
+            undo_status: "final",
+            smtp_reply: "250 Queued",
+            with_email_set: true,
+        },
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+    let (request, create_id) = submission_request(
+        &mock.connected,
+        "email-prepared",
+        "ident-1".into(),
+        "sent-mail".into(),
+    );
+    let mut response = mock.connected.send_email_submission(request).await.unwrap();
+    let created = response.created(&create_id).unwrap();
+    assert_eq!(
+        created.undo_status(),
+        Some(&jmap_client::email_submission::UndoStatus::Final)
+    );
+    assert!(submission_counts_as_sent(&created));
+    // send_single would have popped Email/set and failed with "Id c0 not found".
+    assert_eq!(mock.calls("EmailSubmission/set").len(), 1);
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn jmap_send_with_implicit_email_set_is_confirmed_and_leaves_no_draft() {
+    let (_dir, ctx, config) = fixture().await;
+    let action = seed_prepared_send(&ctx, "email-prepared", "stable@mail.example").await;
+    let mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"drafts-mail": true}, "keywords": {"$draft": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        submission: SubmissionAnswer::Created {
+            undo_status: "final",
+            smtp_reply: "250 Queued",
+            with_email_set: true,
+        },
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+
+    send_action(&ctx, &config, &mock.connected, &action)
+        .await
+        .unwrap();
+
+    assert_eq!(mock.calls("EmailSubmission/set").len(), 1);
+    let draft_id = action.payload["draftId"].as_i64().unwrap();
+    ctx.db
+        .read(move |conn| {
+            let row = repo::messages::get_row(conn, draft_id)?.unwrap();
+            let is_draft: i64 = conn.query_row(
+                "SELECT is_draft FROM messages WHERE id=?1",
+                [draft_id],
+                |r| r.get(0),
+            )?;
+            assert_eq!(is_draft, 0);
+            let drafts_meta: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM drafts_meta WHERE message_id=?1",
+                [draft_id],
+                |r| r.get(0),
+            )?;
+            assert_eq!(drafts_meta, 0);
+            let sent = repo::folders::by_jmap_role(conn, 1, roles::SENT)?.unwrap();
+            assert_eq!(row.folder_id, Some(sent.id));
+            Ok(())
+        })
+        .await
+        .unwrap();
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn jmap_send_not_created_forbidden_from_is_a_clear_refusal() {
+    let (_dir, ctx, config) = fixture().await;
+    let action = seed_prepared_send(&ctx, "email-prepared", "stable@mail.example").await;
+    let mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"drafts-mail": true}, "keywords": {"$draft": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        submission: SubmissionAnswer::NotCreated {
+            type_: "forbiddenFrom",
+            description: "not allowed to send as this address",
+        },
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+
+    let error = send_action(&ctx, &config, &mock.connected, &action)
+        .await
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("refused") || message.contains("forbiddenFrom"),
+        "{message}"
+    );
+    assert!(!matches!(error, CoreError::SendUncertain(_)), "{message}");
+    mock.task.abort();
+}
+
+#[tokio::test]
+async fn jmap_send_retry_after_uncertain_uses_message_id_guard() {
+    let (_dir, ctx, config) = fixture().await;
+    let action = seed_prepared_send(&ctx, "email-prepared", "stable@mail.example").await;
+
+    let drop_mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"drafts-mail": true}, "keywords": {"$draft": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        submission: SubmissionAnswer::Drop,
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+    let lost = send_action(&ctx, &config, &drop_mock.connected, &action)
+        .await
+        .unwrap_err();
+    assert!(matches!(lost, CoreError::SendUncertain(_)), "{lost}");
+    assert_eq!(drop_mock.calls("EmailSubmission/set").len(), 1);
+    drop_mock.task.abort();
+
+    // Server accepted it despite the lost response: Message-ID is already in Sent.
+    let guard_mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"sent-mail": true}, "keywords": {"$seen": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        submitted_email_ids: vec!["email-prepared".into()],
+        submission: SubmissionAnswer::Created {
+            undo_status: "final",
+            smtp_reply: "250 Queued",
+            with_email_set: true,
+        },
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+    send_action(&ctx, &config, &guard_mock.connected, &action)
+        .await
+        .unwrap();
+    assert!(
+        guard_mock.calls("EmailSubmission/set").is_empty(),
+        "retry must not resubmit when Message-ID/submission already exists"
+    );
+    guard_mock.task.abort();
+}
+
+#[tokio::test]
+async fn jmap_send_retry_when_prepared_email_already_in_sent_submits_nothing() {
+    let (_dir, ctx, config) = fixture().await;
+    let action = seed_prepared_send(&ctx, "email-prepared", "stable@mail.example").await;
+    let mock = MockJmap {
+        mailboxes: send_mailboxes(),
+        emails: vec![json!({
+            "id": "email-prepared", "blobId": "blob-prepared", "threadId": "thread-out",
+            "mailboxIds": {"sent-mail": true}, "keywords": {"$seen": true},
+            "size": 100, "receivedAt": "2026-11-12T00:00:00Z",
+            "messageId": ["stable@mail.example"],
+            "from": [{"name": "Reader", "email": "reader@mail.example"}],
+            "to": [{"email": "recipient@mail.example"}],
+            "subject": "Outbound", "hasAttachment": false, "attachments": [], "preview": ""
+        })],
+        // No EmailSubmission/query hit — Sent mailbox placement alone guards.
+        submission: SubmissionAnswer::Created {
+            undo_status: "final",
+            smtp_reply: "250 Queued",
+            with_email_set: true,
+        },
+        ..MockJmap::default()
+    }
+    .start()
+    .await;
+
+    send_action(&ctx, &config, &mock.connected, &action)
+        .await
+        .unwrap();
+    assert!(mock.calls("EmailSubmission/set").is_empty());
     mock.task.abort();
 }

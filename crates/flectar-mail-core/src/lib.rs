@@ -88,6 +88,9 @@ const SEND_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 const SEND_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[cfg(test)]
+mod body_open_tests;
+
+#[cfg(test)]
 mod inline_cid_rewrite_tests {
     use crate::mime::rewrite_cid_src_with_images;
     use base64::Engine;
@@ -3519,7 +3522,7 @@ impl Core {
     async fn load_body(
         &self,
         message_id: i64,
-        preview_thread: Option<i64>,
+        _preview_thread: Option<i64>,
     ) -> Result<MessageDetail> {
         let (mut detail, cached_raw_path) = self
             .db
@@ -3536,47 +3539,61 @@ impl Core {
             })
             .await?;
         // Previously downloaded messages may already have raw headers on disk.
-        // Recover receiver-stamped authentication and actual delivery recipients
-        // lazily when opened, without a mailbox-wide header re-download.
-        if let Some(raw_path) = cached_raw_path
-            && let Ok(raw) =
-                crate::file_io::read_headers(raw_path, MAX_CACHED_HEADER_BYTES, "cached headers")
-                    .await
-            && let Ok(headers) = crate::mime::parse_header_block(&raw)
-        {
-            let verification = headers.sender_verification;
-            self.db
-                .write(move |conn| {
-                    repo::messages::set_delivery_recipients(
-                        conn,
-                        message_id,
-                        &headers.delivery_recipients,
-                    )?;
-                    if verification.is_verified() {
-                        repo::messages::set_sender_verification(conn, message_id, verification)?;
-                    }
-                    Ok(())
-                })
-                .await?;
-            if verification.is_verified() {
-                detail.sender_verification = verification;
-            }
+        // Recover receiver-stamped authentication and delivery recipients in
+        // the background: the write queues behind sync on the single writer
+        // connection, and opening a cached message must not wait for it.
+        if let Some(raw_path) = cached_raw_path {
+            let core = self.clone();
+            let thread_id = detail.thread_id;
+            tokio::spawn(async move {
+                core.recover_cached_headers(message_id, thread_id, raw_path)
+                    .await;
+            });
         }
         if detail.body_state == "none" {
             self.request_body(detail.account_id, message_id).await;
         }
         if let Some(html) = detail.html_body.take() {
-            detail.html_body = if let Some(thread_id) = preview_thread {
-                // Render cached content immediately; missing inline attachments
-                // arrive through MailUpdated instead of delaying text on network I/O.
-                self.inline_cid_images_batch(thread_id, vec![(message_id, html)])
-                    .await
-                    .remove(&message_id)
-            } else {
-                Some(self.inline_cid_images(message_id, html).await)
-            };
+            // Render cached content immediately. Inline images already on disk
+            // are embedded; missing ones download in the background and arrive
+            // through MailUpdated, so a click never waits on the network.
+            detail.html_body = self
+                .inline_cid_images_batch(detail.thread_id, vec![(message_id, html)])
+                .await
+                .remove(&message_id);
         }
         Ok(detail)
+    }
+
+    async fn recover_cached_headers(&self, message_id: i64, thread_id: i64, raw_path: String) {
+        let Ok(raw) =
+            crate::file_io::read_headers(raw_path, MAX_CACHED_HEADER_BYTES, "cached headers").await
+        else {
+            return;
+        };
+        let Ok(headers) = crate::mime::parse_header_block(&raw) else {
+            return;
+        };
+        let verification = headers.sender_verification;
+        let saved = self
+            .db
+            .write(move |conn| {
+                repo::messages::set_delivery_recipients(
+                    conn,
+                    message_id,
+                    &headers.delivery_recipients,
+                )?;
+                if verification.is_verified() {
+                    repo::messages::set_sender_verification(conn, message_id, verification)?;
+                }
+                Ok(())
+            })
+            .await;
+        if saved.is_ok() && verification.is_verified() {
+            self.bus.emit(CoreEvent::MailUpdated {
+                thread_ids: vec![thread_id],
+            });
+        }
     }
 
     /// Newest message of `thread_id` that can be unsubscribed from, or None
@@ -3734,100 +3751,8 @@ impl Core {
         crate::smtp::send_raw(&cfg, &auth, &cfg.email, &[to.to_string()], &raw).await
     }
 
-    /// Rewrite `src="cid:…"` references in a message body to `data:` URIs built
-    /// from its inline attachments so embedded images render in the native
-    /// HTML renderer. No-op when the body has no cid: references. On any
-    /// failure the original HTML is returned unchanged.
-    async fn inline_cid_images(&self, message_id: i64, html: String) -> String {
-        if !html.contains("cid:") {
-            return html;
-        }
-        let referenced = crate::mime::referenced_cids(&html);
-        if referenced.is_empty() {
-            return html;
-        }
-        let atts = self
-            .db
-            .read(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT id, content_id, mime_type, size, file_path FROM attachments
-                     WHERE message_id = ?1 AND content_id IS NOT NULL
-                       AND (part_id IS NOT NULL OR imap_section IS NOT NULL)",
-                )?;
-                let rows = stmt
-                    .query_map(rusqlite::params![message_id], |r| {
-                        Ok((
-                            r.get::<_, i64>(0)?,
-                            r.get::<_, String>(1)?,
-                            r.get::<_, Option<String>>(2)?,
-                            r.get::<_, Option<i64>>(3)?,
-                            r.get::<_, Option<String>>(4)?,
-                        ))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .await;
-        let atts = match atts {
-            Ok(a) if !a.is_empty() => a,
-            _ => return html,
-        };
-        let mut fetched = Vec::new();
-        let mut remaining = MAX_INLINE_CID_BYTES_PER_MESSAGE;
-        for (attachment_id, content_id, mime, declared_size, file_path) in atts {
-            if fetched.len() == MAX_INLINE_CID_IMAGES_PER_MESSAGE || remaining == 0 {
-                break;
-            }
-            let normalized = crate::mime::normalize_cid(&content_id);
-            if !referenced.contains(&normalized)
-                || mime
-                    .as_deref()
-                    .is_some_and(|value| !value.starts_with("image/"))
-            {
-                continue;
-            }
-            let max_bytes = MAX_INLINE_CID_BYTES_PER_IMAGE.min(remaining);
-            let declared_size = declared_size.and_then(|size| usize::try_from(size).ok());
-            if declared_size.is_some_and(|size| size > max_bytes)
-                || (file_path.is_none() && declared_size.is_none())
-            {
-                continue;
-            }
-            let Ok(path) = self.get_attachment(attachment_id).await else {
-                continue;
-            };
-            let Ok(bytes) = crate::file_io::read(path, max_bytes, "inline image").await else {
-                continue;
-            };
-            remaining -= bytes.len();
-            fetched.push((content_id, mime, bytes));
-        }
-        if fetched.is_empty() {
-            return html;
-        }
-        // Extraction + base64 of (possibly large) image parts is CPU-bound.
-        let fallback = Arc::new(html);
-        let worker_html = Arc::clone(&fallback);
-        let rewritten = tokio::task::spawn_blocking(move || {
-            let mut map = std::collections::HashMap::new();
-            for (content_id, mime, bytes) in fetched {
-                map.insert(
-                    crate::mime::normalize_cid(&content_id),
-                    (
-                        mime.unwrap_or_else(|| "application/octet-stream".to_string()),
-                        bytes,
-                    ),
-                );
-            }
-            crate::mime::rewrite_cid_src_with_images(&worker_html, &map)
-        })
-        .await;
-        rewritten
-            .unwrap_or_else(|_| Arc::try_unwrap(fallback).unwrap_or_else(|html| (*html).clone()))
-    }
-
-    /// Batch variant of `inline_cid_images` for the thread-open path: one DB
-    /// read and one encode pass for the whole thread. Only attachments already
+    /// Resolve embedded cid: images to data: URIs for the native HTML
+    /// renderer: one DB read and one encode pass for the whole thread. Only attachments already
     /// on disk are inlined; missing ones are downloaded in the background (a
     /// `MailUpdated` event refreshes the thread when they land) so opening a
     /// thread never waits on the network. Returns every input id mapped to its

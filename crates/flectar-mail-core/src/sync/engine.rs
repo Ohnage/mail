@@ -364,6 +364,34 @@ impl AccountHandle {
 }
 
 #[cfg(test)]
+impl AccountHandle {
+    /// A handle whose commands are captured instead of reaching a server.
+    pub(crate) fn recording(
+        account_id: i64,
+    ) -> (
+        Self,
+        mpsc::Receiver<SyncCmd>,
+        mpsc::Receiver<PriorityFetchCmd>,
+    ) {
+        let (tx, rx) = mpsc::channel(16);
+        let (body_tx, body_rx) = mpsc::channel(16);
+        (
+            Self {
+                account_id,
+                tx,
+                body_tx,
+                send_tx: None,
+                restore_tx: None,
+                settings_tx: None,
+                tasks: Vec::new(),
+            },
+            rx,
+            body_rx,
+        )
+    }
+}
+
+#[cfg(test)]
 mod account_handle_tests {
     use super::*;
 

@@ -3139,6 +3139,7 @@ pub fn run(platform: PlatformContext) -> Result<(), Box<dyn std::error::Error>> 
             }
         }
     };
+    remote::set_image_cache_dir(platform.paths.cache_dir.join("remote-images"));
     let warm_start_cache = WarmStartCacheWriter::spawn(&runtime, platform.paths.warm_start_file());
     let initial_state = InboxState::empty(
         None,

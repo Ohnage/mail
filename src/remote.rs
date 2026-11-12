@@ -324,8 +324,98 @@ impl NetProvider for LimitedImageProvider {
     }
 }
 
+/// Downloaded remote images, keyed by request URL. A message opened again
+/// shows its images from disk instead of downloading them again.
+#[cfg(feature = "remote-content")]
+static IMAGE_CACHE_DIR: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+#[cfg(feature = "remote-content")]
+const IMAGE_CACHE_MAX_BYTES: u64 = 1024 * 1024 * 1024;
+#[cfg(feature = "remote-content")]
+const IMAGE_CACHE_TRIM_BYTES: u64 = 768 * 1024 * 1024;
+
+/// Keep remote images under `dir`, and trim the oldest past the size cap.
+pub fn set_image_cache_dir(dir: std::path::PathBuf) {
+    #[cfg(feature = "remote-content")]
+    {
+        if IMAGE_CACHE_DIR.set(dir.clone()).is_ok() {
+            let _ = std::thread::Builder::new()
+                .name("remote-image-cache-trim".into())
+                .spawn(move || {
+                    trim_image_cache(&dir, IMAGE_CACHE_MAX_BYTES, IMAGE_CACHE_TRIM_BYTES)
+                });
+        }
+    }
+    #[cfg(not(feature = "remote-content"))]
+    let _ = dir;
+}
+
+#[cfg(feature = "remote-content")]
+fn image_cache_path(dir: &std::path::Path, url: &reqwest::Url) -> std::path::PathBuf {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(url.as_str().as_bytes());
+    let mut name = String::with_capacity(64);
+    for byte in digest {
+        name.push_str(&format!("{byte:02x}"));
+    }
+    dir.join(name)
+}
+
+#[cfg(feature = "remote-content")]
+fn trim_image_cache(dir: &std::path::Path, max_bytes: u64, target_bytes: u64) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            Some((meta.modified().ok()?, meta.len(), entry.path()))
+        })
+        .collect();
+    let mut total: u64 = files.iter().map(|(_, len, _)| len).sum();
+    if total <= max_bytes {
+        return;
+    }
+    files.sort_by_key(|(modified, _, _)| *modified);
+    for (_, len, path) in files {
+        if total <= target_bytes {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
 #[cfg(feature = "remote-content")]
 async fn load_http_image(request: &Request) -> Option<Vec<u8>> {
+    let cached = IMAGE_CACHE_DIR
+        .get()
+        .map(|dir| image_cache_path(dir, &request.url));
+    if let Some(path) = &cached
+        && let Ok(bytes) = tokio::fs::read(path).await
+        && validated_pixel_count(&bytes).is_some()
+    {
+        return Some(bytes);
+    }
+    let bytes = download_http_image(request).await?;
+    if let Some(path) = cached {
+        let partial = path.with_extension("part");
+        if tokio::fs::create_dir_all(path.parent()?).await.is_ok()
+            && tokio::fs::write(&partial, &bytes).await.is_ok()
+            && tokio::fs::rename(&partial, &path).await.is_err()
+        {
+            let _ = tokio::fs::remove_file(&partial).await;
+        }
+    }
+    Some(bytes)
+}
+
+#[cfg(feature = "remote-content")]
+async fn download_http_image(request: &Request) -> Option<Vec<u8>> {
     if request
         .signal
         .as_ref()
@@ -668,6 +758,50 @@ mod tests {
         let url = reqwest::Url::parse("https://user:secret@example.com/pixel.png").unwrap();
         assert!(!safe_remote_url_shape(&url));
     }
+    #[test]
+    #[cfg(feature = "remote-content")]
+    fn remote_images_open_from_disk_after_the_first_download() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let _ = IMAGE_CACHE_DIR.set(dir.path().to_path_buf());
+        let dir = IMAGE_CACHE_DIR.get().unwrap();
+        // An unresolvable host proves the bytes come from disk, not the network.
+        let url = url::Url::parse("https://images.flectar-test.invalid/logo.png").unwrap();
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(PIXEL.trim_start_matches("data:image/png;base64,"))
+            .unwrap();
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(image_cache_path(dir, &url), &png).unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let bytes = rt.block_on(load_http_image(&Request::get(url)));
+        assert_eq!(bytes.as_deref(), Some(png.as_slice()));
+    }
+
+    #[test]
+    #[cfg(feature = "remote-content")]
+    fn image_cache_trims_oldest_files_past_the_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        for (index, name) in ["old", "middle", "new"].iter().enumerate() {
+            std::fs::write(dir.path().join(name), vec![0_u8; 10]).unwrap();
+            let file = std::fs::File::options()
+                .write(true)
+                .open(dir.path().join(name))
+                .unwrap();
+            file.set_modified(
+                std::time::SystemTime::UNIX_EPOCH
+                    + std::time::Duration::from_secs(1_000 + index as u64),
+            )
+            .unwrap();
+        }
+        trim_image_cache(dir.path(), 25, 20);
+        assert!(!dir.path().join("old").exists());
+        assert!(dir.path().join("middle").exists());
+        assert!(dir.path().join("new").exists());
+    }
+
     const PIXEL: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     struct Counter(Arc<std::sync::atomic::AtomicUsize>);
     impl NetHandler for Counter {

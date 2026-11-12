@@ -760,8 +760,19 @@ impl SenderIdentity {
     }
 
     pub fn address(&self) -> Address {
+        self.address_with_display_name(None)
+    }
+
+    /// From header for a send: a non-empty per-message display-name override
+    /// wins; otherwise the identity/profile name is kept.
+    pub fn address_with_display_name(&self, override_name: Option<&str>) -> Address {
+        let name = override_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.display_name.clone());
         Address {
-            name: self.display_name.clone(),
+            name,
             email: self.email.clone(),
         }
     }
@@ -2745,6 +2756,41 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_name_override_wins_over_identity_name() {
+        let identity = SenderIdentity {
+            account_id: 1,
+            email: "tim.mentink@mentinkizm.com".into(),
+            display_name: Some("Tim Mentink (Mentinkizm)".into()),
+            reply_to_email: None,
+            is_primary: true,
+            is_provider_default: true,
+            verification_status: "accepted".into(),
+            last_synced_at: 0,
+            source: SenderIdentitySource::Provider,
+            delivery_status: SenderDeliveryStatus::Unknown,
+            delivery_error: None,
+        };
+        assert_eq!(
+            identity
+                .address_with_display_name(Some("Tim Mentink"))
+                .name
+                .as_deref(),
+            Some("Tim Mentink")
+        );
+        assert_eq!(
+            identity.address_with_display_name(None).name.as_deref(),
+            Some("Tim Mentink (Mentinkizm)")
+        );
+        assert_eq!(
+            identity
+                .address_with_display_name(Some("   "))
+                .name
+                .as_deref(),
+            Some("Tim Mentink (Mentinkizm)")
+        );
+    }
 
     #[test]
     fn action_kind_string_roundtrip() {

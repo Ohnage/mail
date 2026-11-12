@@ -946,7 +946,9 @@ async fn send_action(
             }
         })
         .await?;
-    let from = identity.address();
+    // Draft from_name is the per-message override (or identity default) saved
+    // at compose time; never replace it with the profile name on SMTP/Gmail.
+    let from = identity.address_with_display_name(detail.from.name.as_deref());
     let domain = from
         .email
         .split('@')

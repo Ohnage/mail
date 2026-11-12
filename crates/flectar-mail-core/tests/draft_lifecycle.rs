@@ -103,8 +103,8 @@ async fn drafts_accept_only_verified_sender_identities_and_store_provider_metada
 
     let mut accepted = args(None);
     accepted.from = Some(Address {
-        // User input must not be able to replace the provider-authorized name.
-        name: Some("Forged display name".into()),
+        // Display-name override is allowed; only the email must stay verified.
+        name: Some("Tim Mentink".into()),
         email: "WORK@example.com".into(),
     });
     let draft_id = core.save_draft(accepted).await.unwrap();
@@ -112,9 +112,55 @@ async fn drafts_accept_only_verified_sender_identities_and_store_provider_metada
     assert_eq!(
         loaded.from,
         Some(Address {
-            name: Some("Work identity".into()),
+            name: Some("Tim Mentink".into()),
             email: "work@example.com".into(),
         })
+    );
+    // Built MIME (JMAP/SMTP/Gmail all consume this From) must use the override,
+    // not the provider identity name "Work identity".
+    let from = loaded.from.clone().unwrap();
+    let (_, raw) =
+        flectar_mail_core::mime::build_message(&flectar_mail_core::mime::OutgoingMessage {
+            from: from.clone(),
+            reply_to: None,
+            to: &loaded.to,
+            cc: &[],
+            bcc: &[],
+            subject: &loaded.subject,
+            body_text: &loaded.body_text,
+            body_html: None,
+            in_reply_to: None,
+            references: &[],
+            message_id: None,
+            message_id_domain: "example.com",
+            attachments: Vec::new(),
+        })
+        .unwrap();
+    let mime = String::from_utf8_lossy(&raw);
+    assert!(
+        mime.contains("Tim Mentink")
+            && mime.contains("<work@example.com>")
+            && mime.lines().any(|line| line.starts_with("From:")),
+        "override missing in From:\n{mime}"
+    );
+    assert!(
+        !mime.contains("Work identity"),
+        "identity name must not win over override:\n{mime}"
+    );
+
+    let mut empty_override = args(None);
+    empty_override.from = Some(Address {
+        name: None,
+        email: "work@example.com".into(),
+    });
+    let default_id = core.save_draft(empty_override).await.unwrap();
+    let default_loaded = core.get_draft(default_id).await.unwrap();
+    assert_eq!(
+        default_loaded
+            .from
+            .as_ref()
+            .and_then(|from| from.name.as_deref()),
+        Some("Work identity")
     );
 
     let mut pending = args(None);

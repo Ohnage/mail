@@ -4934,16 +4934,20 @@ impl Core {
     }
 
     pub async fn save_draft(&self, args: SaveDraftArgs) -> Result<i64> {
-        // Resolve the visible From address independently of the authenticated
-        // account identity. Only provider-discovered, verified identities can
-        // cross this boundary; the canonical provider display name is stored.
+        // Resolve the From address independently of the authenticated account
+        // identity. Only a verified identity email may cross this boundary; a
+        // per-message display-name override (C4) may replace the profile name.
         let sender = self
             .resolve_sender_identity(
                 args.account_id,
                 args.from.as_ref().map(|address| address.email.as_str()),
             )
             .await?
-            .address();
+            .address_with_display_name(
+                args.from
+                    .as_ref()
+                    .and_then(|address| address.name.as_deref()),
+            );
         // Stage every attachment into an app-managed dir up front, so the paths
         // persisted to `draft_attachments` (and later read at dispatch) are
         // always files the app itself copied - never an arbitrary path handed
